@@ -1,0 +1,787 @@
+databaseChangeLog:
+  - changeSet:
+      id: 0001-create-core-tables
+      author: codex
+      changes:
+        - createTable:
+            tableName: users
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: username, type: VARCHAR(150), constraints: { nullable: false, unique: true } }
+              - column: { name: email, type: VARCHAR(255), constraints: { nullable: false, unique: true } }
+              - column: { name: password_hash, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: dob, type: DATE }
+              - column: { name: active, type: BOOLEAN, defaultValueBoolean: true, constraints: { nullable: false } }
+              - column: { name: approved, type: BOOLEAN, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - createTable:
+            tableName: user_roles
+            columns:
+              - column: { name: user_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: role, type: VARCHAR(50), constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: user_roles
+            columnNames: user_id, role
+            constraintName: pk_user_roles
+        - addForeignKeyConstraint:
+            baseTableName: user_roles
+            baseColumnNames: user_id
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_user_roles_user
+        - createIndex:
+            tableName: user_roles
+            indexName: idx_user_roles_role
+            columns:
+              - column: { name: role }
+
+        - createTable:
+            tableName: sessions
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: token, type: VARCHAR(64), constraints: { nullable: false } }
+              - column: { name: user_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: created_at, type: TIMESTAMP }
+              - column: { name: expires_at, type: TIMESTAMP }
+              - column: { name: revoked, type: BOOLEAN, defaultValueBoolean: false }
+        - addUniqueConstraint:
+            tableName: sessions
+            columnNames: token
+            constraintName: uq_sessions_token
+        - addForeignKeyConstraint:
+            baseTableName: sessions
+            baseColumnNames: user_id
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_sessions_user
+        - createIndex:
+            tableName: sessions
+            indexName: idx_sessions_user
+            columns:
+              - column: { name: user_id }
+
+        # Optional domain: clients table (normalize project.client)
+        - createTable:
+            tableName: clients
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false, unique: true } }
+              - column: { name: industry, type: VARCHAR(100) }
+              - column: { name: country, type: VARCHAR(100) }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+
+        - createTable:
+            tableName: team_members
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255) }
+              - column: { name: role, type: VARCHAR(255) }
+              - column: { name: email, type: VARCHAR(255) }
+              - column: { name: phone, type: VARCHAR(255) }
+              - column: { name: location, type: VARCHAR(255) }
+              - column: { name: avatar, type: VARCHAR(255) }
+              - column: { name: status, type: VARCHAR(50) }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - createIndex:
+            tableName: team_members
+            indexName: idx_team_members_status
+            columns:
+              - column: { name: status }
+
+        - createTable:
+            tableName: projects
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: description, type: TEXT }
+              - column: { name: status, type: VARCHAR(50) }
+              - column: { name: priority, type: VARCHAR(50) }
+              - column: { name: progress, type: INTEGER }
+              - column: { name: start_date, type: DATE }
+              - column: { name: end_date, type: DATE }
+              - column: { name: budget, type: "NUMERIC(19,2)" }
+              - column: { name: client, type: VARCHAR(255) }
+              - column: { name: client_id, type: BIGINT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: projects
+            baseColumnNames: client_id
+            referencedTableName: clients
+            referencedColumnNames: id
+            constraintName: fk_project_client
+        - createIndex:
+            tableName: projects
+            indexName: idx_projects_status
+            columns:
+              - column: { name: status }
+        - createIndex:
+            tableName: projects
+            indexName: idx_projects_priority
+            columns:
+              - column: { name: priority }
+
+        - createTable:
+            tableName: project_team_members
+            columns:
+              - column: { name: project_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: member_id, type: BIGINT, constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: project_team_members
+            columnNames: project_id, member_id
+            constraintName: pk_project_team_members
+        - addForeignKeyConstraint:
+            baseTableName: project_team_members
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_ptm_project
+        - addForeignKeyConstraint:
+            baseTableName: project_team_members
+            baseColumnNames: member_id
+            referencedTableName: team_members
+            referencedColumnNames: id
+            constraintName: fk_ptm_member
+        - createIndex:
+            tableName: project_team_members
+            indexName: idx_ptm_project
+            columns:
+              - column: { name: project_id }
+        - createIndex:
+            tableName: project_team_members
+            indexName: idx_ptm_member
+            columns:
+              - column: { name: member_id }
+
+        - createTable:
+            tableName: workflow_stages
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255) }
+              - column: { name: description, type: TEXT }
+              - column: { name: status, type: VARCHAR(50) }
+              - column: { name: due_date, type: DATE }
+              - column: { name: assignee, type: VARCHAR(255) }
+              - column: { name: project_id, type: BIGINT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stages
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_stage_project
+        - createIndex:
+            tableName: workflow_stages
+            indexName: idx_stages_project
+            columns:
+              - column: { name: project_id }
+        - createIndex:
+            tableName: workflow_stages
+            indexName: idx_stages_status
+            columns:
+              - column: { name: status }
+
+        - createTable:
+            tableName: workflow_stage_deliverables
+            columns:
+              - column: { name: stage_id, type: BIGINT }
+              - column: { name: deliverable, type: TEXT }
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stage_deliverables
+            baseColumnNames: stage_id
+            referencedTableName: workflow_stages
+            referencedColumnNames: id
+            constraintName: fk_stage_deliverables
+
+        - createTable:
+            tableName: workflow_stage_dependencies
+            columns:
+              - column: { name: stage_id, type: BIGINT }
+              - column: { name: dependency, type: TEXT }
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stage_dependencies
+            baseColumnNames: stage_id
+            referencedTableName: workflow_stages
+            referencedColumnNames: id
+            constraintName: fk_stage_dependencies
+
+        - createTable:
+            tableName: project_events
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: title, type: VARCHAR(255) }
+              - column: { name: date, type: DATE }
+              - column: { name: type, type: VARCHAR(50) }
+              - column: { name: status, type: VARCHAR(50) }
+              - column: { name: project_id, type: BIGINT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: project_events
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_event_project
+        - createIndex:
+            tableName: project_events
+            indexName: idx_events_project
+            columns:
+              - column: { name: project_id }
+        - createIndex:
+            tableName: project_events
+            indexName: idx_events_date
+            columns:
+              - column: { name: date }
+
+        - createTable:
+            tableName: project_documents
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255) }
+              - column: { name: type, type: VARCHAR(100) }
+              - column: { name: url, type: VARCHAR(500) }
+              - column: { name: uploaded_at, type: TIMESTAMP }
+              - column: { name: status, type: VARCHAR(50) }
+              - column: { name: project_id, type: BIGINT }
+              - column: { name: reviewed_at, type: TIMESTAMPTZ }
+              - column: { name: reviewed_by, type: VARCHAR(255) }
+              - column: { name: review_notes, type: TEXT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: project_documents
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_doc_project
+        - createIndex:
+            tableName: project_documents
+            indexName: idx_documents_project
+            columns:
+              - column: { name: project_id }
+
+        - createTable:
+            tableName: contacts
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255) }
+              - column: { name: role, type: VARCHAR(255) }
+              - column: { name: company, type: VARCHAR(255) }
+              - column: { name: category, type: VARCHAR(50) }
+              - column: { name: email, type: VARCHAR(255) }
+              - column: { name: phone, type: VARCHAR(255) }
+              - column: { name: address, type: VARCHAR(255) }
+              - column: { name: notes, type: TEXT }
+              - column: { name: is_active, type: BOOLEAN }
+              - column: { name: project_id, type: BIGINT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: contacts
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_contact_project
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_project
+            columns:
+              - column: { name: project_id }
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_category
+            columns:
+              - column: { name: category }
+
+  - changeSet:
+      id: 0002-triggers-updated-at
+      author: codex
+      preConditions:
+        - dbms:
+            type: postgresql
+      changes:
+        - sql:
+            comment: create function to bump updated_at on row updates
+            splitStatements: false
+            sql: |
+              CREATE OR REPLACE FUNCTION set_updated_at()
+              RETURNS TRIGGER AS $$
+              BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+              END;
+              $$ LANGUAGE plpgsql;
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$ BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_users_updated_at') THEN
+                CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_team_members_updated_at') THEN
+                CREATE TRIGGER trg_team_members_updated_at BEFORE UPDATE ON team_members FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_projects_updated_at') THEN
+                CREATE TRIGGER trg_projects_updated_at BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_workflow_stages_updated_at') THEN
+                CREATE TRIGGER trg_workflow_stages_updated_at BEFORE UPDATE ON workflow_stages FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_project_events_updated_at') THEN
+                CREATE TRIGGER trg_project_events_updated_at BEFORE UPDATE ON project_events FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_project_documents_updated_at') THEN
+                CREATE TRIGGER trg_project_documents_updated_at BEFORE UPDATE ON project_documents FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_contacts_updated_at') THEN
+                CREATE TRIGGER trg_contacts_updated_at BEFORE UPDATE ON contacts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              END $$;
+  - changeSet:
+      id: 0003-add-contact-phone-code
+      author: codex
+      preConditions:
+        - dbms:
+            type: postgresql
+      changes:
+        - addColumn:
+            tableName: contacts
+            columns:
+              - column:
+                  name: phone_code
+                  type: VARCHAR(16)
+
+  - changeSet:
+      id: 0004a-add-user-id-to-team-members
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: team_members
+                columnName: user_id
+      changes:
+        - addColumn:
+            tableName: team_members
+            columns:
+              - column: { name: user_id, type: BIGINT }
+
+  - changeSet:
+      id: 0004b-fk-team-member-user
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              foreignKeyConstraintExists:
+                foreignKeyName: fk_team_member_user
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: team_members
+            baseColumnNames: user_id
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_team_member_user
+
+  - changeSet:
+      id: 0004c-idx-team-members-user
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              indexExists:
+                tableName: team_members
+                indexName: idx_team_members_user
+      changes:
+        - createIndex:
+            tableName: team_members
+            indexName: idx_team_members_user
+            columns:
+              - column: { name: user_id }
+
+  - changeSet:
+      id: 0004d-create-project-team-members
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              tableExists:
+                tableName: project_team_members
+      changes:
+        - createTable:
+            tableName: project_team_members
+            columns:
+              - column: { name: project_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: member_id, type: BIGINT, constraints: { nullable: false } }
+
+  - changeSet:
+      id: 0004e-pk-project-team-members
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              primaryKeyExists:
+                tableName: project_team_members
+                primaryKeyName: pk_project_team_members
+      changes:
+        - addPrimaryKey:
+            tableName: project_team_members
+            columnNames: project_id, member_id
+            constraintName: pk_project_team_members
+
+  - changeSet:
+      id: 0004f-fk-ptm-project
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              foreignKeyConstraintExists:
+                foreignKeyName: fk_ptm_project
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: project_team_members
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_ptm_project
+
+  - changeSet:
+      id: 0004g-fk-ptm-member
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              foreignKeyConstraintExists:
+                foreignKeyName: fk_ptm_member
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: project_team_members
+            baseColumnNames: member_id
+            referencedTableName: team_members
+            referencedColumnNames: id
+            constraintName: fk_ptm_member
+
+  - changeSet:
+      id: 0004h-idx-ptm-project
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              indexExists:
+                tableName: project_team_members
+                indexName: idx_ptm_project
+      changes:
+        - createIndex:
+            tableName: project_team_members
+            indexName: idx_ptm_project
+            columns:
+              - column: { name: project_id }
+
+  - changeSet:
+      id: 0004i-idx-ptm-member
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              indexExists:
+                tableName: project_team_members
+                indexName: idx_ptm_member
+      changes:
+        - createIndex:
+            tableName: project_team_members
+            indexName: idx_ptm_member
+            columns:
+              - column: { name: member_id }
+
+  - changeSet:
+      id: 0004j-create-project-users
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              tableExists:
+                tableName: project_users
+      changes:
+        - createTable:
+            tableName: project_users
+            columns:
+              - column: { name: project_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: user_id, type: BIGINT, constraints: { nullable: false } }
+
+  - changeSet:
+      id: 0004k-pk-project-users
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              primaryKeyExists:
+                tableName: project_users
+                primaryKeyName: pk_project_users
+      changes:
+        - addPrimaryKey:
+            tableName: project_users
+            columnNames: project_id, user_id
+            constraintName: pk_project_users
+
+  - changeSet:
+      id: 0004l-fk-pu-project
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              foreignKeyConstraintExists:
+                foreignKeyName: fk_pu_project
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: project_users
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_pu_project
+
+  - changeSet:
+      id: 0004m-fk-pu-user
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              foreignKeyConstraintExists:
+                foreignKeyName: fk_pu_user
+      changes:
+        - addForeignKeyConstraint:
+            baseTableName: project_users
+            baseColumnNames: user_id
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_pu_user
+
+  - changeSet:
+      id: 0004n-idx-pu-project
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              indexExists:
+                tableName: project_users
+                indexName: idx_pu_project
+      changes:
+        - createIndex:
+            tableName: project_users
+            indexName: idx_pu_project
+            columns:
+              - column: { name: project_id }
+
+  - changeSet:
+      id: 0004o-idx-pu-user
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              indexExists:
+                tableName: project_users
+                indexName: idx_pu_user
+      changes:
+        - createIndex:
+            tableName: project_users
+            indexName: idx_pu_user
+            columns:
+              - column: { name: user_id }
+
+  - changeSet:
+      id: 0005a-create-teams
+      author: codex
+      changes:
+        - createTable:
+            tableName: teams
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false, unique: true } }
+              - column: { name: description, type: TEXT }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - createTable:
+            tableName: team_team_members
+            columns:
+              - column: { name: team_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: member_id, type: BIGINT, constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: team_team_members
+            columnNames: team_id, member_id
+            constraintName: pk_team_team_members
+        - addForeignKeyConstraint:
+            baseTableName: team_team_members
+            baseColumnNames: team_id
+            referencedTableName: teams
+            referencedColumnNames: id
+            constraintName: fk_ttm_team
+        - addForeignKeyConstraint:
+            baseTableName: team_team_members
+            baseColumnNames: member_id
+            referencedTableName: team_members
+            referencedColumnNames: id
+            constraintName: fk_ttm_member
+        - createIndex:
+            tableName: team_team_members
+            indexName: idx_ttm_team
+            columns:
+              - column: { name: team_id }
+        - createIndex:
+            tableName: team_team_members
+            indexName: idx_ttm_member
+            columns:
+              - column: { name: member_id }
+
+  - changeSet:
+      id: 0005b-trg-teams-updated
+      author: codex
+      preConditions:
+        - dbms:
+            type: postgresql
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$ BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_teams_updated_at') THEN
+                CREATE TRIGGER trg_teams_updated_at BEFORE UPDATE ON teams FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              END $$;
+  - changeSet:
+      id: add-masterpic-to-projects
+      author: juan
+      changes:
+        - addColumn:
+            tableName: projects
+            columns:
+              - column:
+                  name: master_pic
+                  type: VARCHAR(255)
+  
+  - changeSet:
+      id: rename-assignee-to-pic
+      author: juan
+      changes:
+        - renameColumn:
+            tableName: workflow_stages
+            oldColumnName: assignee
+            newColumnName: pic
+            columnDataType: VARCHAR(255)
+  
+  - changeSet:
+      id: add-workflow-order-fields
+      author: juan
+      changes:
+        - addColumn:
+            tableName: workflow_stages
+            columns:
+              - column:
+                  name: order_sequence
+                  type: INTEGER
+              - column:
+                  name: previous_stage_name
+                  type: VARCHAR(255)
+              - column:
+                  name: next_stage_name
+                  type: VARCHAR(255)
+  
+  - changeSet:
+      id: create-workflow-stage-documents-table
+      author: juan
+      changes:
+        - createTable:
+            tableName: workflow_stage_documents
+            columns:
+              - column: { name: stage_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: document_id, type: BIGINT, constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: workflow_stage_documents
+            columnNames: stage_id, document_id
+            constraintName: pk_workflow_stage_documents
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stage_documents
+            baseColumnNames: stage_id
+            referencedTableName: workflow_stages
+            referencedColumnNames: id
+            constraintName: fk_wsd_stage
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stage_documents
+            baseColumnNames: document_id
+            referencedTableName: project_documents
+            referencedColumnNames: id
+            constraintName: fk_wsd_document
+            onDelete: CASCADE
+        - createIndex:
+            tableName: workflow_stage_documents
+            indexName: idx_wsd_stage
+            columns:
+              - column: { name: stage_id }
+        - createIndex:
+            tableName: workflow_stage_documents
+            indexName: idx_wsd_document
+            columns:
+              - column: { name: document_id }

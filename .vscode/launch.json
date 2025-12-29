@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-PmsApplication<pms-be>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.pms.PmsApplication",
+            "projectName": "pms-be",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

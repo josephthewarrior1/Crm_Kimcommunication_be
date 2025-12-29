@@ -9,10 +9,13 @@ import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 @Entity
 @Table(name = "users", indexes = {
         @Index(name = "uk_users_email", columnList = "email", unique = true)
 })
+@JsonIgnoreProperties({ "hibernateLazyInitializer", "handler" })
 @Getter
 @Setter
 @NoArgsConstructor

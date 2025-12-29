@@ -1,8 +1,8 @@
-version: '3.9'
+version: "3.9"
 
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:17-alpine
     container_name: pms-postgres
     restart: unless-stopped
     environment:
@@ -10,9 +10,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pmspostgres2025}
     ports:
-      - '5432:5432'
+      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_v17:/var/lib/postgresql/data
     networks:
       - pms-network
     healthcheck:
@@ -28,7 +28,7 @@ services:
     container_name: pms-backend
     restart: unless-stopped
     ports:
-      - '8081:8080'
+      - "8081:8080"
     environment:
       - SPRING_PROFILES_ACTIVE=postgres
       - JDBC_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-pms_dev}
@@ -48,8 +48,9 @@ services:
 
 networks:
   pms-network:
+    external: true
     driver: bridge
     name: pms-network
 
 volumes:
-  postgres_data:
+  postgres_data_v17:

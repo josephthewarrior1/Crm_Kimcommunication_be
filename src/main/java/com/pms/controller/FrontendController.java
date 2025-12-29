@@ -1,7 +1,7 @@
 package com.pms.controller;
 
 import com.pms.domain.Project;
-import com.pms.domain.ProjectStatus;
+// import com.pms.domain.ProjectStatus;
 import com.pms.domain.StageStatus;
 import com.pms.domain.WorkflowStage;
 import com.pms.dto.FrontendProjectDto;
@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.Comparator;
+// import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -33,9 +33,11 @@ public class FrontendController {
     }
 
     @GetMapping("/projects")
-    public List<FrontendProjectDto> listFrontendProjects(@RequestHeader(value = "Authorization", required = false) String auth) {
+    public List<FrontendProjectDto> listFrontendProjects(
+            @RequestHeader(value = "Authorization", required = false) String auth) {
         var list = projectRepository.findAll();
-        // If Authorization present and valid, restrict non-admin users to projects where their email appears in team members
+        // If Authorization present and valid, restrict non-admin users to projects
+        // where their email appears in team members
         if (auth != null && auth.startsWith("Bearer ")) {
             var token = auth.substring(7);
             var opt = sessions.findByTokenAndRevokedFalse(token)
@@ -47,8 +49,10 @@ public class FrontendController {
                     String email = user.getEmail();
                     Long uid = user.getId();
                     list = list.stream().filter(p -> {
-                        boolean inUsers = p.getUsers() != null && uid != null && p.getUsers().stream().anyMatch(x -> uid.equals(x.getId()));
-                        boolean inMembers = email != null && p.getTeamMembers() != null && p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
+                        boolean inUsers = p.getUsers() != null && uid != null
+                                && p.getUsers().stream().anyMatch(x -> uid.equals(x.getId()));
+                        boolean inMembers = email != null && p.getTeamMembers() != null
+                                && p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
                         return inUsers || inMembers;
                     }).toList();
                 }
@@ -106,12 +110,12 @@ public class FrontendController {
                 currentStage,
                 currentStageLabel,
                 priority,
-                priorityLabel
-        );
+                priorityLabel);
     }
 
     private String deriveCurrentStageEnum(Project p) {
-        if (p.getStages() == null || p.getStages().isEmpty()) return "NOT_STARTED";
+        if (p.getStages() == null || p.getStages().isEmpty())
+            return "NOT_STARTED";
 
         // First check if any stage is in progress
         return p.getStages().stream()
@@ -119,7 +123,8 @@ public class FrontendController {
                 .findFirst()
                 .map(s -> s.getStatus().name())
                 .orElseGet(() -> {
-                    // If no stage is in progress, find the first pending stage after completed stages
+                    // If no stage is in progress, find the first pending stage after completed
+                    // stages
                     List<WorkflowStage> sortedStages = p.getStages().stream()
                             .sorted((s1, s2) -> {
                                 Integer seq1 = s1.getOrderSequence() != null ? s1.getOrderSequence() : 0;
@@ -127,7 +132,7 @@ public class FrontendController {
                                 return seq1.compareTo(seq2);
                             })
                             .toList();
-                    
+
                     // Find the first pending stage after all completed stages
                     for (WorkflowStage stage : sortedStages) {
                         if (stage.getStatus() == StageStatus.PENDING) {
@@ -139,7 +144,8 @@ public class FrontendController {
     }
 
     private String deriveCurrentStageLabel(Project p) {
-        if (p.getStages() == null || p.getStages().isEmpty()) return "Not Started";
+        if (p.getStages() == null || p.getStages().isEmpty())
+            return "Not Started";
 
         // First check if any stage is in progress
         return p.getStages().stream()
@@ -147,7 +153,8 @@ public class FrontendController {
                 .findFirst()
                 .map(s -> s.getName())
                 .orElseGet(() -> {
-                    // If no stage is in progress, find the first pending stage after completed stages
+                    // If no stage is in progress, find the first pending stage after completed
+                    // stages
                     List<WorkflowStage> sortedStages = p.getStages().stream()
                             .sorted((s1, s2) -> {
                                 Integer seq1 = s1.getOrderSequence() != null ? s1.getOrderSequence() : 0;
@@ -155,7 +162,7 @@ public class FrontendController {
                                 return seq1.compareTo(seq2);
                             })
                             .toList();
-                    
+
                     // Find the first pending stage after all completed stages
                     for (WorkflowStage stage : sortedStages) {
                         if (stage.getStatus() == StageStatus.PENDING) {

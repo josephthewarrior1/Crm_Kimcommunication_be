@@ -74,28 +74,50 @@ public class ProjectService {
                 return savedProject;
         }
 
-        // private void addMember(Project project, String userName, String jobTitle,
-        // ProjectRole role) {
-        // if (userName == null || userName.isBlank() || userName.equals("__none__"))
-        // return;
+        /**
+         * Create project with defaults AND team members.
+         */
+        @Transactional
+        public Project createProjectWithDefaults(Project project, Long picUserId,
+                        java.util.Map<String, Long> departmentHeads) {
+                // Delegate to existing method for project + docs + stages
+                Project saved = createProjectWithDefaults(project);
 
-        // userRepository.findByName(userName).ifPresent(user -> {
-        // // Check if already in team
-        // if (!memberRepository.existsByProjectIdAndUserId(project.getId(),
-        // user.getId())) {
+                // Resolve roles
+                ProjectRole adminRole = roleRepository.findByName("PROJECT_ADMIN").orElse(null);
+                ProjectRole editorRole = roleRepository.findByName("EDITOR").orElse(null);
 
-        // ProjectMember member = ProjectMember.builder()
-        // .project(project)
-        // .user(user)
-        // .jobTitle(jobTitle) // Specific Title (e.g. "Finance")
-        // .role(role) // Permissions (e.g. EDITOR)
-        // .joinedAt(LocalDateTime.now())
-        // .build();
+                // Create PIC member first (needed as manager reference for department heads)
+                ProjectMember picMember = addMember(saved, picUserId, "Project Officer", adminRole, null);
 
-        // memberRepository.save(member);
-        // }
-        // });
-        // }
+                // Create department heads with PIC as manager
+                for (java.util.Map.Entry<String, Long> entry : departmentHeads.entrySet()) {
+                        addMember(saved, entry.getValue(), entry.getKey(), editorRole, picMember);
+                }
+
+                return saved;
+        }
+
+        private ProjectMember addMember(Project project, Long userId, String jobTitle,
+                        ProjectRole role, ProjectMember manager) {
+                if (userId == null)
+                        return null;
+                return userRepository.findById(userId).map(user -> {
+                        if (!memberRepository.existsByProjectIdAndUserId(project.getId(), user.getId())) {
+                                ProjectMember member = ProjectMember.builder()
+                                                .project(project)
+                                                .user(user)
+                                                .jobTitle(jobTitle)
+                                                .role(role)
+                                                .manager(manager)
+                                                .joinedAt(LocalDateTime.now())
+                                                .build();
+                                return memberRepository.save(member);
+                        }
+                        return memberRepository.findByProjectIdAndUserId(project.getId(), user.getId())
+                                        .orElse(null);
+                }).orElse(null);
+        }
 
         private List<ProjectDocument> cloneFromTemplates(Project newProject) {
                 List<DocumentTemplate> templates = templateRepository.findByIsActiveTrue();

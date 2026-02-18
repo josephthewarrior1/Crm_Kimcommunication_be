@@ -29,6 +29,9 @@ public class ProjectController {
     private final UserRepository users;
     private final ProjectService projectService;
     private final ProjectPermissionService permissionService;
+    private final ClientRepository clientRepository;
+    private final ClientContactRepository clientContactRepository;
+    private final VenueRepository venueRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -42,7 +45,10 @@ public class ProjectController {
             SessionRepository sessions,
             UserRepository users,
             ProjectService projectService,
-            ProjectPermissionService permissionService) {
+            ProjectPermissionService permissionService,
+            ClientRepository clientRepository,
+            ClientContactRepository clientContactRepository,
+            VenueRepository venueRepository) {
         this.projectRepository = projectRepository;
         this.workflowStageRepository = workflowStageRepository;
         this.projectEventRepository = projectEventRepository;
@@ -53,6 +59,9 @@ public class ProjectController {
         this.users = users;
         this.projectService = projectService;
         this.permissionService = permissionService;
+        this.clientRepository = clientRepository;
+        this.clientContactRepository = clientContactRepository;
+        this.venueRepository = venueRepository;
     }
 
     @GetMapping
@@ -82,17 +91,102 @@ public class ProjectController {
     }
 
     @PostMapping
-    public ResponseEntity<Project> createProject(@Valid @RequestBody Project project,
+    public ResponseEntity<Project> createProject(@RequestBody CreateProjectRequest request,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         AppUser u = currentUser(auth);
         if (u == null || !isAdminOrManager(u))
             return ResponseEntity.status(403).body((Project) null);
 
-        // Project saved = projectRepository.save(project);
+        // Build Project entity from request
+        Project project = new Project();
+        project.setName(request.name);
+        project.setDescription(request.description);
+        project.setStatus(ProjectStatus.IN_PROGRESS);
+        project.setProgress(0);
 
-        // DELEGATE TO SERVICE
-        // This handles saving the project AND creating the 12 stages in one transaction
-        Project saved = projectService.createProjectWithDefaults(project);
+        if (request.size != null) {
+            try {
+                project.setSize(Size.valueOf(request.size.toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                project.setSize(Size.MEDIUM);
+            }
+        }
+
+        if (request.eventDate != null && !request.eventDate.isBlank()) {
+            try {
+                String dateStr = request.eventDate.contains("T")
+                        ? request.eventDate.split("T")[0]
+                        : request.eventDate;
+                java.time.LocalDate date = java.time.LocalDate.parse(dateStr);
+                project.setStartDate(date);
+                project.setEndDate(date);
+            } catch (Exception e) {
+                // Invalid date format, skip
+            }
+        }
+
+        // Resolve client (company)
+        if (request.clientId != null) {
+            clientRepository.findById(request.clientId).ifPresent(client -> {
+                project.setClientEntity(client);
+                project.setClient(client.getName());
+            });
+        } else if (request.clientName != null && !request.clientName.isBlank()) {
+            Client client = clientRepository.findByName(request.clientName)
+                    .orElseGet(() -> {
+                        Client newClient = new Client();
+                        newClient.setName(request.clientName);
+                        return clientRepository.save(newClient);
+                    });
+            project.setClientEntity(client);
+            project.setClient(client.getName());
+        }
+
+        // Resolve contact (find or create under client)
+        if (request.contactId == null && request.contactName != null
+                && !request.contactName.isBlank() && project.getClientEntity() != null) {
+            Client client = project.getClientEntity();
+            java.util.List<ClientContact> existing = clientContactRepository.findByClientId(client.getId());
+            boolean contactExists = existing.stream()
+                    .anyMatch(c -> c.getName().equalsIgnoreCase(request.contactName));
+            if (!contactExists) {
+                ClientContact newContact = ClientContact.builder()
+                        .name(request.contactName)
+                        .client(client)
+                        .build();
+                clientContactRepository.save(newContact);
+            }
+        }
+
+        // Resolve venue (find or create)
+        if (request.venueId != null) {
+            venueRepository.findById(request.venueId).ifPresent(project::setVenue);
+        } else if (request.venueName != null && !request.venueName.isBlank()) {
+            String city = request.venueCity != null ? request.venueCity.trim() : null;
+            Venue venue = venueRepository.findByNameAndCity(request.venueName.trim(), city)
+                    .orElseGet(() -> {
+                        Venue v = new Venue();
+                        v.setName(request.venueName.trim());
+                        v.setCity(city);
+                        return venueRepository.save(v);
+                    });
+            project.setVenue(venue);
+        }
+
+        // Build team assignments map
+        java.util.Map<String, Long> departmentHeads = new java.util.LinkedHashMap<>();
+        if (request.accountManagerUserId != null)
+            departmentHeads.put("Account Manager", request.accountManagerUserId);
+        if (request.adminUserId != null)
+            departmentHeads.put("Admin", request.adminUserId);
+        if (request.productionUserId != null)
+            departmentHeads.put("Production", request.productionUserId);
+        if (request.designUserId != null)
+            departmentHeads.put("Design", request.designUserId);
+        if (request.financeUserId != null)
+            departmentHeads.put("Finance", request.financeUserId);
+
+        Project saved = projectService.createProjectWithDefaults(project, request.picUserId, departmentHeads);
         return ResponseEntity.created(URI.create("/api/projects/" + saved.getId())).body(saved);
     }
 
@@ -216,10 +310,17 @@ public class ProjectController {
                             existing.setClient(clientObj.toString());
                         }
                     }
-                    if (updates.containsKey("masterPIC")) {
-                        Object masterPICObj = updates.get("masterPIC");
-                        if (masterPICObj != null) {
-                            existing.setMasterPIC(masterPICObj.toString());
+                    if (updates.containsKey("venueId")) {
+                        Object venueIdObj = updates.get("venueId");
+                        if (venueIdObj != null) {
+                            try {
+                                Long vid = Long.parseLong(venueIdObj.toString());
+                                venueRepository.findById(vid).ifPresent(existing::setVenue);
+                            } catch (NumberFormatException e) {
+                                // Invalid venue ID, skip
+                            }
+                        } else {
+                            existing.setVenue(null);
                         }
                     }
                     // Note: We don't update relationships (clientEntity, stages, events, etc.) from
@@ -606,5 +707,65 @@ public class ProjectController {
 
     private boolean hasAccess(Project p, AppUser u) {
         return permissionService.hasProjectAccess(p, u);
+    }
+
+    /** DTO for project creation requests */
+    public static class CreateProjectRequest {
+        public String name;
+        public String description;
+        public String size;
+        public String eventDate;
+        // Client fields
+        public Long clientId;
+        public String clientName;
+        public Long contactId;
+        public String contactName;
+        // Venue fields
+        public Long venueId;
+        public String venueName;
+        public String venueCity;
+        // Team member user IDs
+        public Long picUserId;
+        public Long accountManagerUserId;
+        public Long adminUserId;
+        public Long productionUserId;
+        public Long designUserId;
+        public Long financeUserId;
+
+        // Jackson needs getters/setters for deserialization
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getDescription() { return description; }
+        public void setDescription(String description) { this.description = description; }
+        public String getSize() { return size; }
+        public void setSize(String size) { this.size = size; }
+        public String getEventDate() { return eventDate; }
+        public void setEventDate(String eventDate) { this.eventDate = eventDate; }
+        public Long getClientId() { return clientId; }
+        public void setClientId(Long clientId) { this.clientId = clientId; }
+        public String getClientName() { return clientName; }
+        public void setClientName(String clientName) { this.clientName = clientName; }
+        public Long getContactId() { return contactId; }
+        public void setContactId(Long contactId) { this.contactId = contactId; }
+        public String getContactName() { return contactName; }
+        public void setContactName(String contactName) { this.contactName = contactName; }
+        public Long getVenueId() { return venueId; }
+        public void setVenueId(Long venueId) { this.venueId = venueId; }
+        public String getVenueName() { return venueName; }
+        public void setVenueName(String venueName) { this.venueName = venueName; }
+        public String getVenueCity() { return venueCity; }
+        public void setVenueCity(String venueCity) { this.venueCity = venueCity; }
+        public Long getPicUserId() { return picUserId; }
+        public void setPicUserId(Long picUserId) { this.picUserId = picUserId; }
+        public Long getAccountManagerUserId() { return accountManagerUserId; }
+        public void setAccountManagerUserId(Long v) { this.accountManagerUserId = v; }
+        public Long getAdminUserId() { return adminUserId; }
+        public void setAdminUserId(Long v) { this.adminUserId = v; }
+        public Long getProductionUserId() { return productionUserId; }
+        public void setProductionUserId(Long v) { this.productionUserId = v; }
+        public Long getDesignUserId() { return designUserId; }
+        public void setDesignUserId(Long v) { this.designUserId = v; }
+        public Long getFinanceUserId() { return financeUserId; }
+        public void setFinanceUserId(Long v) { this.financeUserId = v; }
     }
 }

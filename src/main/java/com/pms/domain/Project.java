@@ -63,20 +63,9 @@ public class Project {
         @JsonBackReference
         private Client clientEntity;
 
-        @Column(name = "master_pic")
-        private String masterPIC; // Master Person In Charge for the entire project
-
-        @Column(name = "account_manager")
-        private String accountManager;
-
-        @Column(name = "project_organizer")
-        private String projectOrganizer;
-
-        @Column(name = "finance")
-        private String finance;
-
-        @Column(name = "admin")
-        private String admin;
+        @ManyToOne(fetch = FetchType.EAGER)
+        @JoinColumn(name = "venue_id")
+        private Venue venue;
 
         @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
         @JsonManagedReference

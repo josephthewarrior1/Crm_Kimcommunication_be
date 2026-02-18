@@ -233,12 +233,82 @@ databaseChangeLog:
               INSERT INTO document_templates (name, type, description, url) VALUES
               ('Template MOM', 'template', 'For Client Brief, Client updates', '/files/templates/template_mom.docx'),
               ('Template Agenda', 'template', 'Agenda rundown', '/files/templates/template_agenda.xlsx'),
-              ('Template Brief & Registration', 'template', 'brief and registration', '/files/templates/template_brief_and_registration.pptx'),
+              ('Template Brief & Registration', 'template', 'brief and registration', '/files/templates/template_brief_and_registration.pdf'),
               ('Template Contact List Client, Vendor & Team', 'template', 'Contact list', '/files/templates/template_contact_list_client_vendor_team.xlsx'),
               ('Template Cue Card MC', 'template', 'Cue Card MC', '/files/templates/template_cue_card_mc.docx'),
               ('Template Cue Card MC Foyer Area', 'template', 'Cue Card MC foyer area', '/files/templates/template_cue_card_mc_foyer_area.docx'),
               ('Template Cue Card MC Media Briefing', 'template', 'Cue Card MC media briefing', '/files/templates/template_cue_card_mc_media_briefing.docx'),
-              ('Template Manual Book Event', 'template', 'Manual Book Event', '/files/templates/template_manual_book_event.pptx'),
-              ('Template Storyboard Event', 'template', 'Storyboard', '/files/templates/template_storyboard_event.pptx'),
+              ('Template Manual Book Event', 'template', 'Manual Book Event', '/files/templates/template_manual_book.pdf'),
+              ('Template Storyboard Event', 'template', 'Storyboard', '/files/templates/template_storyboard_event.pdf'),
               ('Template Team Structure', 'template', 'team structure', '/files/templates/template_struktur_team_event.xlsx'),
               ('Template Tracker Request', 'template', 'tracker request', '/files/templates/tracker_request.xlsx');
+
+  # ── projects: drop legacy role columns ───────────────────────────────
+  - changeSet:
+      id: sync-drop-project-role-columns
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - columnExists:
+              tableName: projects
+              columnName: master_pic
+      changes:
+        - dropColumn: { tableName: projects, columnName: master_pic }
+        - dropColumn: { tableName: projects, columnName: account_manager }
+        - dropColumn: { tableName: projects, columnName: project_organizer }
+        - dropColumn: { tableName: projects, columnName: finance }
+        - dropColumn: { tableName: projects, columnName: admin }
+
+  # ── venues table ─────────────────────────────────────────────────────
+  - changeSet:
+      id: sync-create-venues
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              tableExists:
+                tableName: venues
+      changes:
+        - createTable:
+            tableName: venues
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: city, type: VARCHAR(255) }
+              - column: { name: document_data, type: VARCHAR(2000) }
+              - column: { name: created_at, type: TIMESTAMP, defaultValueComputed: CURRENT_TIMESTAMP }
+              - column: { name: updated_at, type: TIMESTAMP, defaultValueComputed: CURRENT_TIMESTAMP }
+
+  # ── projects: add venue_id FK ────────────────────────────────────────
+  - changeSet:
+      id: sync-add-project-venue-fk
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: projects
+                columnName: venue_id
+      changes:
+        - addColumn:
+            tableName: projects
+            columns:
+              - column: { name: venue_id, type: BIGINT }
+        - addForeignKeyConstraint:
+            baseTableName: projects
+            baseColumnNames: venue_id
+            referencedTableName: venues
+            referencedColumnNames: id
+            constraintName: fk_projects_venue

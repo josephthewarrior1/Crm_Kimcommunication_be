@@ -1,12 +1,11 @@
 package com.pms.controller;
 
-import com.pms.domain.Project;
 import com.pms.domain.AppUser;
-import com.pms.domain.Role;
+import com.pms.domain.Project;
 import com.pms.domain.WorkflowStage;
 import com.pms.repository.ProjectRepository;
 import com.pms.repository.WorkflowStageRepository;
-import com.pms.repository.SessionRepository;
+import com.pms.service.ProjectPermissionService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -22,12 +21,13 @@ public class WorkflowStageCrudController {
 
     private final WorkflowStageRepository stages;
     private final ProjectRepository projects;
-    private final SessionRepository sessions;
+    private final ProjectPermissionService permissionService;
 
-    public WorkflowStageCrudController(WorkflowStageRepository stages, ProjectRepository projects, SessionRepository sessions) {
+    public WorkflowStageCrudController(WorkflowStageRepository stages, ProjectRepository projects,
+                                       ProjectPermissionService permissionService) {
         this.stages = stages;
         this.projects = projects;
-        this.sessions = sessions;
+        this.permissionService = permissionService;
     }
 
     @GetMapping
@@ -56,9 +56,9 @@ public class WorkflowStageCrudController {
     @PutMapping("/{id}")
     public ResponseEntity<WorkflowStage> update(@PathVariable Long id, @Valid @RequestBody WorkflowStage stage,
                                                 @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         return stages.findById(id).map(existing -> {
-            if (u != null && !isAdminOrManager(u) && !hasAccess(existing.getProject(), u)) {
+            if (u != null && !permissionService.canUpdate(existing.getProject(), u)) {
                 return ResponseEntity.status(403).body((WorkflowStage) null);
             }
             stage.setId(existing.getId());
@@ -76,38 +76,15 @@ public class WorkflowStageCrudController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id,
                                        @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         var opt = stages.findById(id);
         if (opt.isEmpty()) return new ResponseEntity<Void>(HttpStatus.NOT_FOUND);
         var existing = opt.get();
-        if (u != null && !isAdminOrManager(u) && !hasAccess(existing.getProject(), u)) {
+        if (u != null && !permissionService.canDelete(existing.getProject(), u)) {
             return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
         }
         stages.deleteById(id);
         return ResponseEntity.noContent().build();
     }
 
-    private AppUser currentUser(String auth) {
-        if (auth == null || !auth.startsWith("Bearer ")) return null;
-        String token = auth.substring(7);
-        return sessions.findByTokenAndRevokedFalse(token)
-                .filter(st -> st.getExpiresAt().isAfter(java.time.Instant.now()))
-                .map(st -> st.getUser())
-                .orElse(null);
-    }
-    private boolean isAdminOrManager(AppUser u) {
-        return u != null && u.getRoles() != null && (u.getRoles().contains(Role.ADMIN) || u.getRoles().contains(Role.MANAGER));
-    }
-    private boolean hasAccess(Project p, AppUser u) {
-        if (isAdminOrManager(u)) return true;
-        if (p.getUsers() != null && u != null && u.getId() != null) {
-            Long uid = u.getId();
-            if (p.getUsers().stream().anyMatch(x -> uid.equals(x.getId()))) return true;
-        }
-        String email = u != null ? u.getEmail() : null;
-        if (email != null && p.getTeamMembers() != null) {
-            return p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
-        }
-        return false;
-    }
 }

@@ -3,11 +3,10 @@ package com.pms.controller;
 import com.pms.domain.AppUser;
 import com.pms.domain.Project;
 import com.pms.domain.ProjectDocument;
-import com.pms.domain.Role;
 import com.pms.repository.ProjectDocumentRepository;
 import com.pms.repository.ProjectRepository;
-import com.pms.repository.SessionRepository;
 import com.pms.service.DocumentStorageService;
+import com.pms.service.ProjectPermissionService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -25,28 +24,30 @@ public class ProjectDocumentCrudController {
     private final ProjectDocumentRepository documents;
     private final ProjectRepository projects;
     private final DocumentStorageService storageService;
-    private final SessionRepository sessions;
+    private final ProjectPermissionService permissionService;
 
-    public ProjectDocumentCrudController(ProjectDocumentRepository documents, ProjectRepository projects, DocumentStorageService storageService, SessionRepository sessions) {
+    public ProjectDocumentCrudController(ProjectDocumentRepository documents, ProjectRepository projects,
+                                         DocumentStorageService storageService,
+                                         ProjectPermissionService permissionService) {
         this.documents = documents;
         this.projects = projects;
         this.storageService = storageService;
-        this.sessions = sessions;
+        this.permissionService = permissionService;
     }
 
     @GetMapping
     public List<ProjectDocument> list(@RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
-        if (u == null || isAdminOrManager(u)) return documents.findAll();
-        return documents.findAll().stream().filter(d -> hasAccess(d.getProject(), u)).toList();
+        AppUser u = permissionService.resolveUser(auth);
+        if (u == null || permissionService.isAdminOrManager(u)) return documents.findAll();
+        return documents.findAll().stream().filter(d -> permissionService.canRead(d.getProject(), u)).toList();
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<ProjectDocument> get(@PathVariable Long id,
                                                @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         return documents.findById(id).map(doc -> {
-            if (u != null && !isAdminOrManager(u) && !hasAccess(doc.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (u != null && !permissionService.canRead(doc.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
             return ResponseEntity.ok(doc);
         }).orElseGet(() -> ResponseEntity.status(404).body((ProjectDocument) null));
     }
@@ -55,11 +56,11 @@ public class ProjectDocumentCrudController {
     public ResponseEntity<ProjectDocument> create(@Valid @RequestBody ProjectDocument doc,
                                                   @RequestParam(name = "projectId", required = false) Long projectId,
                                                   @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         if (projectId != null) {
             Optional<Project> opt = projects.findById(projectId);
             if (opt.isEmpty()) return ResponseEntity.status(400).body((ProjectDocument) null);
-            if (u != null && !isAdminOrManager(u) && !hasAccess(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (u != null && !permissionService.canCreate(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
             doc.setProject(opt.get());
         }
         doc.setId(null);
@@ -76,8 +77,8 @@ public class ProjectDocumentCrudController {
                                                   @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
         Optional<Project> opt = projects.findById(projectId);
         if (opt.isEmpty()) return ResponseEntity.status(404).body((ProjectDocument) null);
-        AppUser u = currentUser(auth);
-        if (u != null && !isAdminOrManager(u) && !hasAccess(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+        AppUser u = permissionService.resolveUser(auth);
+        if (u != null && !permissionService.canCreate(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
         var stored = storageService.store(file);
         ProjectDocument doc = ProjectDocument.builder()
                 .name(name != null ? name : file.getOriginalFilename())
@@ -99,9 +100,9 @@ public class ProjectDocumentCrudController {
                                                    @RequestParam(value = "type", required = false) String type,
                                                    @RequestParam(value = "description", required = false, defaultValue = "") String description,
                                                    @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         return documents.findById(id).map(existing -> {
-            if (u != null && !isAdminOrManager(u) && !hasAccess(existing.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (u != null && !permissionService.canUpdate(existing.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
             try {
                 System.out.println("=== REPLACE FILE DEBUG ===");
                 System.out.println("Received description parameter: '" + description + "'");
@@ -143,9 +144,9 @@ public class ProjectDocumentCrudController {
                                                   @RequestParam(value = "notes", required = false) String notes,
                                                   @RequestParam(value = "reviewedBy", required = false) String reviewedBy,
                                                   @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         return documents.findById(id).map(doc -> {
-            if (u != null && !isAdminOrManager(u) && !hasAccess(doc.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (u != null && !permissionService.canUpdate(doc.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
             doc.setStatus(status);
             doc.setReviewNotes(notes);
             doc.setReviewedBy(reviewedBy);
@@ -157,9 +158,9 @@ public class ProjectDocumentCrudController {
     @PutMapping("/{id}")
     public ResponseEntity<ProjectDocument> update(@PathVariable Long id, @Valid @RequestBody ProjectDocument doc,
                                                   @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         return documents.findById(id).map(existing -> {
-            if (u != null && !isAdminOrManager(u) && !hasAccess(existing.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (u != null && !permissionService.canUpdate(existing.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
             
             System.out.println("Updating document " + id);
             System.out.println("Incoming description: " + doc.getDescription());
@@ -189,36 +190,12 @@ public class ProjectDocumentCrudController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id,
                                        @RequestHeader(value = "Authorization", required = false) String auth) {
-        AppUser u = currentUser(auth);
+        AppUser u = permissionService.resolveUser(auth);
         var opt = documents.findById(id);
         if (opt.isEmpty()) return new ResponseEntity<Void>(HttpStatus.NOT_FOUND);
         var existing = opt.get();
-        if (u != null && !isAdminOrManager(u) && !hasAccess(existing.getProject(), u)) return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
+        if (u != null && !permissionService.canDelete(existing.getProject(), u)) return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
         documents.deleteById(id);
         return ResponseEntity.noContent().build();
-    }
-
-    private AppUser currentUser(String auth) {
-        if (auth == null || !auth.startsWith("Bearer ")) return null;
-        String token = auth.substring(7);
-        return sessions.findByTokenAndRevokedFalse(token)
-                .filter(st -> st.getExpiresAt().isAfter(java.time.Instant.now()))
-                .map(st -> st.getUser())
-                .orElse(null);
-    }
-    private boolean isAdminOrManager(AppUser u) {
-        return u != null && u.getRoles() != null && (u.getRoles().contains(Role.ADMIN) || u.getRoles().contains(Role.MANAGER));
-    }
-    private boolean hasAccess(Project p, AppUser u) {
-        if (isAdminOrManager(u)) return true;
-        if (p.getUsers() != null && u != null && u.getId() != null) {
-            Long uid = u.getId();
-            if (p.getUsers().stream().anyMatch(x -> uid.equals(x.getId()))) return true;
-        }
-        String email = u != null ? u.getEmail() : null;
-        if (email != null && p.getTeamMembers() != null) {
-            return p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
-        }
-        return false;
     }
 }

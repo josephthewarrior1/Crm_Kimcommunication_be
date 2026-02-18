@@ -1,6 +1,7 @@
 package com.pms.controller;
 
 import com.pms.domain.AppUser;
+import com.pms.domain.EmploymentType;
 import com.pms.domain.Role;
 import com.pms.repository.UserRepository;
 import org.springframework.http.ResponseEntity;
@@ -16,26 +17,52 @@ import java.util.stream.Collectors;
 public class AdminUserController {
 
     private final UserRepository users;
-    private final org.springframework.security.crypto.argon2.Argon2PasswordEncoder encoder = new org.springframework.security.crypto.argon2.Argon2PasswordEncoder(16,32,1,1<<14,3);
+    private final org.springframework.security.crypto.argon2.Argon2PasswordEncoder encoder = new org.springframework.security.crypto.argon2.Argon2PasswordEncoder(
+            16, 32, 1, 1 << 14, 3);
 
     public AdminUserController(UserRepository users) {
         this.users = users;
     }
 
-    record UserDto(Long id, String name, String username, String email, Set<Role> roles, boolean active, boolean approved, String dob) {}
+    record UserDto(Long id, String name, String username, String email, Set<Role> roles, boolean active,
+            boolean approved, String dob, String employmentType, String phone, String location, String avatar) {
+    }
+
+    private UserDto convertToDto(AppUser u) {
+        return new UserDto(
+                u.getId(),
+                u.getName(),
+                u.getUsername(),
+                u.getEmail(),
+                u.getRoles(),
+                u.isActive(),
+                u.isApproved(),
+                u.getDob() != null ? u.getDob().toString() : null,
+                u.getEmploymentType() != null ? u.getEmploymentType().name() : null,
+                u.getPhone(),
+                u.getLocation(),
+                u.getAvatar());
+    }
 
     @GetMapping
     public List<UserDto> list() {
         return users.findAll().stream()
-                .map(u -> new UserDto(u.getId(), u.getName(), u.getUsername(), u.getEmail(), u.getRoles(), u.isActive(), u.isApproved(), u.getDob() != null ? u.getDob().toString() : null))
+                .map(this::convertToDto)
                 .collect(Collectors.toList());
+    }
+
+    @GetMapping("/available")
+    public List<UserDto> listAvailable() {
+        return users.findUsersNotOnTeam().stream().map(this::convertToDto).collect(Collectors.toList());
     }
 
     @PatchMapping("/{id}/status")
     public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         return users.findById(id).map(u -> {
-            if (body.containsKey("active")) u.setActive(parseBoolean(body.get("active")));
-            if (body.containsKey("approved")) u.setApproved(parseBoolean(body.get("approved")));
+            if (body.containsKey("active"))
+                u.setActive(parseBoolean(body.get("active")));
+            if (body.containsKey("approved"))
+                u.setApproved(parseBoolean(body.get("approved")));
             users.save(u);
             return ResponseEntity.ok().build();
         }).orElse(ResponseEntity.notFound().build());
@@ -69,25 +96,33 @@ public class AdminUserController {
                 username = "user";
             }
             if (name.isEmpty() || username.isEmpty() || email.isEmpty() || password.isEmpty())
-                return ResponseEntity.badRequest().body(Map.of("error","name, username, email, password required"));
+                return ResponseEntity.badRequest().body(Map.of("error", "name, username, email, password required"));
             boolean active = parseBoolean(body.get("active"));
             boolean approved = parseBoolean(body.get("approved"));
             Set<Role> roles = parseRolesFlexible(body.get("roles"));
-            if (roles == null || roles.isEmpty()) roles = java.util.Set.of(Role.USER);
-            if (users.existsByEmail(email)) return ResponseEntity.badRequest().body(Map.of("error","Email already in use"));
+            if (roles == null || roles.isEmpty())
+                roles = java.util.Set.of(Role.USER);
+            if (users.existsByEmail(email))
+                return ResponseEntity.badRequest().body(Map.of("error", "Email already in use"));
             if (users.existsByUsername(username)) {
                 String base = username;
                 int i = 1;
-                while (users.existsByUsername(base + i)) i++;
+                while (users.existsByUsername(base + i))
+                    i++;
                 username = base + i;
+            }
+            EmploymentType empType = null;
+            String empTypeStr = String.valueOf(body.getOrDefault("employmentType", "")).trim().toUpperCase();
+            if (!empTypeStr.isEmpty()) {
+                try { empType = EmploymentType.valueOf(empTypeStr); } catch (Exception ignored) {}
             }
             AppUser u = AppUser.builder().name(name).email(email).username(username)
                     .passwordHash(encoder.encode(password))
-                    .roles(roles).active(active).approved(approved).build();
+                    .roles(roles).active(active).approved(approved).employmentType(empType).build();
             users.save(u);
             return ResponseEntity.ok().build();
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(Map.of("error","Invalid request"));
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid request"));
         }
     }
 
@@ -96,7 +131,7 @@ public class AdminUserController {
         String newPassword = String.valueOf(body.getOrDefault("password", ""));
         // Relaxed policy: minimum 6 characters
         if (newPassword.length() < 6) {
-            return ResponseEntity.badRequest().body(Map.of("error","Password too short"));
+            return ResponseEntity.badRequest().body(Map.of("error", "Password too short"));
         }
         return users.findById(id).map(u -> {
             u.setPasswordHash(encoder.encode(newPassword));
@@ -106,8 +141,10 @@ public class AdminUserController {
     }
 
     private boolean parseBoolean(Object value) {
-        if (value instanceof Boolean b) return b;
-        if (value == null) return false;
+        if (value instanceof Boolean b)
+            return b;
+        if (value == null)
+            return false;
         String s = String.valueOf(value).trim().toLowerCase();
         return s.equals("true") || s.equals("1") || s.equals("yes") || s.equals("y");
     }
@@ -115,7 +152,8 @@ public class AdminUserController {
     @SuppressWarnings("unchecked")
     private Set<Role> parseRolesFlexible(Object value) {
         try {
-            if (value == null) return null;
+            if (value == null)
+                return null;
             if (value instanceof List<?> list) {
                 return list.stream()
                         .map(String::valueOf)
@@ -127,9 +165,10 @@ public class AdminUserController {
             }
             if (value instanceof String s) {
                 String str = s.trim();
-                if (str.isEmpty()) return null;
+                if (str.isEmpty())
+                    return null;
                 // support comma-separated
-                String[] parts = str.contains(",") ? str.split(",") : new String[]{str};
+                String[] parts = str.contains(",") ? str.split(",") : new String[] { str };
                 return java.util.Arrays.stream(parts)
                         .map(String::trim)
                         .filter(v -> !v.isEmpty())

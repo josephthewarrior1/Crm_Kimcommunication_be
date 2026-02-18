@@ -35,6 +35,9 @@ public class TeamMember {
 
     @ManyToMany(mappedBy = "teamMembers")
     @JsonIgnore
+    // @ManyToOne(fetch = FetchType.LAZY)
+    // @JoinColumn(name = "project_id")
+    // @JsonIgnore // Prevent infinite JSON recursion
     @Builder.Default
     private Set<Project> projects = new HashSet<>();
 }

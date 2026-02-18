@@ -128,14 +128,52 @@ public class AuthController {
         return sessions.findByTokenAndRevokedFalse(token)
                 .filter(st -> st.getExpiresAt().isAfter(Instant.now()))
                 .map(st -> st.getUser())
-                .map(u -> ResponseEntity.ok(Map.of(
-                        "id", u.getId(),
-                        "name", u.getName(),
-                        "email", u.getEmail(),
-                        "roles", u.getRoles(),
-                        "active", u.isActive(),
-                        "approved", u.isApproved()
-                )))
+                .map(u -> {
+                    java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+                    data.put("id", u.getId());
+                    data.put("name", u.getName());
+                    data.put("email", u.getEmail());
+                    data.put("username", u.getUsername());
+                    data.put("roles", u.getRoles());
+                    data.put("active", u.isActive());
+                    data.put("approved", u.isApproved());
+                    data.put("dob", u.getDob() != null ? u.getDob().toString() : null);
+                    data.put("phone", u.getPhone());
+                    data.put("location", u.getLocation());
+                    data.put("avatar", u.getAvatar());
+                    data.put("employmentType", u.getEmploymentType() != null ? u.getEmploymentType().name() : null);
+                    return ResponseEntity.ok(data);
+                })
+                .orElse(ResponseEntity.status(401).build());
+    }
+
+    @PutMapping("/profile")
+    public ResponseEntity<?> updateProfile(
+            @RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody Map<String, Object> body) {
+        String token = extractToken(auth);
+        if (token == null) return ResponseEntity.status(401).build();
+        return sessions.findByTokenAndRevokedFalse(token)
+                .filter(st -> st.getExpiresAt().isAfter(Instant.now()))
+                .map(st -> st.getUser())
+                .map(u -> {
+                    if (body.containsKey("dob")) {
+                        String dobStr = String.valueOf(body.get("dob")).trim();
+                        if (!dobStr.isEmpty() && !dobStr.equals("null")) {
+                            try { u.setDob(LocalDate.parse(dobStr)); } catch (Exception ignored) {}
+                        } else {
+                            u.setDob(null);
+                        }
+                    }
+                    if (body.containsKey("phone"))
+                        u.setPhone(body.get("phone") != null ? String.valueOf(body.get("phone")).trim() : null);
+                    if (body.containsKey("location"))
+                        u.setLocation(body.get("location") != null ? String.valueOf(body.get("location")).trim() : null);
+                    if (body.containsKey("avatar"))
+                        u.setAvatar(body.get("avatar") != null ? String.valueOf(body.get("avatar")).trim() : null);
+                    users.save(u);
+                    return ResponseEntity.ok(Map.of("message", "Profile updated"));
+                })
                 .orElse(ResponseEntity.status(401).build());
     }
 

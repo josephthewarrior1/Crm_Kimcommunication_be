@@ -1,5 +1,9 @@
 databaseChangeLog:
-  - include:
-      file: db/changelog/changes/changelog-wc-42.yml
-  - include:
-      file: db/changelog/changes/changelog-add-document-description.yml
+    - include:
+          file: db/changelog/changes/changelog-wc-42.yml
+    - include:
+          file: db/changelog/changes/changelog-add-document-description.yml
+    - include:
+          file: db/changelog/changes/changelog-client-contacts.yml
+    - include:
+          file: db/changelog/changes/changelog-schema-sync.yml

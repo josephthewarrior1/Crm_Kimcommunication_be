@@ -1,0 +1,95 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-client-contacts-table
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              tableExists:
+                tableName: client_contacts
+      changes:
+        - createTable:
+            tableName: client_contacts
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: email, type: VARCHAR(255) }
+              - column: { name: phone, type: VARCHAR(100) }
+              - column: { name: position, type: VARCHAR(255) }
+              - column: { name: department, type: VARCHAR(255) }
+              - column: { name: is_primary, type: BOOLEAN, defaultValueBoolean: false }
+              - column: { name: client_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: created_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+              - column: { name: updated_at, type: TIMESTAMPTZ, defaultValueComputed: NOW() }
+        - addForeignKeyConstraint:
+            baseTableName: client_contacts
+            baseColumnNames: client_id
+            referencedTableName: clients
+            referencedColumnNames: id
+            constraintName: fk_client_contact_client
+            onDelete: CASCADE
+        - createIndex:
+            tableName: client_contacts
+            indexName: idx_client_contacts_client
+            columns:
+              - column: { name: client_id }
+
+  - changeSet:
+      id: trg-client-contacts-updated-at
+      author: codex
+      preConditions:
+        - dbms:
+            type: postgresql
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$ BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_client_contacts_updated_at') THEN
+                CREATE TRIGGER trg_client_contacts_updated_at BEFORE UPDATE ON client_contacts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+              END IF;
+              END $$;
+
+  - changeSet:
+      id: replace-position-department-with-job-title
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: client_contacts
+                columnName: job_title
+      changes:
+        - addColumn:
+            tableName: client_contacts
+            columns:
+              - column: { name: job_title, type: VARCHAR(255) }
+        - dropColumn:
+            tableName: client_contacts
+            columnName: position
+        - dropColumn:
+            tableName: client_contacts
+            columnName: department
+
+  - changeSet:
+      id: resize-client-contacts-phone
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+      changes:
+        - modifyDataType:
+            tableName: client_contacts
+            columnName: phone
+            newDataType: VARCHAR(20)

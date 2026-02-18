@@ -37,20 +37,21 @@ public class DataSeedingService implements CommandLineRunner {
     private final ProjectRepository projectRepository;
     private final TeamMemberRepository teamMemberRepository;
     private final SessionRepository sessionRepository;
-    
+    // private final ProjectRoleRepository roleRepository;
+
     private final Argon2PasswordEncoder passwordEncoder = new Argon2PasswordEncoder(16, 32, 1, 1 << 14, 3);
 
     @Override
     @Transactional
     public void run(String... args) throws Exception {
         log.info("Starting data seeding process...");
-        
+
         // Only seed if database is empty
         if (userRepository.count() > 0) {
             log.info("Database already has data, skipping seeding");
             return;
         }
-        
+
         try {
             seedUsers();
             seedClients();
@@ -68,7 +69,7 @@ public class DataSeedingService implements CommandLineRunner {
      */
     private void seedUsers() {
         log.info("Seeding users...");
-        
+
         // Admin user
         AppUser admin = AppUser.builder()
                 .name("System Administrator")
@@ -143,7 +144,7 @@ public class DataSeedingService implements CommandLineRunner {
      */
     private void seedClients() {
         log.info("Seeding clients...");
-        
+
         Client client1 = Client.builder()
                 .name("Acme Corporation")
                 .industry("Technology")
@@ -182,12 +183,12 @@ public class DataSeedingService implements CommandLineRunner {
      */
     private void seedTeamMembers() {
         log.info("Seeding team members...");
-        
+
         // Get users for team members
         AppUser john = userRepository.findByEmail("john@pms.com").orElse(null);
         AppUser jane = userRepository.findByEmail("jane@pms.com").orElse(null);
         AppUser mike = userRepository.findByEmail("mike@pms.com").orElse(null);
-        
+
         if (john != null) {
             TeamMember member1 = TeamMember.builder()
                     .name("John Developer")
@@ -236,17 +237,17 @@ public class DataSeedingService implements CommandLineRunner {
      */
     private void seedProjects() {
         log.info("Seeding projects...");
-        
+
         // Get clients and team members
         Client acme = clientRepository.findByName("Acme Corporation").orElse(null);
         Client global = clientRepository.findByName("Global Solutions Ltd").orElse(null);
-        
+
         if (acme != null) {
             Project project1 = Project.builder()
                     .name("Website Redesign")
                     .description("Complete redesign of the corporate website with modern UI/UX")
                     .status(ProjectStatus.IN_PROGRESS)
-                    .priority(Priority.HIGH)
+                    .size(Size.LARGE)
                     .progress(25)
                     .startDate(LocalDate.now().minusDays(30))
                     .endDate(LocalDate.now().plusDays(60))
@@ -263,7 +264,7 @@ public class DataSeedingService implements CommandLineRunner {
                     .name("Mobile App Development")
                     .description("Development of a cross-platform mobile application")
                     .status(ProjectStatus.IN_PROGRESS)
-                    .priority(Priority.MEDIUM)
+                    .size(Size.MEDIUM)
                     .progress(0)
                     .startDate(LocalDate.now().plusDays(7))
                     .endDate(LocalDate.now().plusDays(120))
@@ -275,4 +276,5 @@ public class DataSeedingService implements CommandLineRunner {
             log.info("Created project: {}", project2.getName());
         }
     }
+
 }

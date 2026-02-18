@@ -1,62 +1,42 @@
 package com.pms.controller;
 
+import com.pms.domain.AppUser;
 import com.pms.domain.Project;
-// import com.pms.domain.ProjectStatus;
 import com.pms.domain.StageStatus;
 import com.pms.domain.WorkflowStage;
 import com.pms.dto.FrontendProjectDto;
 import com.pms.repository.ProjectRepository;
-import com.pms.repository.SessionRepository;
+import com.pms.service.ProjectPermissionService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-// import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/frontend")
 public class FrontendController {
 
     private final ProjectRepository projectRepository;
-    private final SessionRepository sessions;
+    private final ProjectPermissionService permissionService;
 
-    public FrontendController(ProjectRepository projectRepository, SessionRepository sessions) {
+    public FrontendController(ProjectRepository projectRepository, ProjectPermissionService permissionService) {
         this.projectRepository = projectRepository;
-        this.sessions = sessions;
+        this.permissionService = permissionService;
     }
 
     @GetMapping("/projects")
     public List<FrontendProjectDto> listFrontendProjects(
             @RequestHeader(value = "Authorization", required = false) String auth) {
         var list = projectRepository.findAll();
-        // If Authorization present and valid, restrict non-admin users to projects
-        // where their email appears in team members
-        if (auth != null && auth.startsWith("Bearer ")) {
-            var token = auth.substring(7);
-            var opt = sessions.findByTokenAndRevokedFalse(token)
-                    .filter(st -> st.getExpiresAt().isAfter(Instant.now()));
-            if (opt.isPresent()) {
-                var user = opt.get().getUser();
-                Set<String> roles = user.getRoles().stream().map(Enum::name).collect(Collectors.toSet());
-                if (!(roles.contains("ADMIN") || roles.contains("MANAGER"))) {
-                    String email = user.getEmail();
-                    Long uid = user.getId();
-                    list = list.stream().filter(p -> {
-                        boolean inUsers = p.getUsers() != null && uid != null
-                                && p.getUsers().stream().anyMatch(x -> uid.equals(x.getId()));
-                        boolean inMembers = email != null && p.getTeamMembers() != null
-                                && p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
-                        return inUsers || inMembers;
-                    }).toList();
-                }
-            }
+        AppUser user = permissionService.resolveUser(auth);
+        if (user != null && !permissionService.isAdminOrManager(user)) {
+            list = list.stream()
+                    .filter(p -> permissionService.hasProjectAccess(p, user))
+                    .toList();
         }
         return list.stream()
                 .map(this::toFrontendDto)
@@ -77,10 +57,10 @@ public class FrontendController {
             default -> "In Progress";
         };
 
-        // PRIORITY
-        String priority = p.getPriority() != null ? p.getPriority().name() : null;
-        String priorityLabel = priority != null
-                ? priority.charAt(0) + priority.substring(1).toLowerCase()
+        // SIZE
+        String size = p.getSize() != null ? p.getSize().name() : null;
+        String sizeLabel = size != null
+                ? size.charAt(0) + size.substring(1).toLowerCase()
                 : null;
 
         // CURRENT STAGE (DERIVED)
@@ -109,8 +89,8 @@ public class FrontendController {
                 daysUntilEvent,
                 currentStage,
                 currentStageLabel,
-                priority,
-                priorityLabel);
+                size,
+                sizeLabel);
     }
 
     private String deriveCurrentStageEnum(Project p) {

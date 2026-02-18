@@ -54,4 +54,12 @@ public class AppUser {
 
     @Builder.Default
     private boolean approved = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "employment_type")
+    private EmploymentType employmentType;
+
+    private String phone;
+    private String location;
+    private String avatar;
 }

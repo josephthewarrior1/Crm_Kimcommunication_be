@@ -23,7 +23,8 @@ public class LocalDocumentStorageService implements DocumentStorageService {
 
     @Override
     public StoredFile store(MultipartFile file) throws IOException {
-        String original = StringUtils.cleanPath(file.getOriginalFilename() == null ? "file" : file.getOriginalFilename());
+        String original = StringUtils
+                .cleanPath(file.getOriginalFilename() == null ? "file" : file.getOriginalFilename());
         String ext = "";
         int dot = original.lastIndexOf('.');
         if (dot > 0 && dot < original.length() - 1) {

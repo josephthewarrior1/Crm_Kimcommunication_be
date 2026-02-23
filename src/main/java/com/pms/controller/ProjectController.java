@@ -32,6 +32,7 @@ public class ProjectController {
     private final ClientRepository clientRepository;
     private final ClientContactRepository clientContactRepository;
     private final VenueRepository venueRepository;
+    private final CityRepository cityRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -48,7 +49,8 @@ public class ProjectController {
             ProjectPermissionService permissionService,
             ClientRepository clientRepository,
             ClientContactRepository clientContactRepository,
-            VenueRepository venueRepository) {
+            VenueRepository venueRepository,
+            CityRepository cityRepository) {
         this.projectRepository = projectRepository;
         this.workflowStageRepository = workflowStageRepository;
         this.projectEventRepository = projectEventRepository;
@@ -62,6 +64,7 @@ public class ProjectController {
         this.clientRepository = clientRepository;
         this.clientContactRepository = clientContactRepository;
         this.venueRepository = venueRepository;
+        this.cityRepository = cityRepository;
     }
 
     @GetMapping
@@ -104,12 +107,12 @@ public class ProjectController {
         project.setStatus(ProjectStatus.IN_PROGRESS);
         project.setProgress(0);
 
-        if (request.size != null) {
-            try {
-                project.setSize(Size.valueOf(request.size.toUpperCase()));
-            } catch (IllegalArgumentException e) {
-                project.setSize(Size.MEDIUM);
-            }
+        if (request.target != null) {
+            project.setTarget(request.target);
+        }
+
+        if (request.hedging != null) {
+            project.setHedging(request.hedging);
         }
 
         if (request.eventDate != null && !request.eventDate.isBlank()) {
@@ -162,31 +165,40 @@ public class ProjectController {
         if (request.venueId != null) {
             venueRepository.findById(request.venueId).ifPresent(project::setVenue);
         } else if (request.venueName != null && !request.venueName.isBlank()) {
-            String city = request.venueCity != null ? request.venueCity.trim() : null;
-            Venue venue = venueRepository.findByNameAndCity(request.venueName.trim(), city)
+            // Resolve city entity from venueCity string
+            City cityEntity = null;
+            if (request.venueCity != null && !request.venueCity.isBlank()) {
+                String cityName = request.venueCity.trim();
+                cityEntity = cityRepository.findByName(cityName)
+                        .orElseGet(() -> {
+                            City c = new City();
+                            c.setName(cityName);
+                            return cityRepository.save(c);
+                        });
+            }
+            City finalCity = cityEntity;
+            Venue venue = venueRepository.findByNameAndCity(request.venueName.trim(), cityEntity)
                     .orElseGet(() -> {
                         Venue v = new Venue();
                         v.setName(request.venueName.trim());
-                        v.setCity(city);
+                        v.setCity(finalCity);
                         return venueRepository.save(v);
                     });
             project.setVenue(venue);
         }
 
-        // Build team assignments map
+        // Build team assignments map — Account Manager is the top-level role (PROJECT_ADMIN)
         java.util.Map<String, Long> departmentHeads = new java.util.LinkedHashMap<>();
-        if (request.accountManagerUserId != null)
-            departmentHeads.put("Account Manager", request.accountManagerUserId);
+        if (request.picUserId != null)
+            departmentHeads.put("Project Officer", request.picUserId);
         if (request.adminUserId != null)
             departmentHeads.put("Admin", request.adminUserId);
         if (request.productionUserId != null)
             departmentHeads.put("Production", request.productionUserId);
         if (request.designUserId != null)
             departmentHeads.put("Design", request.designUserId);
-        if (request.financeUserId != null)
-            departmentHeads.put("Finance", request.financeUserId);
 
-        Project saved = projectService.createProjectWithDefaults(project, request.picUserId, departmentHeads);
+        Project saved = projectService.createProjectWithDefaults(project, request.accountManagerUserId, departmentHeads);
         return ResponseEntity.created(URI.create("/api/projects/" + saved.getId())).body(saved);
     }
 
@@ -227,13 +239,13 @@ public class ProjectController {
                             }
                         }
                     }
-                    if (updates.containsKey("size")) {
-                        Object sizeObj = updates.get("size");
-                        if (sizeObj != null) {
+                    if (updates.containsKey("target")) {
+                        Object targetObj = updates.get("target");
+                        if (targetObj != null) {
                             try {
-                                existing.setSize(Size.valueOf(sizeObj.toString().toUpperCase()));
-                            } catch (IllegalArgumentException e) {
-                                // Invalid priority, skip
+                                existing.setTarget(Integer.parseInt(targetObj.toString()));
+                            } catch (NumberFormatException e) {
+                                // Invalid target, skip
                             }
                         }
                     }
@@ -304,6 +316,16 @@ public class ProjectController {
                             }
                         }
                     }
+                    if (updates.containsKey("hedging")) {
+                        Object hedgingObj = updates.get("hedging");
+                        if (hedgingObj != null) {
+                            try {
+                                existing.setHedging(new java.math.BigDecimal(hedgingObj.toString()));
+                            } catch (NumberFormatException e) {
+                                // Invalid hedging value, skip
+                            }
+                        }
+                    }
                     if (updates.containsKey("client")) {
                         Object clientObj = updates.get("client");
                         if (clientObj != null) {
@@ -347,6 +369,34 @@ public class ProjectController {
             return ResponseEntity.status(404).<Void>build();
         projectRepository.deleteById(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/complete")
+    public ResponseEntity<?> completeProject(@PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        AppUser u = currentUser(auth);
+        if (u == null || !isAdminOrManager(u))
+            return ResponseEntity.status(403).body("Unauthorized");
+        return projectRepository.findById(id)
+                .map(project -> {
+                    List<WorkflowStage> stages = workflowStageRepository.findByProjectId(id);
+                    if (stages != null && !stages.isEmpty()) {
+                        // Find the last stage by highest orderSequence
+                        WorkflowStage lastStage = stages.stream()
+                                .max(java.util.Comparator.comparingInt(
+                                        s -> s.getOrderSequence() != null ? s.getOrderSequence() : 0))
+                                .orElse(null);
+                        if (lastStage != null && lastStage.getStatus() != com.pms.domain.StageStatus.COMPLETED) {
+                            return ResponseEntity.badRequest()
+                                    .body("Cannot complete project: the last stage is not yet completed");
+                        }
+                    }
+                    project.setStatus(ProjectStatus.COMPLETED);
+                    project.setProgress(100);
+                    projectRepository.save(project);
+                    return ResponseEntity.ok(project);
+                })
+                .orElseGet(() -> ResponseEntity.status(404).body(null));
     }
 
     // --- Nested resources ---
@@ -713,7 +763,7 @@ public class ProjectController {
     public static class CreateProjectRequest {
         public String name;
         public String description;
-        public String size;
+        public Integer target;
         public String eventDate;
         // Client fields
         public Long clientId;
@@ -724,6 +774,8 @@ public class ProjectController {
         public Long venueId;
         public String venueName;
         public String venueCity;
+        // Hedging
+        public java.math.BigDecimal hedging;
         // Team member user IDs
         public Long picUserId;
         public Long accountManagerUserId;
@@ -737,8 +789,8 @@ public class ProjectController {
         public void setName(String name) { this.name = name; }
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
-        public String getSize() { return size; }
-        public void setSize(String size) { this.size = size; }
+        public Integer getTarget() { return target; }
+        public void setTarget(Integer target) { this.target = target; }
         public String getEventDate() { return eventDate; }
         public void setEventDate(String eventDate) { this.eventDate = eventDate; }
         public Long getClientId() { return clientId; }
@@ -755,6 +807,8 @@ public class ProjectController {
         public void setVenueName(String venueName) { this.venueName = venueName; }
         public String getVenueCity() { return venueCity; }
         public void setVenueCity(String venueCity) { this.venueCity = venueCity; }
+        public java.math.BigDecimal getHedging() { return hedging; }
+        public void setHedging(java.math.BigDecimal hedging) { this.hedging = hedging; }
         public Long getPicUserId() { return picUserId; }
         public void setPicUserId(Long picUserId) { this.picUserId = picUserId; }
         public Long getAccountManagerUserId() { return accountManagerUserId; }

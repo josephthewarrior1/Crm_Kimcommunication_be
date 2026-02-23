@@ -11,7 +11,8 @@ public record ProjectMemberDto(
                 String jobTitle,
                 LocalDateTime joinedAt,
                 Long managerId,
-                String managerName) {
+                String managerName,
+                String teamType) {
         // Nested DTOs to match your Frontend structure
         public record UserSummaryDto(Long id, String name, String email, String phone, String location,
                         EmploymentType employmentType) {

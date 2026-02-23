@@ -25,13 +25,17 @@ public class ProjectTeamController {
         this.roleRepository = roleRepository;
     }
 
-    // 1. GET TEAM: List all members
+    // 1. GET TEAM: List all members (optionally filtered by team type)
     @GetMapping
-    public ResponseEntity<List<ProjectMemberDto>> getTeam(@PathVariable Long projectId) {
-        List<ProjectMember> members = memberRepository.findByProjectId(projectId);
+    public ResponseEntity<List<ProjectMemberDto>> getTeam(
+            @PathVariable Long projectId,
+            @RequestParam(value = "teamType", required = false) String teamType) {
+        List<ProjectMember> members = (teamType != null)
+                ? memberRepository.findByProjectIdAndTeamType(projectId, teamType)
+                : memberRepository.findByProjectId(projectId);
 
         List<ProjectMemberDto> dtos = members.stream()
-                .map(this::convertToDto) // Use a helper method for safety
+                .map(this::convertToDto)
                 .toList();
 
         return ResponseEntity.ok(dtos);
@@ -62,7 +66,7 @@ public class ProjectTeamController {
         }
         var role = roleOpt.get();
 
-        // --- NEW: Step 4: Fetch Manager (Optional) ---
+        // Step 4: Fetch Manager (Optional)
         ProjectMember manager = null;
         if (request.managerId != null) {
             var managerOpt = memberRepository.findById(request.managerId);
@@ -77,19 +81,23 @@ public class ProjectTeamController {
             }
         }
 
-        // Step 5: Logic Checks (User already in team?)
-        if (memberRepository.existsByProjectIdAndUserId(projectId, user.getId())) {
-            return ResponseEntity.badRequest().body("User is already in the team");
+        // Step 5: Resolve team type (default to ADMINISTRATION)
+        String teamType = (request.teamType != null) ? request.teamType : "ADMINISTRATION";
+
+        // Step 6: Logic Checks (User already in this team type?)
+        if (memberRepository.existsByProjectIdAndUserIdAndTeamType(projectId, user.getId(), teamType)) {
+            return ResponseEntity.badRequest().body("User is already in this team");
         }
 
-        // Step 6: Save & Return
+        // Step 7: Save & Return
         ProjectMember member = ProjectMember.builder()
                 .project(project)
                 .user(user)
                 .role(role)
                 .jobTitle(request.jobTitle)
-                .manager(manager) // <--- Set the manager here
-                .joinedAt(java.time.LocalDateTime.now()) // Good practice to set this
+                .manager(manager)
+                .teamType(teamType)
+                .joinedAt(java.time.LocalDateTime.now())
                 .build();
 
         ProjectMember savedMember = memberRepository.save(member);
@@ -97,7 +105,45 @@ public class ProjectTeamController {
         return ResponseEntity.ok(convertToDto(savedMember));
     }
 
-    // 3. REMOVE MEMBER
+    // 3. UPDATE MEMBER
+    @PutMapping("/{memberId}")
+    public ResponseEntity<?> updateMember(@PathVariable Long projectId, @PathVariable Long memberId,
+            @RequestBody UpdateMemberRequest request) {
+        var memberOpt = memberRepository.findById(memberId);
+        if (memberOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        var member = memberOpt.get();
+
+        if (!member.getProject().getId().equals(projectId)) {
+            return ResponseEntity.badRequest().body("Member does not belong to this project");
+        }
+
+        // Update role
+        if (request.roleId != null) {
+            var roleOpt = roleRepository.findById(request.roleId);
+            roleOpt.ifPresent(member::setRole);
+        }
+
+        // Update job title
+        if (request.jobTitle != null) {
+            member.setJobTitle(request.jobTitle);
+        }
+
+        // Update manager
+        if (request.managerId != null) {
+            if (request.managerId == 0) {
+                member.setManager(null); // 0 means "no manager"
+            } else {
+                memberRepository.findById(request.managerId).ifPresent(member::setManager);
+            }
+        }
+
+        memberRepository.save(member);
+        return ResponseEntity.ok(convertToDto(member));
+    }
+
+    // 4. REMOVE MEMBER
     @DeleteMapping("/{memberId}")
     public ResponseEntity<Void> removeMember(@PathVariable Long projectId, @PathVariable Long memberId) {
         if (memberRepository.existsById(memberId)) {
@@ -132,35 +178,42 @@ public class ProjectTeamController {
                         m.getRole().isCanDelete())
                 : null;
 
-        // 3. Extract Manager Details (New Logic)
+        // 3. Extract Manager Details
         Long managerId = null;
         String managerName = null;
 
         if (m.getManager() != null) {
             managerId = m.getManager().getId();
-            // Ensure the manager has a User attached before getting the name
             if (m.getManager().getUser() != null) {
                 managerName = m.getManager().getUser().getName();
             }
         }
 
-        // 4. Return new DTO with ALL 7 arguments
+        // 4. Return DTO with teamType
         return new ProjectMemberDto(
                 m.getId(),
                 userDto,
                 roleDto,
-                m.getJobTitle(), // Note: Make sure your getter matches the field name (getJobTitle)
+                m.getJobTitle(),
                 m.getJoinedAt(),
-                managerId, // <--- Added
-                managerName // <--- Added
+                managerId,
+                managerName,
+                m.getTeamType()
         );
     }
 
-    // Helper DTO class
+    // Request DTOs
     public static class AddMemberRequest {
         public Long userId;
         public Long roleId;
         public String jobTitle;
-        public Long managerId; // <--- NEW FIELD
+        public Long managerId;
+        public String teamType;
+    }
+
+    public static class UpdateMemberRequest {
+        public Long roleId;
+        public String jobTitle;
+        public Long managerId;
     }
 }

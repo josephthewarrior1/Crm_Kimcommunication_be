@@ -5,8 +5,7 @@ import com.pms.domain.Project;
 import com.pms.domain.ProjectDocument;
 import com.pms.domain.ProjectMember;
 import com.pms.domain.ProjectRole;
-import com.pms.domain.StageStatus; // Assuming this is your Enum
-import com.pms.domain.TeamMember;
+import com.pms.domain.StageStatus;
 import com.pms.domain.WorkflowStage;
 import com.pms.repository.DocumentTemplateRepository;
 import com.pms.repository.ProjectDocumentRepository;
@@ -78,7 +77,7 @@ public class ProjectService {
          * Create project with defaults AND team members.
          */
         @Transactional
-        public Project createProjectWithDefaults(Project project, Long picUserId,
+        public Project createProjectWithDefaults(Project project, Long accountManagerUserId,
                         java.util.Map<String, Long> departmentHeads) {
                 // Delegate to existing method for project + docs + stages
                 Project saved = createProjectWithDefaults(project);
@@ -87,15 +86,27 @@ public class ProjectService {
                 ProjectRole adminRole = roleRepository.findByName("PROJECT_ADMIN").orElse(null);
                 ProjectRole editorRole = roleRepository.findByName("EDITOR").orElse(null);
 
-                // Create PIC member first (needed as manager reference for department heads)
-                ProjectMember picMember = addMember(saved, picUserId, "Project Officer", adminRole, null);
+                // Create Account Manager first (top-level role, needed as manager reference for department heads)
+                ProjectMember amMember = addMember(saved, accountManagerUserId, "Account Manager", adminRole, null);
 
-                // Create department heads with PIC as manager
+                // Create department heads with Account Manager as manager
                 for (java.util.Map.Entry<String, Long> entry : departmentHeads.entrySet()) {
-                        addMember(saved, entry.getValue(), entry.getKey(), editorRole, picMember);
+                        addMember(saved, entry.getValue(), entry.getKey(), editorRole, amMember);
                 }
 
+                // Auto-assign Finance team (always present on every project)
+                ProjectMember financeHead = addMemberByName(saved, "Sabrina", "Finance", editorRole, amMember);
+                addMemberByName(saved, "Renny", "Finance Assistant", editorRole,
+                                financeHead != null ? financeHead : amMember);
+
                 return saved;
+        }
+
+        private ProjectMember addMemberByName(Project project, String userName, String jobTitle,
+                        ProjectRole role, ProjectMember manager) {
+                return userRepository.findByName(userName)
+                                .map(user -> addMember(project, user.getId(), jobTitle, role, manager))
+                                .orElse(null);
         }
 
         private ProjectMember addMember(Project project, Long userId, String jobTitle,
@@ -110,6 +121,7 @@ public class ProjectService {
                                                 .jobTitle(jobTitle)
                                                 .role(role)
                                                 .manager(manager)
+                                                .teamType("ADMINISTRATION")
                                                 .joinedAt(LocalDateTime.now())
                                                 .build();
                                 return memberRepository.save(member);

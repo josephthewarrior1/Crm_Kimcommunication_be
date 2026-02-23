@@ -312,3 +312,94 @@ databaseChangeLog:
             referencedTableName: venues
             referencedColumnNames: id
             constraintName: fk_projects_venue
+
+  # ── projects: add hedging column ─────────────────────────────────────
+  - changeSet:
+      id: sync-add-project-hedging
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: projects
+                columnName: hedging
+      changes:
+        - addColumn:
+            tableName: projects
+            columns:
+              - column: { name: hedging, type: "DECIMAL(19,2)" }
+
+  # ── projects: replace size enum with target integer ────────────────
+  - changeSet:
+      id: sync-add-project-target
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: projects
+                columnName: target
+      changes:
+        - addColumn:
+            tableName: projects
+            columns:
+              - column: { name: target, type: INTEGER }
+        - sql:
+            sql: |
+              UPDATE projects SET target = CASE
+                WHEN size = 'LARGE' THEN 500
+                WHEN size = 'MEDIUM' THEN 100
+                WHEN size = 'SMALL' THEN 30
+                ELSE NULL
+              END
+              WHERE size IS NOT NULL AND target IS NULL;
+
+  - changeSet:
+      id: sync-drop-project-size-column
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - columnExists:
+              tableName: projects
+              columnName: size
+      changes:
+        - dropColumn: { tableName: projects, columnName: size }
+
+  # ── workflow_stages: add approval columns ──────────────────────────
+  - changeSet:
+      id: sync-add-stage-approval-columns
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: workflow_stages
+                columnName: approved_by_id
+      changes:
+        - addColumn:
+            tableName: workflow_stages
+            columns:
+              - column: { name: approved_by_id, type: BIGINT }
+              - column: { name: approved_at, type: TIMESTAMP }
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stages
+            baseColumnNames: approved_by_id
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_workflow_stages_approved_by

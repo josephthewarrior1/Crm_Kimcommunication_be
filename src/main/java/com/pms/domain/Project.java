@@ -34,8 +34,8 @@ public class Project {
         @Enumerated(EnumType.STRING)
         private ProjectStatus status;
 
-        @Enumerated(EnumType.STRING)
-        private Size size;
+        @Min(0)
+        private Integer target;
 
         @Min(0)
         @Max(100)
@@ -46,6 +46,9 @@ public class Project {
 
         @DecimalMin("0.0")
         private BigDecimal budget;
+
+        @DecimalMin("0.0")
+        private BigDecimal hedging;
 
         /**
          * Legacy client field - kept for backward compatibility
@@ -86,6 +89,10 @@ public class Project {
         @JsonManagedReference
         @Builder.Default
         private List<Contact> contacts = new ArrayList<>();
+
+        @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+        @Builder.Default
+        private List<ProjectMember> members = new ArrayList<>();
 
         @ManyToMany
         @JoinTable(name = "project_team_members", joinColumns = @JoinColumn(name = "project_id"), inverseJoinColumns = @JoinColumn(name = "member_id"))

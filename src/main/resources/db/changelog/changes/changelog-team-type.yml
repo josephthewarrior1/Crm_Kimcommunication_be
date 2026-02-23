@@ -1,0 +1,20 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-team-type-to-project-members
+      author: claude
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - columnExists:
+                tableName: project_members
+                columnName: team_type
+      changes:
+        - addColumn:
+            tableName: project_members
+            columns:
+              - column:
+                  name: team_type
+                  type: VARCHAR(20)
+                  defaultValue: ADMINISTRATION
+                  constraints:
+                    nullable: false

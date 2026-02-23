@@ -26,12 +26,12 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
     Optional<Client> findByName(String name);
     
     /**
-     * Find clients by industry sector
-     * 
-     * @param industry the industry to filter by
+     * Find clients by industry name
+     *
+     * @param name the industry name to filter by
      * @return list of clients in the specified industry
      */
-    List<Client> findByIndustry(String industry);
+    List<Client> findByIndustryName(String name);
     
     /**
      * Find clients by country

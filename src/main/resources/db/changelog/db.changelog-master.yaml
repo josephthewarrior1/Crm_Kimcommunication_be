@@ -7,3 +7,7 @@ databaseChangeLog:
           file: db/changelog/changes/changelog-client-contacts.yml
     - include:
           file: db/changelog/changes/changelog-schema-sync.yml
+    - include:
+          file: db/changelog/changes/changelog-reference-tables.yml
+    - include:
+          file: db/changelog/changes/changelog-team-type.yml

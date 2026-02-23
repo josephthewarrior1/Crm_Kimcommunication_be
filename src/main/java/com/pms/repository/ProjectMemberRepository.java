@@ -16,4 +16,9 @@ public interface ProjectMemberRepository extends JpaRepository<ProjectMember, Lo
 
     // List all members of a project
     List<ProjectMember> findByProjectId(Long projectId);
+
+    // Team-type-aware queries
+    List<ProjectMember> findByProjectIdAndTeamType(Long projectId, String teamType);
+
+    boolean existsByProjectIdAndUserIdAndTeamType(Long projectId, Long userId, String teamType);
 }

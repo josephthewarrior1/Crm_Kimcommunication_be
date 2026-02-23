@@ -1,10 +1,8 @@
 package com.pms.controller;
 
-import com.pms.domain.AppUser;
-import com.pms.domain.Project;
-import com.pms.domain.StageStatus;
-import com.pms.domain.WorkflowStage;
+import com.pms.domain.*;
 import com.pms.dto.FrontendProjectDto;
+import com.pms.repository.ProjectMemberRepository;
 import com.pms.repository.ProjectRepository;
 import com.pms.service.ProjectPermissionService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,10 +20,14 @@ public class FrontendController {
 
     private final ProjectRepository projectRepository;
     private final ProjectPermissionService permissionService;
+    private final ProjectMemberRepository projectMemberRepository;
 
-    public FrontendController(ProjectRepository projectRepository, ProjectPermissionService permissionService) {
+    public FrontendController(ProjectRepository projectRepository,
+                              ProjectPermissionService permissionService,
+                              ProjectMemberRepository projectMemberRepository) {
         this.projectRepository = projectRepository;
         this.permissionService = permissionService;
+        this.projectMemberRepository = projectMemberRepository;
     }
 
     @GetMapping("/projects")
@@ -57,12 +59,6 @@ public class FrontendController {
             default -> "In Progress";
         };
 
-        // SIZE
-        String size = p.getSize() != null ? p.getSize().name() : null;
-        String sizeLabel = size != null
-                ? size.charAt(0) + size.substring(1).toLowerCase()
-                : null;
-
         // CURRENT STAGE (DERIVED)
         String currentStage = deriveCurrentStageEnum(p);
         String currentStageLabel = deriveCurrentStageLabel(p);
@@ -77,11 +73,31 @@ public class FrontendController {
 
         // CLIENT NAME (prefer relation)
         String client = p.getClientEntity() != null ? p.getClientEntity().getName() : p.getClient();
+        Long clientId = p.getClientEntity() != null ? p.getClientEntity().getId() : null;
+
+        // ACCOUNT MANAGER — find project member with PROJECT_ADMIN role
+        String accountManager = null;
+        List<ProjectMember> members = projectMemberRepository.findByProjectId(p.getId());
+        for (ProjectMember m : members) {
+            if (m.getRole() != null && "PROJECT_ADMIN".equals(m.getRole().getName())) {
+                accountManager = m.getUser() != null ? m.getUser().getName() : null;
+                break;
+            }
+        }
+
+        // VENUE
+        String venueName = p.getVenue() != null ? p.getVenue().getName() : null;
+        String venueCity = (p.getVenue() != null && p.getVenue().getCity() != null)
+                ? p.getVenue().getCity().getName() : null;
+
+        // REMARKS (from description)
+        String remarks = p.getDescription();
 
         return new FrontendProjectDto(
                 p.getId().toString(),
                 p.getName(),
                 client,
+                clientId,
                 eventDate,
                 status,
                 statusLabel,
@@ -89,8 +105,12 @@ public class FrontendController {
                 daysUntilEvent,
                 currentStage,
                 currentStageLabel,
-                size,
-                sizeLabel);
+                p.getTarget(),
+                accountManager,
+                venueName,
+                venueCity,
+                remarks,
+                p.getHedging());
     }
 
     private String deriveCurrentStageEnum(Project p) {

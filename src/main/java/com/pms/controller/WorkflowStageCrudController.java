@@ -69,8 +69,45 @@ public class WorkflowStageCrudController {
             if (stage.getRelatedDocuments() == null || stage.getRelatedDocuments().isEmpty()) {
                 stage.setRelatedDocuments(existing.getRelatedDocuments());
             }
+            // Preserve approval fields on regular edits
+            if (stage.getApprovedBy() == null) {
+                stage.setApprovedBy(existing.getApprovedBy());
+                stage.setApprovedAt(existing.getApprovedAt());
+            }
             return ResponseEntity.ok(stages.save(stage));
         }).orElseGet(() -> ResponseEntity.status(404).body((WorkflowStage) null));
+    }
+
+    @PostMapping("/{id}/approve")
+    public ResponseEntity<com.pms.domain.WorkflowStage> approve(@PathVariable Long id,
+                                                                  @RequestHeader(value = "Authorization", required = false) String auth) {
+        AppUser user = permissionService.resolveUser(auth);
+        if (user == null) return ResponseEntity.status(401).body(null);
+
+        return stages.findById(id).map(stage -> {
+            if (!permissionService.canUpdate(stage.getProject(), user)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body((WorkflowStage) null);
+            }
+            stage.setApprovedBy(user);
+            stage.setApprovedAt(java.time.LocalDateTime.now());
+            return ResponseEntity.ok(stages.save(stage));
+        }).orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(null));
+    }
+
+    @PostMapping("/{id}/unapprove")
+    public ResponseEntity<com.pms.domain.WorkflowStage> unapprove(@PathVariable Long id,
+                                                                    @RequestHeader(value = "Authorization", required = false) String auth) {
+        AppUser user = permissionService.resolveUser(auth);
+        if (user == null) return ResponseEntity.status(401).body(null);
+
+        return stages.findById(id).map(stage -> {
+            if (!permissionService.canUpdate(stage.getProject(), user)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body((WorkflowStage) null);
+            }
+            stage.setApprovedBy(null);
+            stage.setApprovedAt(null);
+            return ResponseEntity.ok(stages.save(stage));
+        }).orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body(null));
     }
 
     @DeleteMapping("/{id}")

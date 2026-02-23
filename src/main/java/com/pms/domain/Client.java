@@ -1,6 +1,6 @@
 package com.pms.domain;
 
-import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.*;
@@ -37,9 +37,11 @@ public class Client {
     private String name;
 
     /**
-     * Industry sector the client operates in (e.g., "Technology", "Healthcare", "Finance")
+     * Industry sector the client operates in
      */
-    private String industry;
+    @ManyToOne
+    @JoinColumn(name = "industry_id")
+    private Industry industry;
 
     /**
      * Country where the client is based
@@ -63,7 +65,7 @@ public class Client {
      * This is the inverse side of the many-to-one relationship.
      */
     @OneToMany(mappedBy = "clientEntity", cascade = CascadeType.ALL, orphanRemoval = true)
-    @JsonManagedReference
+    @JsonIgnore
     @Builder.Default
     private List<Project> projects = new ArrayList<>();
 
@@ -92,7 +94,7 @@ public class Client {
         return "Client{" +
                 "id=" + id +
                 ", name='" + name + '\'' +
-                ", industry='" + industry + '\'' +
+                ", industry='" + (industry != null ? industry.getName() : null) + '\'' +
                 ", country='" + country + '\'' +
                 '}';
     }

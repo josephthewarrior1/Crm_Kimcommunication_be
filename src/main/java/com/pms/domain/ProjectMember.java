@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Entity
@@ -43,6 +44,10 @@ public class ProjectMember {
     @Column(name = "joined_at")
     private LocalDateTime joinedAt;
 
+    @Column(name = "team_type", nullable = false)
+    @Builder.Default
+    private String teamType = "ADMINISTRATION";
+
     // New: Who does this person report to?
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "manager_id")
@@ -51,5 +56,16 @@ public class ProjectMember {
 
     // New: Who reports to this person? (Optional, but useful)
     @OneToMany(mappedBy = "manager", fetch = FetchType.LAZY)
-    private List<ProjectMember> subordinates;
+    @Builder.Default
+    private List<ProjectMember> subordinates = new ArrayList<>();
+
+    @PreRemove
+    private void preRemove() {
+        // Nullify manager references before this member is deleted
+        if (subordinates != null) {
+            for (ProjectMember sub : subordinates) {
+                sub.setManager(null);
+            }
+        }
+    }
 }

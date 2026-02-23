@@ -68,7 +68,7 @@ public class DevController {
                         Map<String, Object> data = new HashMap<>();
                         data.put("id", client.getId());
                         data.put("name", client.getName());
-                        data.put("industry", client.getIndustry());
+                        data.put("industry", client.getIndustry() != null ? client.getIndustry().getName() : null);
                         data.put("country", client.getCountry());
                         data.put("createdAt", client.getCreatedAt());
                         data.put("projectCount", client.getProjects().size());

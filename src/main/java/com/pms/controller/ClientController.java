@@ -178,7 +178,7 @@ public class ClientController {
         AppUser u = currentUser(auth);
         if (u == null) return List.of();
         
-        return clientRepository.findByIndustry(industry);
+        return clientRepository.findByIndustryName(industry);
     }
 
     /**

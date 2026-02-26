@@ -243,6 +243,46 @@ databaseChangeLog:
               ('Template Team Structure', 'template', 'team structure', '/files/templates/template_struktur_team_event.xlsx'),
               ('Template Tracker Request', 'template', 'tracker request', '/files/templates/tracker_request.xlsx');
 
+  # ── document_templates: seed PPTX templates ──────────────────────────
+  - changeSet:
+      id: sync-seed-document-templates-pptx
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - sqlCheck:
+              expectedResult: 0
+              sql: SELECT COUNT(*) FROM document_templates WHERE url LIKE '%.pptx'
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO document_templates (name, type, description, url) VALUES
+              ('Template Brief Registration Manpower Jobdesk Event (PPTX)', 'template', 'Brief registration manpower jobdesk event presentation', '/files/templates/template_brief_registration_manpower_jobdesk_event.pptx'),
+              ('Template Manual Book Event (PPTX)', 'template', 'Manual Book Event presentation', '/files/templates/template_manual_book.pptx'),
+              ('Template Storyboard Event (PPTX)', 'template', 'Storyboard event presentation', '/files/templates/template_storyboard_event.pptx');
+
+  # ── document_templates: seed Checklist template ─────────────────────
+  - changeSet:
+      id: sync-seed-document-templates-checklist
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - sqlCheck:
+              expectedResult: 0
+              sql: SELECT COUNT(*) FROM document_templates WHERE name = 'Template Checklist'
+      changes:
+        - sql:
+            sql: |
+              INSERT INTO document_templates (name, type, description, url) VALUES
+              ('Template Checklist', 'template', 'Event checklist', '/files/templates/Template_Checklist.xlsx');
+
   # ── projects: drop legacy role columns ───────────────────────────────
   - changeSet:
       id: sync-drop-project-role-columns

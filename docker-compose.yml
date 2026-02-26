@@ -28,7 +28,7 @@ services:
     container_name: pms-backend
     restart: unless-stopped
     ports:
-      - "8081:8080"
+      - "8081:8081"
     environment:
       - SPRING_PROFILES_ACTIVE=postgres
       - JDBC_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-pms_dev}
@@ -43,6 +43,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - pms-network
+
+  onlyoffice:
+    image: onlyoffice/documentserver
+    container_name: pms-onlyoffice
+    restart: unless-stopped
+    ports:
+      - "8083:80"
+    environment:
+      JWT_ENABLED: "false"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
     networks:
       - pms-network
 

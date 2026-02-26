@@ -175,14 +175,14 @@ public class ProjectService {
                 // linkDoc(stage4, documents, "Template MOM"); // Checklist file?
                 stages.add(stage4);
 
-                // 5. Checklist
+                // 5. Checklist -> Link "Template Checklist"
                 WorkflowStage stage5 = createStage(project, 5, "Checklist", "3rd party approvals...");
-                // linkDoc(stage5, documents, "Template MOM");
+                linkDoc(stage5, documents, "Template Checklist");
                 stages.add(stage5);
 
-                // 6. Final Proposal -> Link "Template Manual Book"
+                // 6. Final Proposal -> Link "Template Manual Book" (PDF + PPTX)
                 WorkflowStage stage6 = createStage(project, 6, "Final Proposal: Manual Book", "Final Proposal...");
-                linkDoc(stage6, documents, "Template Manual Book Event");
+                linkAllDocs(stage6, documents, "Template Manual Book Event");
                 stages.add(stage6);
 
                 // 7. Contact List -> Link "Template Contact List"
@@ -190,9 +190,9 @@ public class ProjectService {
                 linkDoc(stage7, documents, "Template Contact List Client, Vendor & Team");
                 stages.add(stage7);
 
-                // 8. Storyboard -> Link "Template Storyboard"
+                // 8. Storyboard -> Link "Template Storyboard" (PDF + PPTX)
                 WorkflowStage stage8 = createStage(project, 8, "Storyboard", "");
-                linkDoc(stage8, documents, "Template Storyboard Event");
+                linkAllDocs(stage8, documents, "Template Storyboard Event");
                 stages.add(stage8);
 
                 // 9. MC QUE Card -> Link "Template Cue Card"
@@ -205,10 +205,12 @@ public class ProjectService {
 
                 // ... Add remaining stages ...
 
-                // 13. Briefing Show Management -> Link "Template Team Structure"
+                // 13. Briefing Show Management -> Link "Template Team Structure" + Brief Registration (PDF + PPTX)
                 WorkflowStage stage13 = createStage(project, 13, "Briefing Show Management",
                                 "Briefing to all employees...");
                 linkDoc(stage13, documents, "Template Team Structure");
+                linkDoc(stage13, documents, "Template Brief & Registration");
+                linkDoc(stage13, documents, "Brief Registration Manpower Jobdesk");
                 stages.add(stage13);
 
                 // 14. Post Event
@@ -229,20 +231,21 @@ public class ProjectService {
                                 .build();
         }
 
-        // // --- NEW Helper: Find a document by name and link it to the stage ---
+        // --- Helper: Find first document by partial name and link it to the stage ---
         private void linkDoc(WorkflowStage stage, List<ProjectDocument> docs, String partialName) {
-                // Find the doc that contains the partial name (e.g. "MOM" matches "Template
-                // MOM")
                 Optional<ProjectDocument> match = docs.stream()
                                 .filter(d -> d.getName().contains(partialName))
                                 .findFirst();
 
                 match.ifPresent(doc -> {
-                        // 1. Link Doc to Stage (for the Document entity)
-                        // doc.setWorkflowStage(stage);
-
-                        // 2. Link Stage to Doc (for the Stage entity list)
                         stage.getRelatedDocuments().add(doc);
                 });
+        }
+
+        // --- Helper: Find ALL documents matching partial name and link them to the stage ---
+        private void linkAllDocs(WorkflowStage stage, List<ProjectDocument> docs, String partialName) {
+                docs.stream()
+                                .filter(d -> d.getName().contains(partialName))
+                                .forEach(doc -> stage.getRelatedDocuments().add(doc));
         }
 }

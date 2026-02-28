@@ -94,6 +94,15 @@ public class Project {
         @Builder.Default
         private List<ProjectMember> members = new ArrayList<>();
 
+        @Column(name = "qtn_no", length = 100)
+        private String qtnNo;
+
+        @Column(name = "po_no", length = 100)
+        private String poNo;
+
+        @Column(name = "invoice_no", length = 100)
+        private String invoiceNo;
+
         @ManyToMany
         @JoinTable(name = "project_team_members", joinColumns = @JoinColumn(name = "project_id"), inverseJoinColumns = @JoinColumn(name = "member_id"))
         @Builder.Default

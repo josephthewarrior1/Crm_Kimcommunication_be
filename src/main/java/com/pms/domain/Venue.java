@@ -32,6 +32,16 @@ public class Venue {
     @Column(name = "document_data", length = 2000)
     private String documentData;
 
+    // ── Address & Location ─────────────────────────────────────────
+    @Column(name = "google_maps_link", length = 500)
+    private String googleMapsLink;
+
+    @Column(name = "province", length = 255)
+    private String province;
+
+    @Column(name = "address", length = 500)
+    private String address;
+
     // ── Ballroom specifications ──────────────────────────────────────
     @Column(name = "ballroom_name")
     private String ballroomName;

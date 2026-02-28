@@ -89,6 +89,10 @@ public class FrontendController {
         String venueName = p.getVenue() != null ? p.getVenue().getName() : null;
         String venueCity = (p.getVenue() != null && p.getVenue().getCity() != null)
                 ? p.getVenue().getCity().getName() : null;
+        Long venueId = p.getVenue() != null ? p.getVenue().getId() : null;
+        String venueAddress = p.getVenue() != null ? p.getVenue().getAddress() : null;
+        String venueProvince = p.getVenue() != null ? p.getVenue().getProvince() : null;
+        String venueGoogleMapsLink = p.getVenue() != null ? p.getVenue().getGoogleMapsLink() : null;
 
         // REMARKS (from description)
         String remarks = p.getDescription();
@@ -109,8 +113,15 @@ public class FrontendController {
                 accountManager,
                 venueName,
                 venueCity,
+                venueId,
+                venueAddress,
+                venueProvince,
+                venueGoogleMapsLink,
                 remarks,
-                p.getHedging());
+                p.getHedging(),
+                p.getQtnNo(),
+                p.getPoNo(),
+                p.getInvoiceNo());
     }
 
     private String deriveCurrentStageEnum(Project p) {

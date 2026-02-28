@@ -115,6 +115,17 @@ public class ProjectPermissionService {
     }
 
     /**
+     * Get the user's project role name (e.g. "PROJECT_ADMIN", "FINANCE", "EDITOR").
+     * Returns null if the user is not a project member.
+     */
+    public String getProjectRoleName(Project p, AppUser u) {
+        if (u == null || p == null || u.getId() == null || p.getId() == null) return null;
+        return projectMembers.findByProjectIdAndUserId(p.getId(), u.getId())
+                .map(m -> m.getRole() != null ? m.getRole().getName() : null)
+                .orElse(null);
+    }
+
+    /**
      * Check a specific CRUD permission for a user in a project
      * by looking up their ProjectMember record and its associated ProjectRole.
      */

@@ -52,15 +52,19 @@ public class ProjectPermissionController {
         boolean canRead   = permissionService.canRead(project, user);
         boolean canUpdate = permissionService.canUpdate(project, user);
         boolean canDelete = permissionService.canDelete(project, user);
+        String projectRoleName = permissionService.getProjectRoleName(project, user);
+        boolean isSystemAdmin = permissionService.isAdminOrManager(user);
 
-        log.info("[my-permissions] RESULT: canCreate={}, canRead={}, canUpdate={}, canDelete={}",
-                canCreate, canRead, canUpdate, canDelete);
+        log.info("[my-permissions] RESULT: canCreate={}, canRead={}, canUpdate={}, canDelete={}, projectRoleName={}, isSystemAdmin={}",
+                canCreate, canRead, canUpdate, canDelete, projectRoleName, isSystemAdmin);
 
-        return ResponseEntity.ok(Map.of(
-            "canCreate", canCreate,
-            "canRead",   canRead,
-            "canUpdate", canUpdate,
-            "canDelete", canDelete
-        ));
+        var result = new java.util.HashMap<String, Object>();
+        result.put("canCreate", canCreate);
+        result.put("canRead", canRead);
+        result.put("canUpdate", canUpdate);
+        result.put("canDelete", canDelete);
+        result.put("projectRoleName", projectRoleName);
+        result.put("isSystemAdmin", isSystemAdmin);
+        return ResponseEntity.ok(result);
     }
 }

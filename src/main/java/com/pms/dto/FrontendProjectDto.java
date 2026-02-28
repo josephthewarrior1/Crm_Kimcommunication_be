@@ -18,7 +18,14 @@ public record FrontendProjectDto(
         String accountManager,
         String venueName,
         String venueCity,
+        Long venueId,
+        String venueAddress,
+        String venueProvince,
+        String venueGoogleMapsLink,
         String remarks,
-        BigDecimal hedging
+        BigDecimal hedging,
+        String qtnNo,
+        String poNo,
+        String invoiceNo
 ) {}
 

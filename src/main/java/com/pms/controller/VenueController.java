@@ -13,7 +13,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -95,6 +97,11 @@ public class VenueController {
         if (body.containsKey("documentData")) {
             venue.setDocumentData((String) body.get("documentData"));
         }
+
+        // Address & Location
+        if (body.containsKey("googleMapsLink")) venue.setGoogleMapsLink(str(body.get("googleMapsLink")));
+        if (body.containsKey("province")) venue.setProvince(str(body.get("province")));
+        if (body.containsKey("address")) venue.setAddress(str(body.get("address")));
 
         // Ballroom
         if (body.containsKey("ballroomName")) venue.setBallroomName(str(body.get("ballroomName")));
@@ -220,6 +227,61 @@ public class VenueController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @PatchMapping("/{venueId}/attachments/{attachmentId}")
+    public ResponseEntity<?> updateAttachmentMeta(@PathVariable Long venueId,
+                                                   @PathVariable Long attachmentId,
+                                                   @RequestBody Map<String, Object> body) {
+        if (!venueRepository.existsById(venueId))
+            return ResponseEntity.notFound().build();
+        return venueAttachmentRepository.findById(attachmentId).map(att -> {
+            if (body.containsKey("label")) att.setLabel(str(body.get("label")));
+            if (body.containsKey("description")) att.setDescription(str(body.get("description")));
+            if (body.containsKey("category")) att.setCategory(str(body.get("category")));
+            VenueAttachment saved = venueAttachmentRepository.save(att);
+            return ResponseEntity.ok((Object) saved);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PutMapping(value = "/{venueId}/attachments/{attachmentId}/replace", consumes = "multipart/form-data")
+    public ResponseEntity<?> replaceAttachment(@PathVariable Long venueId,
+                                               @PathVariable Long attachmentId,
+                                               @RequestParam("file") MultipartFile file) {
+        if (!venueRepository.existsById(venueId))
+            return ResponseEntity.notFound().build();
+        return venueAttachmentRepository.findById(attachmentId).map(att -> {
+            try {
+                // Delete old physical file
+                if (att.getFileUrl() != null && att.getFileUrl().startsWith("/files/venue_attachments/")) {
+                    String oldName = att.getFileUrl().replace("/files/venue_attachments/", "");
+                    try { Files.deleteIfExists(venueUploadDir.resolve(oldName)); } catch (IOException ignored) {}
+                }
+
+                // Store new file
+                String original = StringUtils
+                        .cleanPath(file.getOriginalFilename() == null ? "file" : file.getOriginalFilename());
+                String ext = "";
+                int dot = original.lastIndexOf('.');
+                if (dot > 0 && dot < original.length() - 1) {
+                    ext = original.substring(dot);
+                }
+                String storedName = UUID.randomUUID().toString().replace("-", "") + ext;
+                Path target = venueUploadDir.resolve(storedName);
+                Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+
+                // Update entity
+                att.setFileName(original);
+                att.setFileUrl("/files/venue_attachments/" + storedName);
+                att.setFileType(file.getContentType());
+                att.setFileSize(file.getSize());
+                VenueAttachment saved = venueAttachmentRepository.save(att);
+                return ResponseEntity.ok((Object) saved);
+            } catch (IOException e) {
+                return ResponseEntity.internalServerError().body(
+                        (Object) Map.of("error", "Failed to replace file: " + e.getMessage()));
+            }
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     // ── Private helpers ──────────────────────────────────────────────
 
     private String str(Object obj) {
@@ -242,5 +304,46 @@ public class VenueController {
         if (obj == null) return null;
         if (obj instanceof Boolean) return (Boolean) obj;
         return Boolean.parseBoolean(obj.toString());
+    }
+
+    /**
+     * Resolves a shortened Google Maps URL (e.g. maps.app.goo.gl/...) by following
+     * redirects and returning the final full URL.
+     */
+    @GetMapping("/resolve-maps-url")
+    public ResponseEntity<?> resolveMapsUrl(@RequestParam("url") String shortUrl) {
+        if (shortUrl == null || shortUrl.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "URL is required"));
+        }
+        try {
+            String resolved = followRedirects(shortUrl.trim(), 5);
+            return ResponseEntity.ok(Map.of("resolvedUrl", resolved));
+        } catch (IOException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Could not resolve URL: " + e.getMessage()));
+        }
+    }
+
+    private String followRedirects(String urlStr, int maxRedirects) throws IOException {
+        String current = urlStr;
+        for (int i = 0; i < maxRedirects; i++) {
+            URL url = new URL(current);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            int code = conn.getResponseCode();
+            if (code >= 300 && code < 400) {
+                String location = conn.getHeaderField("Location");
+                conn.disconnect();
+                if (location == null) break;
+                current = location;
+            } else {
+                conn.disconnect();
+                break;
+            }
+        }
+        return current;
     }
 }

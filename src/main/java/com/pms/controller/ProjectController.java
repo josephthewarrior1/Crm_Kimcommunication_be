@@ -182,6 +182,9 @@ public class ProjectController {
                         Venue v = new Venue();
                         v.setName(request.venueName.trim());
                         v.setCity(finalCity);
+                        if (request.venueProvince != null && !request.venueProvince.isBlank()) v.setProvince(request.venueProvince.trim());
+                        if (request.venueAddress != null && !request.venueAddress.isBlank()) v.setAddress(request.venueAddress.trim());
+                        if (request.venueGoogleMapsLink != null && !request.venueGoogleMapsLink.isBlank()) v.setGoogleMapsLink(request.venueGoogleMapsLink.trim());
                         return venueRepository.save(v);
                     });
             project.setVenue(venue);
@@ -325,6 +328,18 @@ public class ProjectController {
                                 // Invalid hedging value, skip
                             }
                         }
+                    }
+                    if (updates.containsKey("qtnNo")) {
+                        Object v = updates.get("qtnNo");
+                        existing.setQtnNo(v != null ? v.toString() : null);
+                    }
+                    if (updates.containsKey("poNo")) {
+                        Object v = updates.get("poNo");
+                        existing.setPoNo(v != null ? v.toString() : null);
+                    }
+                    if (updates.containsKey("invoiceNo")) {
+                        Object v = updates.get("invoiceNo");
+                        existing.setInvoiceNo(v != null ? v.toString() : null);
                     }
                     if (updates.containsKey("client")) {
                         Object clientObj = updates.get("client");
@@ -774,6 +789,9 @@ public class ProjectController {
         public Long venueId;
         public String venueName;
         public String venueCity;
+        public String venueProvince;
+        public String venueAddress;
+        public String venueGoogleMapsLink;
         // Hedging
         public java.math.BigDecimal hedging;
         // Team member user IDs
@@ -807,6 +825,12 @@ public class ProjectController {
         public void setVenueName(String venueName) { this.venueName = venueName; }
         public String getVenueCity() { return venueCity; }
         public void setVenueCity(String venueCity) { this.venueCity = venueCity; }
+        public String getVenueProvince() { return venueProvince; }
+        public void setVenueProvince(String venueProvince) { this.venueProvince = venueProvince; }
+        public String getVenueAddress() { return venueAddress; }
+        public void setVenueAddress(String venueAddress) { this.venueAddress = venueAddress; }
+        public String getVenueGoogleMapsLink() { return venueGoogleMapsLink; }
+        public void setVenueGoogleMapsLink(String venueGoogleMapsLink) { this.venueGoogleMapsLink = venueGoogleMapsLink; }
         public java.math.BigDecimal getHedging() { return hedging; }
         public void setHedging(java.math.BigDecimal hedging) { this.hedging = hedging; }
         public Long getPicUserId() { return picUserId; }

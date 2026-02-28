@@ -11,3 +11,5 @@ databaseChangeLog:
           file: db/changelog/changes/changelog-reference-tables.yml
     - include:
           file: db/changelog/changes/changelog-team-type.yml
+    - include:
+          file: db/changelog/changes/changelog-finance-documents.yml

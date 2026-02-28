@@ -332,3 +332,26 @@ databaseChangeLog:
             referencedColumnNames: id
             constraintName: fk_venue_attachments_venue
             onDelete: CASCADE
+
+  - changeSet:
+      id: add-venue-address-fields
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          columnExists:
+            tableName: venues
+            columnName: google_maps_link
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column:
+                  name: google_maps_link
+                  type: varchar(500)
+              - column:
+                  name: province
+                  type: varchar(255)
+              - column:
+                  name: address
+                  type: varchar(500)

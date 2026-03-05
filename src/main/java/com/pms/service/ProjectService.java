@@ -5,6 +5,7 @@ import com.pms.domain.Project;
 import com.pms.domain.ProjectDocument;
 import com.pms.domain.ProjectMember;
 import com.pms.domain.ProjectRole;
+import com.pms.domain.ProjectTeam;
 import com.pms.domain.StageStatus;
 import com.pms.domain.WorkflowStage;
 import com.pms.repository.DocumentTemplateRepository;
@@ -12,6 +13,7 @@ import com.pms.repository.ProjectDocumentRepository;
 import com.pms.repository.ProjectMemberRepository;
 import com.pms.repository.ProjectRepository;
 import com.pms.repository.ProjectRoleRepository;
+import com.pms.repository.ProjectTeamRepository;
 import com.pms.repository.TeamMemberRepository;
 import com.pms.repository.UserRepository;
 import com.pms.repository.WorkflowStageRepository;
@@ -33,11 +35,13 @@ public class ProjectService {
         private final TeamMemberRepository teamMemberRepository;
         private final ProjectRoleRepository roleRepository;
         private final ProjectMemberRepository memberRepository;
+        private final ProjectTeamRepository teamRepository;
 
         public ProjectService(ProjectRepository projectRepository, WorkflowStageRepository stageRepository,
                         ProjectDocumentRepository documentRepository, DocumentTemplateRepository templateRepository,
                         UserRepository userRepository, TeamMemberRepository teamMemberRepository,
-                        ProjectRoleRepository roleRepository, ProjectMemberRepository memberRepository) {
+                        ProjectRoleRepository roleRepository, ProjectMemberRepository memberRepository,
+                        ProjectTeamRepository teamRepository) {
                 this.projectRepository = projectRepository;
                 this.stageRepository = stageRepository;
                 this.documentRepository = documentRepository;
@@ -46,6 +50,7 @@ public class ProjectService {
                 this.teamMemberRepository = teamMemberRepository;
                 this.roleRepository = roleRepository;
                 this.memberRepository = memberRepository;
+                this.teamRepository = teamRepository;
         }
 
         // @Transactional ensures that if saving stages fails, the Project is also
@@ -94,23 +99,42 @@ public class ProjectService {
                         addMember(saved, entry.getValue(), entry.getKey(), editorRole, amMember);
                 }
 
-                // Auto-assign Finance team (always present on every project)
-                ProjectMember financeHead = addMemberByName(saved, "Sabrina", "Finance", editorRole, amMember);
+                // Create default Finance team
+                ProjectTeam financeTeam = ProjectTeam.builder()
+                                .project(saved)
+                                .name("Finance")
+                                .sortOrder(0)
+                                .build();
+                financeTeam = teamRepository.save(financeTeam);
+
+                // Auto-assign Finance members to the Finance team
+                ProjectMember financeHead = addMemberByName(saved, "Sabrina", "Finance", editorRole, amMember,
+                                financeTeam);
                 addMemberByName(saved, "Renny", "Finance Assistant", editorRole,
-                                financeHead != null ? financeHead : amMember);
+                                financeHead != null ? financeHead : amMember, financeTeam);
 
                 return saved;
         }
 
         private ProjectMember addMemberByName(Project project, String userName, String jobTitle,
                         ProjectRole role, ProjectMember manager) {
+                return addMemberByName(project, userName, jobTitle, role, manager, null);
+        }
+
+        private ProjectMember addMemberByName(Project project, String userName, String jobTitle,
+                        ProjectRole role, ProjectMember manager, ProjectTeam team) {
                 return userRepository.findByName(userName)
-                                .map(user -> addMember(project, user.getId(), jobTitle, role, manager))
+                                .map(user -> addMember(project, user.getId(), jobTitle, role, manager, team))
                                 .orElse(null);
         }
 
         private ProjectMember addMember(Project project, Long userId, String jobTitle,
                         ProjectRole role, ProjectMember manager) {
+                return addMember(project, userId, jobTitle, role, manager, null);
+        }
+
+        private ProjectMember addMember(Project project, Long userId, String jobTitle,
+                        ProjectRole role, ProjectMember manager, ProjectTeam team) {
                 if (userId == null)
                         return null;
                 return userRepository.findById(userId).map(user -> {
@@ -121,6 +145,7 @@ public class ProjectService {
                                                 .jobTitle(jobTitle)
                                                 .role(role)
                                                 .manager(manager)
+                                                .team(team)
                                                 .teamType("ADMINISTRATION")
                                                 .joinedAt(LocalDateTime.now())
                                                 .build();

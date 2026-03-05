@@ -94,6 +94,14 @@ public class Project {
         @Builder.Default
         private List<ProjectMember> members = new ArrayList<>();
 
+        @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+        @Builder.Default
+        private List<ProjectBrandAlliance> brandAlliances = new ArrayList<>();
+
+        @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+        @Builder.Default
+        private List<ProjectTeam> teams = new ArrayList<>();
+
         @Column(name = "qtn_no", length = 100)
         private String qtnNo;
 

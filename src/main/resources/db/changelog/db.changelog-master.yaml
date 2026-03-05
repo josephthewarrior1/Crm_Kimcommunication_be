@@ -13,3 +13,13 @@ databaseChangeLog:
           file: db/changelog/changes/changelog-team-type.yml
     - include:
           file: db/changelog/changes/changelog-finance-documents.yml
+    - include:
+          file: db/changelog/changes/changelog-brand-alliances.yml
+    - include:
+          file: db/changelog/changes/changelog-project-teams.yml
+    - include:
+          file: db/changelog/changes/changelog-document-folders.yml
+    - include:
+          file: db/changelog/changes/changelog-client-folder-shares.yml
+    - include:
+          file: db/changelog/changes/changelog-finance-history.yml

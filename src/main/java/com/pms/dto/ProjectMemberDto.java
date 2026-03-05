@@ -12,7 +12,9 @@ public record ProjectMemberDto(
                 LocalDateTime joinedAt,
                 Long managerId,
                 String managerName,
-                String teamType) {
+                String teamType,
+                Long teamId,
+                String teamName) {
         // Nested DTOs to match your Frontend structure
         public record UserSummaryDto(Long id, String name, String email, String phone, String location,
                         EmploymentType employmentType) {

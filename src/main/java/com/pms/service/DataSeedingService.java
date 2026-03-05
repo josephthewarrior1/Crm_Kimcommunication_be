@@ -138,6 +138,30 @@ public class DataSeedingService implements CommandLineRunner {
                 .build();
         userRepository.save(user3);
         log.info("Created user: {}", user3.getEmail());
+        AppUser user4 = AppUser.builder()
+                .name("Sabrina")
+                .email("sabrina.finance@pms.com")
+                .username("sabrina")
+                .passwordHash(passwordEncoder.encode("sabrina123"))
+                .roles(Set.of(Role.USER))
+                .active(true)
+                .approved(true)
+                .dob(LocalDate.of(1995, 11, 5))
+                .build();
+        userRepository.save(user3);
+        log.info("Created user: {}", user3.getEmail());
+        AppUser user5 = AppUser.builder()
+                .name("Renny")
+                .email("renny.finance@pms.com")
+                .username("renny")
+                .passwordHash(passwordEncoder.encode("renny123"))
+                .roles(Set.of(Role.USER))
+                .active(true)
+                .approved(true)
+                .dob(LocalDate.of(1995, 11, 5))
+                .build();
+        userRepository.save(user3);
+        log.info("Created user: {}", user3.getEmail());
     }
 
     /**

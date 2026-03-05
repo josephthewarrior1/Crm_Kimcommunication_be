@@ -1,46 +1,41 @@
 package com.pms.domain;
 
-import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "client_contacts")
+@Table(name = "project_brand_alliances")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ClientContact {
+public class ProjectBrandAlliance {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
-    private String name;
-
-    private String email;
-    private String phone;
-
-    @Column(name = "job_title")
-    private String jobTitle;
-
-    @Builder.Default
-    @Column(name = "is_primary")
-    private boolean primary = false;
-
     @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "project_id", nullable = false)
+    @JsonIgnore
+    private Project project;
+
+    @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "client_id", nullable = false)
-    @JsonBackReference
+    @NotNull
     private Client client;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id")
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-    private AppUser user;
+    @NotNull
+    @DecimalMin("0.00")
+    @Column(name = "funding_amount", precision = 19, scale = 2, nullable = false)
+    private BigDecimal fundingAmount;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

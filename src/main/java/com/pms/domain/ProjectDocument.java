@@ -42,4 +42,13 @@ public class ProjectDocument {
     @JoinColumn(name = "project_id")
     @JsonBackReference
     private Project project;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "folder_id")
+    private DocumentFolder folder;
+
+    @Transient
+    public Long getFolderId() {
+        return folder != null ? folder.getId() : null;
+    }
 }

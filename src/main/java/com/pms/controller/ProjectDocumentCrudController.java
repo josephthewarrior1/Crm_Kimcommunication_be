@@ -1,10 +1,10 @@
 package com.pms.controller;
 
-import com.pms.domain.AppUser;
-import com.pms.domain.Project;
-import com.pms.domain.ProjectDocument;
+import com.pms.domain.*;
+import com.pms.repository.DocumentFolderRepository;
 import com.pms.repository.ProjectDocumentRepository;
 import com.pms.repository.ProjectRepository;
+import com.pms.service.ClientFolderShareService;
 import com.pms.service.DocumentStorageService;
 import com.pms.service.ProjectPermissionService;
 import jakarta.validation.Valid;
@@ -15,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -25,14 +26,20 @@ public class ProjectDocumentCrudController {
     private final ProjectRepository projects;
     private final DocumentStorageService storageService;
     private final ProjectPermissionService permissionService;
+    private final DocumentFolderRepository folderRepository;
+    private final ClientFolderShareService shareService;
 
     public ProjectDocumentCrudController(ProjectDocumentRepository documents, ProjectRepository projects,
                                          DocumentStorageService storageService,
-                                         ProjectPermissionService permissionService) {
+                                         ProjectPermissionService permissionService,
+                                         DocumentFolderRepository folderRepository,
+                                         ClientFolderShareService shareService) {
         this.documents = documents;
         this.projects = projects;
         this.storageService = storageService;
         this.permissionService = permissionService;
+        this.folderRepository = folderRepository;
+        this.shareService = shareService;
     }
 
     @GetMapping
@@ -74,11 +81,18 @@ public class ProjectDocumentCrudController {
                                                   @RequestParam(value = "name", required = false) String name,
                                                   @RequestParam(value = "type", required = false) String type,
                                                   @RequestParam(value = "description", required = false) String description,
+                                                  @RequestParam(value = "folderId", required = false) Long folderId,
                                                   @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
         Optional<Project> opt = projects.findById(projectId);
         if (opt.isEmpty()) return ResponseEntity.status(404).body((ProjectDocument) null);
         AppUser u = permissionService.resolveUser(auth);
-        if (u != null && !permissionService.canCreate(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+        if (permissionService.isClientUser(u)) {
+            // Client users need VIEW_UPLOAD or FULL_CRUD on the target folder
+            if (folderId == null || !shareService.canUpload(u.getId(), folderId))
+                return ResponseEntity.status(403).body((ProjectDocument) null);
+        } else if (u != null && !permissionService.canCreate(opt.get(), u)) {
+            return ResponseEntity.status(403).body((ProjectDocument) null);
+        }
         var stored = storageService.store(file);
         ProjectDocument doc = ProjectDocument.builder()
                 .name(name != null ? name : file.getOriginalFilename())
@@ -89,6 +103,15 @@ public class ProjectDocumentCrudController {
                 .status("pending")
                 .project(opt.get())
                 .build();
+
+        if (folderId != null) {
+            folderRepository.findById(folderId).ifPresent(folder -> {
+                if (folder.getProject().getId().equals(projectId)) {
+                    doc.setFolder(folder);
+                }
+            });
+        }
+
         ProjectDocument saved = documents.save(doc);
         return ResponseEntity.created(URI.create("/api/documents/" + saved.getId())).body(saved);
     }
@@ -160,7 +183,13 @@ public class ProjectDocumentCrudController {
                                                   @RequestHeader(value = "Authorization", required = false) String auth) {
         AppUser u = permissionService.resolveUser(auth);
         return documents.findById(id).map(existing -> {
-            if (u != null && !permissionService.canUpdate(existing.getProject(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (permissionService.isClientUser(u)) {
+                Long docFolderId = existing.getFolder() != null ? existing.getFolder().getId() : null;
+                if (docFolderId == null || !shareService.canFullCrud(u.getId(), docFolderId))
+                    return ResponseEntity.status(403).body((ProjectDocument) null);
+            } else if (u != null && !permissionService.canUpdate(existing.getProject(), u)) {
+                return ResponseEntity.status(403).body((ProjectDocument) null);
+            }
             
             System.out.println("Updating document " + id);
             System.out.println("Incoming description: " + doc.getDescription());
@@ -187,6 +216,29 @@ public class ProjectDocumentCrudController {
         }).orElseGet(() -> ResponseEntity.status(404).body((ProjectDocument) null));
     }
 
+    @PutMapping("/{id}/move")
+    public ResponseEntity<?> moveToFolder(@PathVariable Long id,
+                                           @RequestBody Map<String, Object> body,
+                                           @RequestHeader(value = "Authorization", required = false) String auth) {
+        AppUser u = permissionService.resolveUser(auth);
+        return documents.findById(id).map(doc -> {
+            if (u != null && !permissionService.canUpdate(doc.getProject(), u))
+                return ResponseEntity.status(403).build();
+
+            Object folderIdObj = body.get("folderId");
+            if (folderIdObj == null) {
+                doc.setFolder(null);
+            } else {
+                Long folderId = Long.valueOf(folderIdObj.toString());
+                Optional<DocumentFolder> folderOpt = folderRepository.findById(folderId);
+                if (folderOpt.isEmpty() || !folderOpt.get().getProject().getId().equals(doc.getProject().getId()))
+                    return ResponseEntity.badRequest().body(Map.of("error", "Target folder not found"));
+                doc.setFolder(folderOpt.get());
+            }
+            return ResponseEntity.ok(documents.save(doc));
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id,
                                        @RequestHeader(value = "Authorization", required = false) String auth) {
@@ -194,7 +246,13 @@ public class ProjectDocumentCrudController {
         var opt = documents.findById(id);
         if (opt.isEmpty()) return new ResponseEntity<Void>(HttpStatus.NOT_FOUND);
         var existing = opt.get();
-        if (u != null && !permissionService.canDelete(existing.getProject(), u)) return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
+        if (permissionService.isClientUser(u)) {
+            Long docFolderId = existing.getFolder() != null ? existing.getFolder().getId() : null;
+            if (docFolderId == null || !shareService.canFullCrud(u.getId(), docFolderId))
+                return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
+        } else if (u != null && !permissionService.canDelete(existing.getProject(), u)) {
+            return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
+        }
         documents.deleteById(id);
         return ResponseEntity.noContent().build();
     }

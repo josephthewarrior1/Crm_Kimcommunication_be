@@ -33,6 +33,8 @@ public class ProjectController {
     private final ClientContactRepository clientContactRepository;
     private final VenueRepository venueRepository;
     private final CityRepository cityRepository;
+    private final ProjectBrandAllianceRepository brandAllianceRepository;
+    private final ProjectFinanceHistoryRepository financeHistoryRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -50,7 +52,9 @@ public class ProjectController {
             ClientRepository clientRepository,
             ClientContactRepository clientContactRepository,
             VenueRepository venueRepository,
-            CityRepository cityRepository) {
+            CityRepository cityRepository,
+            ProjectBrandAllianceRepository brandAllianceRepository,
+            ProjectFinanceHistoryRepository financeHistoryRepository) {
         this.projectRepository = projectRepository;
         this.workflowStageRepository = workflowStageRepository;
         this.projectEventRepository = projectEventRepository;
@@ -65,6 +69,8 @@ public class ProjectController {
         this.clientContactRepository = clientContactRepository;
         this.venueRepository = venueRepository;
         this.cityRepository = cityRepository;
+        this.brandAllianceRepository = brandAllianceRepository;
+        this.financeHistoryRepository = financeHistoryRepository;
     }
 
     @GetMapping
@@ -202,6 +208,32 @@ public class ProjectController {
             departmentHeads.put("Design", request.designUserId);
 
         Project saved = projectService.createProjectWithDefaults(project, request.accountManagerUserId, departmentHeads);
+
+        // Create brand alliances if provided
+        if (request.brandAlliances != null) {
+            for (CreateProjectRequest.BrandAllianceInput ba : request.brandAlliances) {
+                Client allianceClient = null;
+                if (ba.clientId != null) {
+                    allianceClient = clientRepository.findById(ba.clientId).orElse(null);
+                } else if (ba.clientName != null && !ba.clientName.isBlank()) {
+                    allianceClient = clientRepository.findByName(ba.clientName.trim())
+                            .orElseGet(() -> {
+                                Client c = new Client();
+                                c.setName(ba.clientName.trim());
+                                return clientRepository.save(c);
+                            });
+                }
+                if (allianceClient != null && ba.fundingAmount != null) {
+                    ProjectBrandAlliance alliance = ProjectBrandAlliance.builder()
+                            .project(saved)
+                            .client(allianceClient)
+                            .fundingAmount(ba.fundingAmount)
+                            .build();
+                    brandAllianceRepository.save(alliance);
+                }
+            }
+        }
+
         return ResponseEntity.created(URI.create("/api/projects/" + saved.getId())).body(saved);
     }
 
@@ -329,17 +361,37 @@ public class ProjectController {
                             }
                         }
                     }
+                    // Finance fields with history tracking
+                    AppUser changer = currentUser(auth);
                     if (updates.containsKey("qtnNo")) {
-                        Object v = updates.get("qtnNo");
-                        existing.setQtnNo(v != null ? v.toString() : null);
+                        String oldVal = existing.getQtnNo();
+                        String newVal = updates.get("qtnNo") != null ? updates.get("qtnNo").toString() : null;
+                        if (!java.util.Objects.equals(oldVal, newVal)) {
+                            financeHistoryRepository.save(ProjectFinanceHistory.builder()
+                                    .project(existing).fieldName(ProjectFinanceHistory.FinanceField.QTN_NO)
+                                    .oldValue(oldVal).newValue(newVal).changedBy(changer).build());
+                        }
+                        existing.setQtnNo(newVal);
                     }
                     if (updates.containsKey("poNo")) {
-                        Object v = updates.get("poNo");
-                        existing.setPoNo(v != null ? v.toString() : null);
+                        String oldVal = existing.getPoNo();
+                        String newVal = updates.get("poNo") != null ? updates.get("poNo").toString() : null;
+                        if (!java.util.Objects.equals(oldVal, newVal)) {
+                            financeHistoryRepository.save(ProjectFinanceHistory.builder()
+                                    .project(existing).fieldName(ProjectFinanceHistory.FinanceField.PO_NO)
+                                    .oldValue(oldVal).newValue(newVal).changedBy(changer).build());
+                        }
+                        existing.setPoNo(newVal);
                     }
                     if (updates.containsKey("invoiceNo")) {
-                        Object v = updates.get("invoiceNo");
-                        existing.setInvoiceNo(v != null ? v.toString() : null);
+                        String oldVal = existing.getInvoiceNo();
+                        String newVal = updates.get("invoiceNo") != null ? updates.get("invoiceNo").toString() : null;
+                        if (!java.util.Objects.equals(oldVal, newVal)) {
+                            financeHistoryRepository.save(ProjectFinanceHistory.builder()
+                                    .project(existing).fieldName(ProjectFinanceHistory.FinanceField.INVOICE_NO)
+                                    .oldValue(oldVal).newValue(newVal).changedBy(changer).build());
+                        }
+                        existing.setInvoiceNo(newVal);
                     }
                     if (updates.containsKey("client")) {
                         Object clientObj = updates.get("client");
@@ -801,6 +853,21 @@ public class ProjectController {
         public Long productionUserId;
         public Long designUserId;
         public Long financeUserId;
+        // Brand alliances (optional)
+        public java.util.List<BrandAllianceInput> brandAlliances;
+
+        public static class BrandAllianceInput {
+            public Long clientId;
+            public String clientName;
+            public java.math.BigDecimal fundingAmount;
+
+            public Long getClientId() { return clientId; }
+            public void setClientId(Long clientId) { this.clientId = clientId; }
+            public String getClientName() { return clientName; }
+            public void setClientName(String clientName) { this.clientName = clientName; }
+            public java.math.BigDecimal getFundingAmount() { return fundingAmount; }
+            public void setFundingAmount(java.math.BigDecimal fundingAmount) { this.fundingAmount = fundingAmount; }
+        }
 
         // Jackson needs getters/setters for deserialization
         public String getName() { return name; }
@@ -845,5 +912,7 @@ public class ProjectController {
         public void setDesignUserId(Long v) { this.designUserId = v; }
         public Long getFinanceUserId() { return financeUserId; }
         public void setFinanceUserId(Long v) { this.financeUserId = v; }
+        public java.util.List<BrandAllianceInput> getBrandAlliances() { return brandAlliances; }
+        public void setBrandAlliances(java.util.List<BrandAllianceInput> v) { this.brandAlliances = v; }
     }
 }

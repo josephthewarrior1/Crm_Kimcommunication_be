@@ -150,6 +150,26 @@ public class ClientFolderShareService {
     }
 
     /**
+     * Get all shares inherited from ancestor folders (not including direct shares on this folder).
+     * Walks up the parent chain and collects shares from each ancestor.
+     */
+    public List<ClientFolderShare> getInheritedShares(Long folderId) {
+        List<ClientFolderShare> inherited = new ArrayList<>();
+        Optional<DocumentFolder> folderOpt = folderRepository.findById(folderId);
+        if (folderOpt.isEmpty()) return inherited;
+        Long currentId = folderOpt.get().getParent() != null
+                ? folderOpt.get().getParent().getId() : null;
+        while (currentId != null) {
+            inherited.addAll(shareRepository.findByFolderId(currentId));
+            Optional<DocumentFolder> parentOpt = folderRepository.findById(currentId);
+            if (parentOpt.isEmpty()) break;
+            currentId = parentOpt.get().getParent() != null
+                    ? parentOpt.get().getParent().getId() : null;
+        }
+        return inherited;
+    }
+
+    /**
      * Get the set of directly shared folder IDs for a user in a project.
      * Used to filter root-level folder listing for client users.
      */

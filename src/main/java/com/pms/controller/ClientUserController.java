@@ -69,6 +69,7 @@ public class ClientUserController {
         String name = (String) body.get("name");
         String email = (String) body.get("email");
         String password = (String) body.get("password");
+        String requestedUsername = body.get("username") != null ? body.get("username").toString().trim() : null;
         Object clientIdObj = body.get("clientId");
 
         if (name == null || name.isBlank() || email == null || email.isBlank() || password == null || password.isBlank())
@@ -77,11 +78,18 @@ public class ClientUserController {
         if (userRepository.existsByEmail(email.toLowerCase()))
             return ResponseEntity.badRequest().body(Map.of("error", "Email already in use"));
 
-        // Generate username from email
-        String username = email.toLowerCase().split("@")[0];
-        int suffix = 1;
-        while (userRepository.existsByUsername(username)) {
-            username = email.toLowerCase().split("@")[0] + suffix++;
+        // Use provided username or generate from email
+        String username;
+        if (requestedUsername != null && !requestedUsername.isBlank()) {
+            if (userRepository.existsByUsername(requestedUsername))
+                return ResponseEntity.badRequest().body(Map.of("error", "Username already taken"));
+            username = requestedUsername;
+        } else {
+            username = email.toLowerCase().split("@")[0];
+            int suffix = 1;
+            while (userRepository.existsByUsername(username)) {
+                username = email.toLowerCase().split("@")[0] + suffix++;
+            }
         }
 
         AppUser clientUser = AppUser.builder()
@@ -145,11 +153,19 @@ public class ClientUserController {
         if (password == null || password.isBlank())
             return ResponseEntity.badRequest().body(Map.of("error", "password is required"));
 
-        // Generate username from email
-        String username = contact.getEmail().toLowerCase().split("@")[0];
-        int suffix = 1;
-        while (userRepository.existsByUsername(username)) {
-            username = contact.getEmail().toLowerCase().split("@")[0] + suffix++;
+        // Use provided username or generate from email
+        String requestedUsername = body.get("username") != null ? body.get("username").trim() : null;
+        String username;
+        if (requestedUsername != null && !requestedUsername.isBlank()) {
+            if (userRepository.existsByUsername(requestedUsername))
+                return ResponseEntity.badRequest().body(Map.of("error", "Username already taken"));
+            username = requestedUsername;
+        } else {
+            username = contact.getEmail().toLowerCase().split("@")[0];
+            int suffix = 1;
+            while (userRepository.existsByUsername(username)) {
+                username = contact.getEmail().toLowerCase().split("@")[0] + suffix++;
+            }
         }
 
         AppUser clientUser = AppUser.builder()

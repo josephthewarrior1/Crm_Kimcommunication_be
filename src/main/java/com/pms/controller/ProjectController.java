@@ -35,6 +35,7 @@ public class ProjectController {
     private final CityRepository cityRepository;
     private final ProjectBrandAllianceRepository brandAllianceRepository;
     private final ProjectFinanceHistoryRepository financeHistoryRepository;
+    private final TaskRepository taskRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -54,7 +55,8 @@ public class ProjectController {
             VenueRepository venueRepository,
             CityRepository cityRepository,
             ProjectBrandAllianceRepository brandAllianceRepository,
-            ProjectFinanceHistoryRepository financeHistoryRepository) {
+            ProjectFinanceHistoryRepository financeHistoryRepository,
+            TaskRepository taskRepository) {
         this.projectRepository = projectRepository;
         this.workflowStageRepository = workflowStageRepository;
         this.projectEventRepository = projectEventRepository;
@@ -71,6 +73,7 @@ public class ProjectController {
         this.cityRepository = cityRepository;
         this.brandAllianceRepository = brandAllianceRepository;
         this.financeHistoryRepository = financeHistoryRepository;
+        this.taskRepository = taskRepository;
     }
 
     @GetMapping
@@ -492,6 +495,34 @@ public class ProjectController {
         stage.setProject(opt.get());
         WorkflowStage saved = workflowStageRepository.save(stage);
         return ResponseEntity.created(URI.create("/api/projects/" + projectId + "/stages/" + saved.getId()))
+                .body(saved);
+    }
+
+    @GetMapping("/{projectId}/tasks")
+    public ResponseEntity<List<Task>> listTasks(@PathVariable Long projectId,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        Optional<Project> opt = projectRepository.findById(projectId);
+        if (opt.isEmpty())
+            return ResponseEntity.status(404).<List<Task>>build();
+        AppUser u = currentUser(auth);
+        if (u != null && !permissionService.canRead(opt.get(), u))
+            return ResponseEntity.status(403).body((java.util.List<com.pms.domain.Task>) null);
+        return ResponseEntity.ok(taskRepository.findByProjectId(projectId));
+    }
+
+    @PostMapping("/{projectId}/tasks")
+    public ResponseEntity<Task> addTask(@PathVariable Long projectId, @Valid @RequestBody Task task,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        Optional<Project> opt = projectRepository.findById(projectId);
+        if (opt.isEmpty())
+            return ResponseEntity.status(404).<Task>build();
+        AppUser u = currentUser(auth);
+        if (u != null && !permissionService.canCreate(opt.get(), u))
+            return ResponseEntity.status(403).body((Task) null);
+        task.setId(null);
+        task.setProject(opt.get());
+        Task saved = taskRepository.save(task);
+        return ResponseEntity.created(URI.create("/api/projects/" + projectId + "/tasks/" + saved.getId()))
                 .body(saved);
     }
 

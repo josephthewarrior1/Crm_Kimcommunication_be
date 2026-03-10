@@ -38,6 +38,7 @@ public class DocumentFolderController {
     public ResponseEntity<?> listContents(
             @PathVariable Long projectId,
             @RequestParam(value = "parentId", required = false) Long parentId,
+            @RequestParam(value = "showAll", required = false, defaultValue = "false") boolean showAll,
             @RequestHeader(value = "Authorization", required = false) String auth) {
 
         Optional<Project> projectOpt = projectRepository.findById(projectId);
@@ -86,7 +87,9 @@ public class DocumentFolderController {
             // Internal users: normal view
             if (parentId == null) {
                 subfolders = folderRepository.findByProjectIdAndParentIsNull(projectId);
-                docs = documentRepository.findByProjectIdAndFolderIsNull(projectId);
+                docs = showAll
+                        ? documentRepository.findByProjectId(projectId)
+                        : documentRepository.findByProjectIdAndFolderIsNull(projectId);
             } else {
                 Optional<DocumentFolder> folderOpt = folderRepository.findById(parentId);
                 if (folderOpt.isEmpty() || !folderOpt.get().getProject().getId().equals(projectId))
@@ -124,6 +127,29 @@ public class DocumentFolderController {
         response.put("documents", docs);
         if (effectivePermission != null) {
             response.put("permission", effectivePermission);
+        }
+
+        // Include inherited share info for admin/manager users viewing subfolders
+        if (!isClient && currentFolderId != null) {
+            // Shares on the current folder + its ancestors = inherited shares for all child folders
+            List<ClientFolderShare> directOnCurrent = shareService.getSharesForFolder(currentFolderId);
+            List<ClientFolderShare> fromAncestors = shareService.getInheritedShares(currentFolderId);
+            List<ClientFolderShare> allInherited = new ArrayList<>();
+            allInherited.addAll(directOnCurrent);
+            allInherited.addAll(fromAncestors);
+            // Deduplicate by user (keep the closest/most specific share per user)
+            Map<Long, ClientFolderShare> byUser = new LinkedHashMap<>();
+            for (ClientFolderShare s : allInherited) {
+                byUser.putIfAbsent(s.getUser().getId(), s);
+            }
+            List<Map<String, Object>> inheritedShareList = byUser.values().stream().map(s -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("userId", s.getUser().getId());
+                m.put("userName", s.getUser().getName());
+                m.put("permission", s.getPermission().name());
+                return m;
+            }).collect(Collectors.toList());
+            response.put("inheritedShares", inheritedShareList);
         }
 
         return ResponseEntity.ok(response);
@@ -227,8 +253,8 @@ public class DocumentFolderController {
 
         AppUser u = permissionService.resolveUser(auth);
         if (permissionService.isClientUser(u)) {
-            if (!shareService.canFullCrud(u.getId(), folderId))
-                return ResponseEntity.status(403).build();
+            // Client users are never allowed to delete folders, even with FULL_CRUD
+            return ResponseEntity.status(403).build();
         } else if (u != null && !permissionService.canDelete(projectOpt.get(), u)) {
             return ResponseEntity.status(403).build();
         }

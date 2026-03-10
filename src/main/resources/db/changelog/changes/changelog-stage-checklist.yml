@@ -1,0 +1,58 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-workflow-stage-checklist-items
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: workflow_stage_checklist_items
+      changes:
+        - createTable:
+            tableName: workflow_stage_checklist_items
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: stage_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: label
+                  type: VARCHAR(500)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: completed
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+                  defaultValueBoolean: false
+              - column:
+                  name: order_position
+                  type: INTEGER
+                  constraints:
+                    nullable: false
+                  defaultValueNumeric: 0
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addForeignKeyConstraint:
+            baseTableName: workflow_stage_checklist_items
+            baseColumnNames: stage_id
+            referencedTableName: workflow_stages
+            referencedColumnNames: id
+            constraintName: fk_checklist_stage
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_checklist_stage_id
+            tableName: workflow_stage_checklist_items
+            columns:
+              - column:
+                  name: stage_id

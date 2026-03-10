@@ -38,6 +38,7 @@ public class DataSeedingService implements CommandLineRunner {
     private final TeamMemberRepository teamMemberRepository;
     private final SessionRepository sessionRepository;
     private final IndustryRepository industryRepository;
+    private final CountryRepository countryRepository;
     // private final ProjectRoleRepository roleRepository;
 
     private final Argon2PasswordEncoder passwordEncoder = new Argon2PasswordEncoder(16, 32, 1, 1 << 14, 3);
@@ -176,10 +177,20 @@ public class DataSeedingService implements CommandLineRunner {
         Industry startupIndustry = industryRepository.save(Industry.builder().name("Startup").build());
         Industry enterpriseIndustry = industryRepository.save(Industry.builder().name("Enterprise Software").build());
 
+        // Create countries
+        Country usa = countryRepository.findByName("United States")
+                .orElseGet(() -> countryRepository.save(Country.builder().name("United States").code("US").build()));
+        Country uk = countryRepository.findByName("United Kingdom")
+                .orElseGet(() -> countryRepository.save(Country.builder().name("United Kingdom").code("GB").build()));
+        Country canada = countryRepository.findByName("Canada")
+                .orElseGet(() -> countryRepository.save(Country.builder().name("Canada").code("CA").build()));
+        Country germany = countryRepository.findByName("Germany")
+                .orElseGet(() -> countryRepository.save(Country.builder().name("Germany").code("DE").build()));
+
         Client client1 = Client.builder()
                 .name("Acme Corporation")
                 .industry(techIndustry)
-                .country("United States")
+                .country(usa)
                 .build();
         clientRepository.save(client1);
         log.info("Created client: {}", client1.getName());
@@ -187,7 +198,7 @@ public class DataSeedingService implements CommandLineRunner {
         Client client2 = Client.builder()
                 .name("Global Solutions Ltd")
                 .industry(consultingIndustry)
-                .country("United Kingdom")
+                .country(uk)
                 .build();
         clientRepository.save(client2);
         log.info("Created client: {}", client2.getName());
@@ -195,7 +206,7 @@ public class DataSeedingService implements CommandLineRunner {
         Client client3 = Client.builder()
                 .name("TechStart Inc")
                 .industry(startupIndustry)
-                .country("Canada")
+                .country(canada)
                 .build();
         clientRepository.save(client3);
         log.info("Created client: {}", client3.getName());
@@ -203,7 +214,7 @@ public class DataSeedingService implements CommandLineRunner {
         Client client4 = Client.builder()
                 .name("Enterprise Systems")
                 .industry(enterpriseIndustry)
-                .country("Germany")
+                .country(germany)
                 .build();
         clientRepository.save(client4);
         log.info("Created client: {}", client4.getName());

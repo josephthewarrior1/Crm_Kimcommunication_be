@@ -62,17 +62,43 @@ public class ProjectDocumentCrudController {
     @PostMapping
     public ResponseEntity<ProjectDocument> create(@Valid @RequestBody ProjectDocument doc,
                                                   @RequestParam(name = "projectId", required = false) Long projectId,
+                                                  @RequestParam(name = "folderId", required = false) Long folderId,
                                                   @RequestHeader(value = "Authorization", required = false) String auth) {
         AppUser u = permissionService.resolveUser(auth);
         if (projectId != null) {
             Optional<Project> opt = projects.findById(projectId);
             if (opt.isEmpty()) return ResponseEntity.status(400).body((ProjectDocument) null);
-            if (u != null && !permissionService.canCreate(opt.get(), u)) return ResponseEntity.status(403).body((ProjectDocument) null);
+            if (permissionService.isClientUser(u)) {
+                if (folderId == null || !shareService.canUpload(u.getId(), folderId))
+                    return ResponseEntity.status(403).body((ProjectDocument) null);
+            } else if (u != null && !permissionService.canCreate(opt.get(), u)) {
+                return ResponseEntity.status(403).body((ProjectDocument) null);
+            }
             doc.setProject(opt.get());
+            if (folderId != null) {
+                folderRepository.findById(folderId).ifPresent(folder -> {
+                    if (folder.getProject().getId().equals(projectId)) {
+                        doc.setFolder(folder);
+                    }
+                });
+            }
         }
         doc.setId(null);
         ProjectDocument saved = documents.save(doc);
         return ResponseEntity.created(URI.create("/api/documents/" + saved.getId())).body(saved);
+    }
+
+    @GetMapping("/check-duplicate")
+    public ResponseEntity<?> checkDuplicate(@RequestParam("projectId") Long projectId,
+                                             @RequestParam("name") String name,
+                                             @RequestParam(value = "folderId", required = false) Long folderId) {
+        boolean exists;
+        if (folderId != null) {
+            exists = documents.existsByProjectIdAndNameAndFolder_Id(projectId, name, folderId);
+        } else {
+            exists = documents.existsByProjectIdAndNameAndFolderIsNull(projectId, name);
+        }
+        return ResponseEntity.ok(Map.of("exists", exists));
     }
 
     @PostMapping(value = "/upload", consumes = {"multipart/form-data"})
@@ -93,9 +119,14 @@ public class ProjectDocumentCrudController {
         } else if (u != null && !permissionService.canCreate(opt.get(), u)) {
             return ResponseEntity.status(403).body((ProjectDocument) null);
         }
+
+        // Determine final document name, adding _copy suffix if duplicate exists
+        String docName = name != null ? name : file.getOriginalFilename();
+        docName = ensureUniqueName(docName, projectId, folderId);
+
         var stored = storageService.store(file);
         ProjectDocument doc = ProjectDocument.builder()
-                .name(name != null ? name : file.getOriginalFilename())
+                .name(docName)
                 .description(description != null ? description : "")
                 .type(type != null ? type : "upload")
                 .url(stored.url)
@@ -247,13 +278,50 @@ public class ProjectDocumentCrudController {
         if (opt.isEmpty()) return new ResponseEntity<Void>(HttpStatus.NOT_FOUND);
         var existing = opt.get();
         if (permissionService.isClientUser(u)) {
-            Long docFolderId = existing.getFolder() != null ? existing.getFolder().getId() : null;
-            if (docFolderId == null || !shareService.canFullCrud(u.getId(), docFolderId))
-                return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
+            // Client users are never allowed to delete documents, even with FULL_CRUD
+            return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
         } else if (u != null && !permissionService.canDelete(existing.getProject(), u)) {
             return new ResponseEntity<Void>(HttpStatus.FORBIDDEN);
         }
         documents.deleteById(id);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Ensures the document name is unique within the project+folder scope.
+     * If a duplicate exists, appends _copy (or _copy2, _copy3, etc.) before the file extension.
+     */
+    private String ensureUniqueName(String docName, Long projectId, Long folderId) {
+        boolean exists;
+        if (folderId != null) {
+            exists = documents.existsByProjectIdAndNameAndFolder_Id(projectId, docName, folderId);
+        } else {
+            exists = documents.existsByProjectIdAndNameAndFolderIsNull(projectId, docName);
+        }
+        if (!exists) return docName;
+
+        // Split name into base and extension
+        String base = docName;
+        String ext = "";
+        int dot = docName.lastIndexOf('.');
+        if (dot > 0) {
+            base = docName.substring(0, dot);
+            ext = docName.substring(dot);
+        }
+
+        // Try _copy, _copy2, _copy3, etc.
+        for (int i = 1; i <= 100; i++) {
+            String suffix = i == 1 ? "_copy" : "_copy" + i;
+            String candidate = base + suffix + ext;
+            boolean candidateExists;
+            if (folderId != null) {
+                candidateExists = documents.existsByProjectIdAndNameAndFolder_Id(projectId, candidate, folderId);
+            } else {
+                candidateExists = documents.existsByProjectIdAndNameAndFolderIsNull(projectId, candidate);
+            }
+            if (!candidateExists) return candidate;
+        }
+        // Fallback: append timestamp
+        return base + "_copy_" + System.currentTimeMillis() + ext;
     }
 }

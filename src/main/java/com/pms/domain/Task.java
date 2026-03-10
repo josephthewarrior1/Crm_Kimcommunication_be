@@ -12,18 +12,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "workflow_stages")
+@Table(name = "tasks")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class WorkflowStage {
+public class Task {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @NotBlank(message = "Stage name is required")
+    @NotBlank(message = "Task name is required")
     private String name;
 
     @Column(length = 1000)
@@ -35,28 +35,11 @@ public class WorkflowStage {
 
     private LocalDate dueDate;
 
-    private String pic; // Person In Charge
-
-    @Column(name = "order_sequence")
-    private Integer orderSequence; // Order/position of this worklog in the workflow
-    
-    @Column(name = "previous_stage_name")
-    private String previousStageName; // Name of the worklog that comes before this
-    
-    @Column(name = "next_stage_name")
-    private String nextStageName; // Name of the worklog that comes after this
-
     @ElementCollection
-    @CollectionTable(name = "workflow_stage_deliverables", joinColumns = @JoinColumn(name = "stage_id"))
-    @Column(name = "deliverable")
+    @CollectionTable(name = "task_assignees", joinColumns = @JoinColumn(name = "task_id"))
+    @Column(name = "pic_name")
     @Builder.Default
-    private List<String> deliverables = new ArrayList<>();
-
-    @ElementCollection
-    @CollectionTable(name = "workflow_stage_dependencies", joinColumns = @JoinColumn(name = "stage_id"))
-    @Column(name = "dependency")
-    @Builder.Default
-    private List<String> dependencies = new ArrayList<>();
+    private List<String> pics = new ArrayList<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "approved_by_id")
@@ -78,16 +61,16 @@ public class WorkflowStage {
 
     @ManyToMany
     @JoinTable(
-        name = "workflow_stage_documents",
-        joinColumns = @JoinColumn(name = "stage_id"),
+        name = "task_documents",
+        joinColumns = @JoinColumn(name = "task_id"),
         inverseJoinColumns = @JoinColumn(name = "document_id")
     )
     @Builder.Default
     private List<ProjectDocument> relatedDocuments = new ArrayList<>();
 
-    @OneToMany(mappedBy = "stage", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("orderPosition ASC")
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"stage"})
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"task"})
     @Builder.Default
-    private List<ChecklistItem> checklistItems = new ArrayList<>();
+    private List<TaskChecklistItem> checklistItems = new ArrayList<>();
 }

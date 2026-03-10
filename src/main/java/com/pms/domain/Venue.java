@@ -58,6 +58,9 @@ public class Venue {
     @Column(name = "ballroom_height", precision = 10, scale = 2)
     private BigDecimal ballroomHeight;
 
+    @Column(name = "ballroom_unit", length = 5)
+    private String ballroomUnit;
+
     // ── Foyer specifications ─────────────────────────────────────────
     @Column(name = "foyer_length", precision = 10, scale = 2)
     private BigDecimal foyerLength;
@@ -68,6 +71,9 @@ public class Venue {
     @Column(name = "foyer_height", precision = 10, scale = 2)
     private BigDecimal foyerHeight;
 
+    @Column(name = "foyer_unit", length = 5)
+    private String foyerUnit;
+
     // ── LCD/LED Screen specifications ────────────────────────────────
     @Column(name = "screen_length", precision = 10, scale = 2)
     private BigDecimal screenLength;
@@ -77,6 +83,9 @@ public class Venue {
 
     @Column(name = "existing_screen")
     private Boolean existingScreen;
+
+    @Column(name = "screen_unit", length = 5)
+    private String screenUnit;
 
     // ── IBM Table specifications ─────────────────────────────────────
     @Column(name = "ibm_table_length", precision = 10, scale = 2)
@@ -94,6 +103,9 @@ public class Venue {
 
     @Column(name = "round_table_height", precision = 10, scale = 2)
     private BigDecimal roundTableHeight;
+
+    @Column(name = "table_unit", length = 5)
+    private String tableUnit;
 
     // ── Electrical specifications ────────────────────────────────────
     @Column(name = "electricity_watt")

@@ -34,12 +34,12 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
     List<Client> findByIndustryName(String name);
     
     /**
-     * Find clients by country
-     * 
-     * @param country the country to filter by
+     * Find clients by country name
+     *
+     * @param name the country name to filter by
      * @return list of clients in the specified country
      */
-    List<Client> findByCountry(String country);
+    List<Client> findByCountryName(String name);
     
     /**
      * Search clients by name containing the given text (case-insensitive)

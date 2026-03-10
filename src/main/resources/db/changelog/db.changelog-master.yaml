@@ -23,3 +23,19 @@ databaseChangeLog:
           file: db/changelog/changes/changelog-client-folder-shares.yml
     - include:
           file: db/changelog/changes/changelog-finance-history.yml
+    - include:
+          file: db/changelog/changes/changelog-stage-checklist.yml
+    - include:
+          file: db/changelog/changes/changelog-funding-sources.yml
+    - include:
+          file: db/changelog/changes/changelog-client-country-fk.yml
+    - include:
+          file: db/changelog/changes/changelog-seed-countries.yml
+    - include:
+          file: db/changelog/changes/changelog-venue-measurement-units.yml
+    - include:
+          file: db/changelog/changes/changelog-po-invoice-links.yml
+    - include:
+          file: db/changelog/changes/changelog-stage-team-id.yml
+    - include:
+          file: db/changelog/changes/changelog-tasks.yml

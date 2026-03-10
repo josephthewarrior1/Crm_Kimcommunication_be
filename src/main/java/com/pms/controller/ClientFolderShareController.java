@@ -60,6 +60,39 @@ public class ClientFolderShareController {
         return ResponseEntity.ok(result);
     }
 
+    @GetMapping("/inherited")
+    public ResponseEntity<?> listInheritedShares(
+            @PathVariable Long projectId,
+            @PathVariable Long folderId,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+
+        AppUser u = permissionService.resolveUser(auth);
+        if (u == null || !permissionService.isAdminOrManager(u))
+            return ResponseEntity.status(403).build();
+
+        Optional<DocumentFolder> folderOpt = folderRepository.findById(folderId);
+        if (folderOpt.isEmpty() || !folderOpt.get().getProject().getId().equals(projectId))
+            return ResponseEntity.notFound().build();
+
+        List<ClientFolderShare> inherited = shareService.getInheritedShares(folderId);
+        // Deduplicate by user (closest ancestor wins)
+        Map<Long, ClientFolderShare> byUser = new LinkedHashMap<>();
+        for (ClientFolderShare s : inherited) {
+            byUser.putIfAbsent(s.getUser().getId(), s);
+        }
+        List<Map<String, Object>> result = byUser.values().stream().map(s -> {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("userId", s.getUser().getId());
+            map.put("userName", s.getUser().getName());
+            map.put("userEmail", s.getUser().getEmail());
+            map.put("permission", s.getPermission().name());
+            map.put("folderName", s.getFolder().getName());
+            return map;
+        }).collect(Collectors.toList());
+
+        return ResponseEntity.ok(result);
+    }
+
     @PostMapping
     public ResponseEntity<?> createShare(
             @PathVariable Long projectId,

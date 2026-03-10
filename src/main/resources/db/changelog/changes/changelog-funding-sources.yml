@@ -1,0 +1,29 @@
+databaseChangeLog:
+
+  - changeSet:
+      id: create-funding-sources
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              tableExists:
+                tableName: funding_sources
+      changes:
+        - createTable:
+            tableName: funding_sources
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: alliance_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: source, type: VARCHAR(500), constraints: { nullable: false } }
+              - column: { name: amount, type: "DECIMAL(19,2)", constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: funding_sources
+            baseColumnNames: alliance_id
+            referencedTableName: project_brand_alliances
+            referencedColumnNames: id
+            constraintName: fk_funding_sources_alliance
+            onDelete: CASCADE

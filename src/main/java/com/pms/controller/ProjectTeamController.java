@@ -16,13 +16,16 @@ public class ProjectTeamController {
     private final ProjectRepository projectRepository;
     private final UserRepository userRepository;
     private final ProjectRoleRepository roleRepository;
+    private final ProjectTeamRepository teamRepository;
 
     public ProjectTeamController(ProjectMemberRepository memberRepository, ProjectRepository projectRepository,
-            UserRepository userRepository, ProjectRoleRepository roleRepository) {
+            UserRepository userRepository, ProjectRoleRepository roleRepository,
+            ProjectTeamRepository teamRepository) {
         this.memberRepository = memberRepository;
         this.projectRepository = projectRepository;
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
+        this.teamRepository = teamRepository;
     }
 
     // 1. GET TEAM: List all members (optionally filtered by team type)
@@ -89,7 +92,16 @@ public class ProjectTeamController {
             return ResponseEntity.badRequest().body("User is already in this team");
         }
 
-        // Step 7: Save & Return
+        // Step 7: Resolve team (optional)
+        ProjectTeam team = null;
+        if (request.teamId != null) {
+            var teamOpt = teamRepository.findById(request.teamId);
+            if (teamOpt.isPresent() && teamOpt.get().getProject().getId().equals(projectId)) {
+                team = teamOpt.get();
+            }
+        }
+
+        // Step 8: Save & Return
         ProjectMember member = ProjectMember.builder()
                 .project(project)
                 .user(user)
@@ -97,6 +109,7 @@ public class ProjectTeamController {
                 .jobTitle(request.jobTitle)
                 .manager(manager)
                 .teamType(teamType)
+                .team(team)
                 .joinedAt(java.time.LocalDateTime.now())
                 .build();
 
@@ -136,6 +149,19 @@ public class ProjectTeamController {
                 member.setManager(null); // 0 means "no manager"
             } else {
                 memberRepository.findById(request.managerId).ifPresent(member::setManager);
+            }
+        }
+
+        // Update team
+        if (request.teamId != null) {
+            if (request.teamId == 0) {
+                member.setTeam(null); // 0 means "no team"
+            } else {
+                teamRepository.findById(request.teamId).ifPresent(t -> {
+                    if (t.getProject().getId().equals(projectId)) {
+                        member.setTeam(t);
+                    }
+                });
             }
         }
 
@@ -189,7 +215,15 @@ public class ProjectTeamController {
             }
         }
 
-        // 4. Return DTO with teamType
+        // 4. Extract Team Details
+        Long teamId = null;
+        String teamName = null;
+        if (m.getTeam() != null) {
+            teamId = m.getTeam().getId();
+            teamName = m.getTeam().getName();
+        }
+
+        // 5. Return DTO with teamType, teamId, teamName
         return new ProjectMemberDto(
                 m.getId(),
                 userDto,
@@ -198,7 +232,9 @@ public class ProjectTeamController {
                 m.getJoinedAt(),
                 managerId,
                 managerName,
-                m.getTeamType()
+                m.getTeamType(),
+                teamId,
+                teamName
         );
     }
 
@@ -209,11 +245,13 @@ public class ProjectTeamController {
         public String jobTitle;
         public Long managerId;
         public String teamType;
+        public Long teamId;
     }
 
     public static class UpdateMemberRequest {
         public Long roleId;
         public String jobTitle;
         public Long managerId;
+        public Long teamId;
     }
 }

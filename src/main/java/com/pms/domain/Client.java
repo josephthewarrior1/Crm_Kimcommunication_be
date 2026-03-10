@@ -46,7 +46,9 @@ public class Client {
     /**
      * Country where the client is based
      */
-    private String country;
+    @ManyToOne
+    @JoinColumn(name = "country_id")
+    private Country country;
 
     /**
      * Timestamp when the client record was created
@@ -95,7 +97,7 @@ public class Client {
                 "id=" + id +
                 ", name='" + name + '\'' +
                 ", industry='" + (industry != null ? industry.getName() : null) + '\'' +
-                ", country='" + country + '\'' +
+                ", country='" + (country != null ? country.getName() : null) + '\'' +
                 '}';
     }
 }

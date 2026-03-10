@@ -1,6 +1,7 @@
 package com.pms.repository;
 
 import com.pms.domain.AppUser;
+import com.pms.domain.EmploymentType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -22,4 +23,8 @@ public interface UserRepository extends JpaRepository<AppUser, Long> {
 
     @Query("SELECT u FROM AppUser u WHERE u.id NOT IN (SELECT tm.user.id FROM TeamMember tm)")
     List<AppUser> findUsersNotOnTeam();
+
+    List<AppUser> findByEmploymentType(EmploymentType employmentType);
+
+    List<AppUser> findByClientEntity_Id(Long clientId);
 }

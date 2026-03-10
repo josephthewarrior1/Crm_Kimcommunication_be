@@ -109,16 +109,19 @@ public class VenueController {
         if (body.containsKey("ballroomLength")) venue.setBallroomLength(decimal(body.get("ballroomLength")));
         if (body.containsKey("ballroomWidth")) venue.setBallroomWidth(decimal(body.get("ballroomWidth")));
         if (body.containsKey("ballroomHeight")) venue.setBallroomHeight(decimal(body.get("ballroomHeight")));
+        if (body.containsKey("ballroomUnit")) venue.setBallroomUnit(str(body.get("ballroomUnit")));
 
         // Foyer
         if (body.containsKey("foyerLength")) venue.setFoyerLength(decimal(body.get("foyerLength")));
         if (body.containsKey("foyerWidth")) venue.setFoyerWidth(decimal(body.get("foyerWidth")));
         if (body.containsKey("foyerHeight")) venue.setFoyerHeight(decimal(body.get("foyerHeight")));
+        if (body.containsKey("foyerUnit")) venue.setFoyerUnit(str(body.get("foyerUnit")));
 
         // Screen
         if (body.containsKey("screenLength")) venue.setScreenLength(decimal(body.get("screenLength")));
         if (body.containsKey("screenWidth")) venue.setScreenWidth(decimal(body.get("screenWidth")));
         if (body.containsKey("existingScreen")) venue.setExistingScreen(bool(body.get("existingScreen")));
+        if (body.containsKey("screenUnit")) venue.setScreenUnit(str(body.get("screenUnit")));
 
         // IBM Table
         if (body.containsKey("ibmTableLength")) venue.setIbmTableLength(decimal(body.get("ibmTableLength")));
@@ -128,6 +131,7 @@ public class VenueController {
         // Round Table
         if (body.containsKey("roundTableDiameter")) venue.setRoundTableDiameter(decimal(body.get("roundTableDiameter")));
         if (body.containsKey("roundTableHeight")) venue.setRoundTableHeight(decimal(body.get("roundTableHeight")));
+        if (body.containsKey("tableUnit")) venue.setTableUnit(str(body.get("tableUnit")));
 
         // Electrical
         if (body.containsKey("electricityWatt")) venue.setElectricityWatt(integer(body.get("electricityWatt")));

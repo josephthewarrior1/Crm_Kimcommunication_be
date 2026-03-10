@@ -62,4 +62,9 @@ public class AppUser {
     private String phone;
     private String location;
     private String avatar;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "client_id")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Client clientEntity;
 }

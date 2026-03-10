@@ -1,0 +1,66 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-document-folders
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: document_folders
+      changes:
+        - createTable:
+            tableName: document_folders
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: name, type: VARCHAR(255), constraints: { nullable: false } }
+              - column: { name: project_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: parent_id, type: BIGINT }
+              - column: { name: created_at, type: TIMESTAMP, defaultValueComputed: CURRENT_TIMESTAMP }
+              - column: { name: updated_at, type: TIMESTAMP, defaultValueComputed: CURRENT_TIMESTAMP }
+        - addForeignKeyConstraint:
+            baseTableName: document_folders
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_doc_folders_project
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: document_folders
+            baseColumnNames: parent_id
+            referencedTableName: document_folders
+            referencedColumnNames: id
+            constraintName: fk_doc_folders_parent
+            onDelete: CASCADE
+        - createIndex:
+            indexName: idx_doc_folders_project_parent
+            tableName: document_folders
+            columns:
+              - column: { name: project_id }
+              - column: { name: parent_id }
+
+  - changeSet:
+      id: add-folder-id-to-project-documents
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          columnExists:
+            tableName: project_documents
+            columnName: folder_id
+      changes:
+        - addColumn:
+            tableName: project_documents
+            columns:
+              - column: { name: folder_id, type: BIGINT }
+        - addForeignKeyConstraint:
+            baseTableName: project_documents
+            baseColumnNames: folder_id
+            referencedTableName: document_folders
+            referencedColumnNames: id
+            constraintName: fk_project_docs_folder
+            onDelete: SET NULL
+        - createIndex:
+            indexName: idx_project_docs_folder
+            tableName: project_documents
+            columns:
+              - column: { name: folder_id }

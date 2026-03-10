@@ -48,6 +48,10 @@ public class ProjectMember {
     @Builder.Default
     private String teamType = "ADMINISTRATION";
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "team_id")
+    private ProjectTeam team;
+
     // New: Who does this person report to?
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "manager_id")

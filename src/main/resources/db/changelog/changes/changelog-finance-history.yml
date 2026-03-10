@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-project-finance-history
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          tableExists:
+            tableName: project_finance_history
+      changes:
+        - createTable:
+            tableName: project_finance_history
+            columns:
+              - column: { name: id, type: BIGSERIAL, constraints: { primaryKey: true, nullable: false } }
+              - column: { name: project_id, type: BIGINT, constraints: { nullable: false } }
+              - column: { name: field_name, type: VARCHAR(20), constraints: { nullable: false } }
+              - column: { name: old_value, type: VARCHAR(100) }
+              - column: { name: new_value, type: VARCHAR(100) }
+              - column: { name: changed_by, type: BIGINT }
+              - column: { name: changed_at, type: TIMESTAMP, defaultValueComputed: CURRENT_TIMESTAMP }
+        - addForeignKeyConstraint:
+            baseTableName: project_finance_history
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_pfh_project
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: project_finance_history
+            baseColumnNames: changed_by
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_pfh_changed_by
+            onDelete: SET NULL
+        - createIndex:
+            indexName: idx_pfh_project
+            tableName: project_finance_history
+            columns:
+              - column: { name: project_id }

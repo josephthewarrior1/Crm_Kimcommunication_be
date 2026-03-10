@@ -1,10 +1,7 @@
 package com.pms.service;
 
-import com.pms.domain.AppUser;
-import com.pms.domain.Project;
-import com.pms.domain.ProjectMember;
-import com.pms.domain.ProjectRole;
-import com.pms.domain.Role;
+import com.pms.domain.*;
+import com.pms.repository.ClientFolderShareRepository;
 import com.pms.repository.ProjectMemberRepository;
 import com.pms.repository.SessionRepository;
 import org.slf4j.Logger;
@@ -29,10 +26,14 @@ public class ProjectPermissionService {
 
     private final SessionRepository sessions;
     private final ProjectMemberRepository projectMembers;
+    private final ClientFolderShareRepository clientFolderShares;
 
-    public ProjectPermissionService(SessionRepository sessions, ProjectMemberRepository projectMembers) {
+    public ProjectPermissionService(SessionRepository sessions,
+                                     ProjectMemberRepository projectMembers,
+                                     ClientFolderShareRepository clientFolderShares) {
         this.sessions = sessions;
         this.projectMembers = projectMembers;
+        this.clientFolderShares = clientFolderShares;
     }
 
     /**
@@ -56,9 +57,17 @@ public class ProjectPermissionService {
     }
 
     /**
+     * Check if the user is a CLIENT employment type.
+     */
+    public boolean isClientUser(AppUser u) {
+        return u != null && u.getEmploymentType() == EmploymentType.CLIENT;
+    }
+
+    /**
      * Check if a user has basic access to a project (can view it).
      * Admin/Manager always has access.
      * Regular users need to be in project_users, project_members, or matched by email in team_members.
+     * Client users with folder shares in the project also get access.
      */
     public boolean hasProjectAccess(Project p, AppUser u) {
         if (u == null || p == null) return false;
@@ -75,7 +84,11 @@ public class ProjectPermissionService {
         // Fallback: email match in team_members
         String email = u.getEmail();
         if (email != null && p.getTeamMembers() != null) {
-            return p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()));
+            if (p.getTeamMembers().stream().anyMatch(m -> email.equalsIgnoreCase(m.getEmail()))) return true;
+        }
+        // Client users with folder shares in this project
+        if (isClientUser(u) && u.getId() != null && p.getId() != null) {
+            if (!clientFolderShares.findByProjectIdAndUserId(p.getId(), u.getId()).isEmpty()) return true;
         }
         return false;
     }

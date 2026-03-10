@@ -70,7 +70,12 @@ public class WorkflowStage {
     @JoinColumn(name = "project_id")
     @JsonBackReference
     private Project project;
-    
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team_id")
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "members", "project", "createdAt", "updatedAt"})
+    private ProjectTeam team;
+
     @ManyToMany
     @JoinTable(
         name = "workflow_stage_documents",
@@ -79,4 +84,10 @@ public class WorkflowStage {
     )
     @Builder.Default
     private List<ProjectDocument> relatedDocuments = new ArrayList<>();
+
+    @OneToMany(mappedBy = "stage", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("orderPosition ASC")
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"stage"})
+    @Builder.Default
+    private List<ChecklistItem> checklistItems = new ArrayList<>();
 }

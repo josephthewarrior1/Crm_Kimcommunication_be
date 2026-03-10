@@ -69,7 +69,7 @@ public class DevController {
                         data.put("id", client.getId());
                         data.put("name", client.getName());
                         data.put("industry", client.getIndustry() != null ? client.getIndustry().getName() : null);
-                        data.put("country", client.getCountry());
+                        data.put("country", client.getCountry() != null ? client.getCountry().getName() : null);
                         data.put("createdAt", client.getCreatedAt());
                         data.put("projectCount", client.getProjects().size());
                         return data;

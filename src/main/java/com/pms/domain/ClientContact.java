@@ -37,6 +37,11 @@ public class ClientContact {
     @JsonBackReference
     private Client client;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+    private AppUser user;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

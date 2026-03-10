@@ -89,16 +89,17 @@ public class AuthController {
                             .revoked(false)
                             .build();
                     sessions.save(st);
+                    java.util.Map<String, Object> userData = new java.util.LinkedHashMap<>();
+                    userData.put("id", u.getId());
+                    userData.put("name", u.getName());
+                    userData.put("email", u.getEmail());
+                    userData.put("roles", u.getRoles());
+                    userData.put("active", u.isActive());
+                    userData.put("approved", u.isApproved());
+                    userData.put("employmentType", u.getEmploymentType() != null ? u.getEmploymentType().name() : null);
                     return ResponseEntity.ok(Map.of(
                             "token", token,
-                            "user", Map.of(
-                                    "id", u.getId(),
-                                    "name", u.getName(),
-                                    "email", u.getEmail(),
-                                    "roles", u.getRoles(),
-                                    "active", u.isActive(),
-                                    "approved", u.isApproved()
-                            )
+                            "user", userData
                     ));
                 })
                 .orElse(ResponseEntity.status(401).body(Map.of("error", "Invalid credentials")));

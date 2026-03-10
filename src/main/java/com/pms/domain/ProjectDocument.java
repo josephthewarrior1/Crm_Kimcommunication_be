@@ -1,6 +1,7 @@
 package com.pms.domain;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -42,4 +43,19 @@ public class ProjectDocument {
     @JoinColumn(name = "project_id")
     @JsonBackReference
     private Project project;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "folder_id")
+    @JsonIgnore
+    private DocumentFolder folder;
+
+    @Transient
+    public Long getFolderId() {
+        return folder != null ? folder.getId() : null;
+    }
+
+    @Transient
+    public String getFolderName() {
+        return folder != null ? folder.getName() : null;
+    }
 }

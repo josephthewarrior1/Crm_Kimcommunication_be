@@ -1,0 +1,72 @@
+databaseChangeLog:
+
+  - changeSet:
+      id: create-po-invoice-links-table
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        not:
+          - tableExists:
+              tableName: po_invoice_links
+      changes:
+        - createTable:
+            tableName: po_invoice_links
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: project_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: po_no
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: invoice_no
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: notes
+                  type: VARCHAR(500)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+        - addForeignKeyConstraint:
+            baseTableName: po_invoice_links
+            baseColumnNames: project_id
+            referencedTableName: projects
+            referencedColumnNames: id
+            constraintName: fk_po_invoice_links_project
+
+  - changeSet:
+      id: add-created-by-to-po-invoice-links
+      author: system
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        not:
+          columnExists:
+            tableName: po_invoice_links
+            columnName: created_by
+      changes:
+        - addColumn:
+            tableName: po_invoice_links
+            columns:
+              - column:
+                  name: created_by
+                  type: BIGINT
+        - addForeignKeyConstraint:
+            baseTableName: po_invoice_links
+            baseColumnNames: created_by
+            referencedTableName: users
+            referencedColumnNames: id
+            constraintName: fk_po_invoice_links_created_by

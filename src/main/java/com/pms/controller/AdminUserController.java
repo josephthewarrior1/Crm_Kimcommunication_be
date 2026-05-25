@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -101,7 +102,7 @@ public class AdminUserController {
             boolean approved = parseBoolean(body.get("approved"));
             Set<Role> roles = parseRolesFlexible(body.get("roles"));
             if (roles == null || roles.isEmpty())
-                roles = java.util.Set.of(Role.USER);
+                roles = new HashSet<>(Set.of(Role.USER));
             if (users.existsByEmail(email))
                 return ResponseEntity.badRequest().body(Map.of("error", "Email already in use"));
             if (users.existsByUsername(username)) {

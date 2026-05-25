@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -42,6 +43,10 @@ public class DataSeedingService implements CommandLineRunner {
     // private final ProjectRoleRepository roleRepository;
 
     private final Argon2PasswordEncoder passwordEncoder = new Argon2PasswordEncoder(16, 32, 1, 1 << 14, 3);
+
+    private Set<Role> mutableRoles(Role... roles) {
+        return new HashSet<>(List.of(roles));
+    }
 
     @Override
     @Transactional
@@ -78,7 +83,7 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("admin@pms.com")
                 .username("admin")
                 .passwordHash(passwordEncoder.encode("admin123"))
-                .roles(Set.of(Role.ADMIN))
+                .roles(mutableRoles(Role.ADMIN))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1990, 1, 1))
@@ -92,7 +97,7 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("manager@pms.com")
                 .username("manager")
                 .passwordHash(passwordEncoder.encode("manager123"))
-                .roles(Set.of(Role.MANAGER))
+                .roles(mutableRoles(Role.MANAGER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1985, 5, 15))
@@ -106,7 +111,7 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("john@pms.com")
                 .username("john")
                 .passwordHash(passwordEncoder.encode("user123"))
-                .roles(Set.of(Role.USER))
+                .roles(mutableRoles(Role.USER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1992, 3, 20))
@@ -119,7 +124,7 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("jane@pms.com")
                 .username("jane")
                 .passwordHash(passwordEncoder.encode("user123"))
-                .roles(Set.of(Role.USER))
+                .roles(mutableRoles(Role.USER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1988, 7, 10))
@@ -132,7 +137,7 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("mike@pms.com")
                 .username("mike")
                 .passwordHash(passwordEncoder.encode("user123"))
-                .roles(Set.of(Role.USER))
+                .roles(mutableRoles(Role.USER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1995, 11, 5))
@@ -144,25 +149,25 @@ public class DataSeedingService implements CommandLineRunner {
                 .email("sabrina.finance@pms.com")
                 .username("sabrina")
                 .passwordHash(passwordEncoder.encode("sabrina123"))
-                .roles(Set.of(Role.USER))
+                .roles(mutableRoles(Role.USER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1995, 11, 5))
                 .build();
-        userRepository.save(user3);
-        log.info("Created user: {}", user3.getEmail());
+        userRepository.save(user4);
+        log.info("Created user: {}", user4.getEmail());
         AppUser user5 = AppUser.builder()
                 .name("Renny")
                 .email("renny.finance@pms.com")
                 .username("renny")
                 .passwordHash(passwordEncoder.encode("renny123"))
-                .roles(Set.of(Role.USER))
+                .roles(mutableRoles(Role.USER))
                 .active(true)
                 .approved(true)
                 .dob(LocalDate.of(1995, 11, 5))
                 .build();
-        userRepository.save(user3);
-        log.info("Created user: {}", user3.getEmail());
+        userRepository.save(user5);
+        log.info("Created user: {}", user5.getEmail());
     }
 
     /**

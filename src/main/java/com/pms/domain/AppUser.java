@@ -67,4 +67,8 @@ public class AppUser {
     @JoinColumn(name = "client_id")
     @com.fasterxml.jackson.annotation.JsonIgnore
     private Client clientEntity;
+
+    public void setRoles(Set<Role> roles) {
+        this.roles = roles == null ? new HashSet<>() : new HashSet<>(roles);
+    }
 }

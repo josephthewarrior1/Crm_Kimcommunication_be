@@ -15,6 +15,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -62,7 +63,7 @@ public class AuthController {
                 .email(req.email().toLowerCase())
                 .username(req.username().toLowerCase())
                 .passwordHash(encoder.encode(req.password()))
-                .roles(Set.of(Role.USER))
+                .roles(new HashSet<>(Set.of(Role.USER)))
                 .dob(parsedDob)
                 .active(true)
                 .approved(false)

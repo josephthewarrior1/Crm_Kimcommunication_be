@@ -10,10 +10,16 @@ import org.springframework.context.annotation.Configuration;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Configuration
 public class DataInitializer {
+
+        private static Set<Role> mutableRoles(Role... roles) {
+                return new HashSet<>(List.of(roles));
+        }
 
         @Bean
         @ConditionalOnProperty(name = "app.data.seed", havingValue = "true", matchIfMissing = true)
@@ -71,7 +77,7 @@ public class DataInitializer {
                                                         .email("andi.pratama@kim.co.id")
                                                         .username("andi")
                                                         .passwordHash(encoder.encode("password"))
-                                                        .roles(java.util.Set.of(Role.MANAGER))
+                                                        .roles(mutableRoles(Role.MANAGER))
                                                         .active(true)
                                                         .approved(true)
                                                         .build()));
@@ -81,7 +87,7 @@ public class DataInitializer {
                                                         .email("siti.rahma@kim.co.id")
                                                         .username("siti")
                                                         .passwordHash(encoder.encode("password"))
-                                                        .roles(java.util.Set.of(Role.USER))
+                                                        .roles(mutableRoles(Role.USER))
                                                         .active(true)
                                                         .approved(true)
                                                         .build()));
@@ -91,7 +97,7 @@ public class DataInitializer {
                                                         .email("bagus.wijaya@kim.co.id")
                                                         .username("bagus")
                                                         .passwordHash(encoder.encode("password"))
-                                                        .roles(java.util.Set.of(Role.USER))
+                                                        .roles(mutableRoles(Role.USER))
                                                         .active(true)
                                                         .approved(true)
                                                         .build()));

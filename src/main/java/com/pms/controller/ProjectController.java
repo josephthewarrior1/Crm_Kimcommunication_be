@@ -271,7 +271,7 @@ public class ProjectController {
                         Object statusObj = updates.get("status");
                         if (statusObj != null) {
                             try {
-                                existing.setStatus(ProjectStatus.valueOf(statusObj.toString().toUpperCase()));
+                                existing.setStatus(ProjectStatus.parse(statusObj.toString()));
                             } catch (IllegalArgumentException e) {
                                 // Invalid status, skip
                             }

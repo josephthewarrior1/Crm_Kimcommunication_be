@@ -31,7 +31,7 @@ public class Project {
         @Column(length = 2000)
         private String description;
 
-        @Enumerated(EnumType.STRING)
+        @Convert(converter = ProjectStatusConverter.class)
         private ProjectStatus status;
 
         @Min(0)

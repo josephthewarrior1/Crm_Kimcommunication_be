@@ -5,6 +5,7 @@ import com.pms.domain.Role;
 import com.pms.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,6 +23,7 @@ public class AdminInitializer {
     private String adminPassword;
 
     @Bean
+    @ConditionalOnProperty(name = "app.admin.bootstrap", havingValue = "true", matchIfMissing = false)
     CommandLineRunner ensureAdmin(UserRepository users) {
         return args -> {
             var encoder = new org.springframework.security.crypto.argon2.Argon2PasswordEncoder(16, 32, 1, 1 << 14, 3);

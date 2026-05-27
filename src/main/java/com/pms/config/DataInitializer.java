@@ -22,7 +22,7 @@ public class DataInitializer {
         }
 
         @Bean
-        @ConditionalOnProperty(name = "app.data.seed", havingValue = "true", matchIfMissing = true)
+        @ConditionalOnProperty(name = "app.data.seed", havingValue = "true", matchIfMissing = false)
         CommandLineRunner seedData(ProjectRepository projects,
                         WorkflowStageRepository stages,
                         ProjectEventRepository events,

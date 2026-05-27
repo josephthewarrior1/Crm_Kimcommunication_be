@@ -4,6 +4,7 @@ import com.pms.domain.*;
 import com.pms.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
@@ -28,6 +29,7 @@ import java.util.Set;
  * @version 1.0
  */
 @Service
+@ConditionalOnProperty(name = "app.data.seed", havingValue = "true", matchIfMissing = false)
 @RequiredArgsConstructor
 @Slf4j
 @Order(1)

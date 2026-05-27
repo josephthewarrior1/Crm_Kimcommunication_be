@@ -1,6 +1,7 @@
 package com.pms.controller;
 
 import com.pms.domain.*;
+import com.pms.dto.FrontendProjectDto;
 import com.pms.repository.*;
 import com.pms.service.ProjectPermissionService;
 import com.pms.service.ProjectService;
@@ -12,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -25,6 +28,7 @@ public class ProjectController {
     private final ProjectDocumentRepository projectDocumentRepository;
     private final ContactRepository contactRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final ProjectMemberRepository projectMemberRepository;
     private final SessionRepository sessions;
     private final UserRepository users;
     private final ProjectService projectService;
@@ -46,6 +50,7 @@ public class ProjectController {
             ProjectDocumentRepository projectDocumentRepository,
             ContactRepository contactRepository,
             TeamMemberRepository teamMemberRepository,
+            ProjectMemberRepository projectMemberRepository,
             SessionRepository sessions,
             UserRepository users,
             ProjectService projectService,
@@ -63,6 +68,7 @@ public class ProjectController {
         this.projectDocumentRepository = projectDocumentRepository;
         this.contactRepository = contactRepository;
         this.teamMemberRepository = teamMemberRepository;
+        this.projectMemberRepository = projectMemberRepository;
         this.sessions = sessions;
         this.users = users;
         this.projectService = projectService;
@@ -89,25 +95,25 @@ public class ProjectController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Project> getProject(@PathVariable Long id,
+    public ResponseEntity<FrontendProjectDto> getProject(@PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         AppUser u = currentUser(auth);
         return projectRepository.findById(id)
                 .map(p -> {
                     if (u != null && !isAdminOrManager(u) && !hasAccess(p, u)) {
-                        return ResponseEntity.status(403).body((Project) null);
+                        return ResponseEntity.status(403).body((FrontendProjectDto) null);
                     }
-                    return ResponseEntity.ok(p);
+                    return ResponseEntity.ok(toFrontendDto(p));
                 })
-                .orElseGet(() -> ResponseEntity.status(404).body((Project) null));
+                .orElseGet(() -> ResponseEntity.status(404).body((FrontendProjectDto) null));
     }
 
     @PostMapping
-    public ResponseEntity<Project> createProject(@RequestBody CreateProjectRequest request,
+    public ResponseEntity<FrontendProjectDto> createProject(@RequestBody CreateProjectRequest request,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         AppUser u = currentUser(auth);
         if (u == null || !isAdminOrManager(u))
-            return ResponseEntity.status(403).body((Project) null);
+            return ResponseEntity.status(403).body((FrontendProjectDto) null);
 
         // Build Project entity from request
         Project project = new Project();
@@ -237,18 +243,18 @@ public class ProjectController {
             }
         }
 
-        return ResponseEntity.created(URI.create("/api/projects/" + saved.getId())).body(saved);
+        return ResponseEntity.created(URI.create("/api/projects/" + saved.getId())).body(toFrontendDto(saved));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Project> updateProject(@PathVariable Long id,
+    public ResponseEntity<FrontendProjectDto> updateProject(@PathVariable Long id,
             @RequestBody java.util.Map<String, Object> updates,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         System.out.println("PUT /api/projects/" + id + " called with updates: " + updates);
         AppUser u = currentUser(auth);
         if (u == null || !isAdminOrManager(u)) {
             System.err.println("Unauthorized access attempt for project " + id);
-            return ResponseEntity.status(403).body((Project) null);
+            return ResponseEntity.status(403).body((FrontendProjectDto) null);
         }
         return projectRepository.findById(id)
                 .map(existing -> {
@@ -421,11 +427,11 @@ public class ProjectController {
 
                     Project saved = projectRepository.save(existing);
                     System.out.println("Saved project " + saved.getId() + " with endDate: " + saved.getEndDate());
-                    return ResponseEntity.ok(saved);
+                    return ResponseEntity.ok(toFrontendDto(saved));
                 })
                 .orElseGet(() -> {
                     System.err.println("Project not found with id: " + id);
-                    return ResponseEntity.status(404).body((Project) null);
+                    return ResponseEntity.status(404).body((FrontendProjectDto) null);
                 });
     }
 
@@ -464,7 +470,7 @@ public class ProjectController {
                     project.setStatus(ProjectStatus.COMPLETED);
                     project.setProgress(100);
                     projectRepository.save(project);
-                    return ResponseEntity.ok(project);
+                    return ResponseEntity.ok(toFrontendDto(project));
                 })
                 .orElseGet(() -> ResponseEntity.status(404).body(null));
     }
@@ -855,6 +861,115 @@ public class ProjectController {
 
     private boolean hasAccess(Project p, AppUser u) {
         return permissionService.hasProjectAccess(p, u);
+    }
+
+    private FrontendProjectDto toFrontendDto(Project p) {
+        String status = p.getStatus() != null ? p.getStatus().name() : "IN_PROGRESS";
+        String statusLabel;
+        if (p.getStatus() == null) {
+            statusLabel = "In Progress";
+        } else {
+            statusLabel = switch (p.getStatus()) {
+                case PENDING -> "Pending";
+                case PITCHING -> "Pitching";
+                case IN_PROGRESS -> "In Progress";
+                case APPROVAL_PENDING -> "Approval Pending";
+                case COMPLETED -> "Completed";
+                case DELIVERED -> "Delivered";
+                case CANCELLED -> "Cancelled";
+                case DELAYED -> "Delayed";
+            };
+        }
+
+        String eventDate = p.getEndDate() != null ? p.getEndDate().toString() : null;
+        Integer daysUntilEvent = p.getEndDate() != null
+                ? (int) ChronoUnit.DAYS.between(LocalDate.now(), p.getEndDate())
+                : null;
+
+        String client = p.getClientEntity() != null ? p.getClientEntity().getName() : p.getClient();
+        Long clientId = p.getClientEntity() != null ? p.getClientEntity().getId() : null;
+
+        String accountManager = null;
+        List<ProjectMember> members = projectMemberRepository.findByProjectId(p.getId());
+        for (ProjectMember m : members) {
+            if (m.getRole() != null && "PROJECT_ADMIN".equals(m.getRole().getName())) {
+                accountManager = m.getUser() != null ? m.getUser().getName() : null;
+                break;
+            }
+        }
+
+        String venueName = p.getVenue() != null ? p.getVenue().getName() : null;
+        String venueCity = p.getVenue() != null && p.getVenue().getCity() != null
+                ? p.getVenue().getCity().getName()
+                : null;
+        Long venueId = p.getVenue() != null ? p.getVenue().getId() : null;
+        String venueAddress = p.getVenue() != null ? p.getVenue().getAddress() : null;
+        String venueProvince = p.getVenue() != null ? p.getVenue().getProvince() : null;
+        String venueGoogleMapsLink = p.getVenue() != null ? p.getVenue().getGoogleMapsLink() : null;
+
+        return new FrontendProjectDto(
+                p.getId().toString(),
+                p.getName(),
+                client,
+                clientId,
+                eventDate,
+                status,
+                statusLabel,
+                p.getProgress(),
+                daysUntilEvent,
+                deriveCurrentStageEnum(p),
+                deriveCurrentStageLabel(p),
+                p.getTarget(),
+                accountManager,
+                venueName,
+                venueCity,
+                venueId,
+                venueAddress,
+                venueProvince,
+                venueGoogleMapsLink,
+                p.getDescription(),
+                p.getHedging(),
+                p.getQtnNo(),
+                p.getPoNo(),
+                p.getInvoiceNo());
+    }
+
+    private String deriveCurrentStageEnum(Project p) {
+        if (p.getStages() == null || p.getStages().isEmpty()) {
+            return "NOT_STARTED";
+        }
+
+        return p.getStages().stream()
+                .filter(s -> s.getStatus() == StageStatus.IN_PROGRESS)
+                .findFirst()
+                .map(s -> s.getStatus().name())
+                .orElseGet(() -> p.getStages().stream()
+                        .sorted((s1, s2) -> Integer.compare(
+                                s1.getOrderSequence() != null ? s1.getOrderSequence() : 0,
+                                s2.getOrderSequence() != null ? s2.getOrderSequence() : 0))
+                        .filter(s -> s.getStatus() == StageStatus.PENDING)
+                        .map(s -> s.getStatus().name())
+                        .findFirst()
+                        .orElse("PENDING"));
+    }
+
+    private String deriveCurrentStageLabel(Project p) {
+        if (p.getStages() == null || p.getStages().isEmpty()) {
+            return "Not Started";
+        }
+
+        return p.getStages().stream()
+                .filter(s -> s.getStatus() == StageStatus.IN_PROGRESS)
+                .findFirst()
+                .map(WorkflowStage::getName)
+                .orElseGet(() -> p.getStages().stream()
+                        .sorted((s1, s2) -> Integer.compare(
+                                s1.getOrderSequence() != null ? s1.getOrderSequence() : 0,
+                                s2.getOrderSequence() != null ? s2.getOrderSequence() : 0))
+                        .filter(s -> s.getStatus() == StageStatus.PENDING)
+                        .map(WorkflowStage::getName)
+                        .findFirst()
+                        .orElse("Pending"));
     }
 
     /** DTO for project creation requests */

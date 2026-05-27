@@ -50,6 +50,7 @@ public class ProjectMember {
 
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "team_id")
+    @JsonIgnoreProperties({ "members", "project", "createdAt", "updatedAt" })
     private ProjectTeam team;
 
     // New: Who does this person report to?
@@ -60,6 +61,7 @@ public class ProjectMember {
 
     // New: Who reports to this person? (Optional, but useful)
     @OneToMany(mappedBy = "manager", fetch = FetchType.LAZY)
+    @JsonIgnore
     @Builder.Default
     private List<ProjectMember> subordinates = new ArrayList<>();
 

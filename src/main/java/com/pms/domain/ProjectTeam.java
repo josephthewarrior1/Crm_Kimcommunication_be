@@ -33,6 +33,7 @@ public class ProjectTeam {
     private Integer sortOrder = 0;
 
     @OneToMany(mappedBy = "team", fetch = FetchType.LAZY)
+    @JsonIgnore
     @Builder.Default
     private List<ProjectMember> members = new ArrayList<>();
 

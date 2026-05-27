@@ -1,5 +1,81 @@
 databaseChangeLog:
   - changeSet:
+      id: venue-columns-fix-document-data
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: document_data
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: document_data, type: VARCHAR(2000) }
+
+  - changeSet:
+      id: venue-columns-fix-google-maps-link
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: google_maps_link
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: google_maps_link, type: VARCHAR(500) }
+
+  - changeSet:
+      id: venue-columns-fix-province
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: province
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: province, type: VARCHAR(255) }
+
+  - changeSet:
+      id: venue-columns-fix-address
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: address
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: address, type: VARCHAR(500) }
+
+  - changeSet:
       id: venue-columns-fix-ballroom-name
       author: codex
       preConditions:
@@ -95,6 +171,25 @@ databaseChangeLog:
               - column: { name: ballroom_height, type: "DECIMAL(10,2)" }
 
   - changeSet:
+      id: venue-columns-fix-ballroom-unit
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ballroom_unit
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ballroom_unit, type: VARCHAR(5), defaultValue: m }
+
+  - changeSet:
       id: venue-columns-fix-foyer-length
       author: codex
       preConditions:
@@ -152,6 +247,25 @@ databaseChangeLog:
               - column: { name: foyer_height, type: "DECIMAL(10,2)" }
 
   - changeSet:
+      id: venue-columns-fix-foyer-unit
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: foyer_unit
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: foyer_unit, type: VARCHAR(5), defaultValue: m }
+
+  - changeSet:
       id: venue-columns-fix-screen-length
       author: codex
       preConditions:
@@ -207,6 +321,25 @@ databaseChangeLog:
             tableName: venues
             columns:
               - column: { name: existing_screen, type: BOOLEAN, defaultValueBoolean: false }
+
+  - changeSet:
+      id: venue-columns-fix-screen-unit
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: screen_unit
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: screen_unit, type: VARCHAR(5), defaultValue: m }
 
   - changeSet:
       id: venue-columns-fix-ibm-table-length
@@ -302,6 +435,25 @@ databaseChangeLog:
             tableName: venues
             columns:
               - column: { name: round_table_height, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-table-unit
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: table_unit
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: table_unit, type: VARCHAR(5), defaultValue: cm }
 
   - changeSet:
       id: venue-columns-fix-electricity-watt

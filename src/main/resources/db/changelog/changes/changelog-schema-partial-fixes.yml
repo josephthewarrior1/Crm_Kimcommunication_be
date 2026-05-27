@@ -1,0 +1,76 @@
+databaseChangeLog:
+  - changeSet:
+      id: schema-partial-fix-users-phone
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: users
+                columnName: phone
+      changes:
+        - addColumn:
+            tableName: users
+            columns:
+              - column: { name: phone, type: VARCHAR(20) }
+
+  - changeSet:
+      id: schema-partial-fix-users-location
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: users
+                columnName: location
+      changes:
+        - addColumn:
+            tableName: users
+            columns:
+              - column: { name: location, type: VARCHAR(100) }
+
+  - changeSet:
+      id: schema-partial-fix-users-avatar
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: users
+                columnName: avatar
+      changes:
+        - addColumn:
+            tableName: users
+            columns:
+              - column: { name: avatar, type: VARCHAR(255) }
+
+  - changeSet:
+      id: schema-partial-fix-workflow-stages-approved-at
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: workflow_stages
+                columnName: approved_at
+      changes:
+        - addColumn:
+            tableName: workflow_stages
+            columns:
+              - column: { name: approved_at, type: TIMESTAMP }

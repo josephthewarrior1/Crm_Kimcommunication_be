@@ -1,0 +1,418 @@
+databaseChangeLog:
+  - changeSet:
+      id: venue-columns-fix-ballroom-floor
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ballroom_floor
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ballroom_floor, type: VARCHAR(100) }
+
+  - changeSet:
+      id: venue-columns-fix-ballroom-length
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ballroom_length
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ballroom_length, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-ballroom-width
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ballroom_width
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ballroom_width, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-ballroom-height
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ballroom_height
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ballroom_height, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-foyer-length
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: foyer_length
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: foyer_length, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-foyer-width
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: foyer_width
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: foyer_width, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-foyer-height
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: foyer_height
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: foyer_height, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-screen-length
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: screen_length
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: screen_length, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-screen-width
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: screen_width
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: screen_width, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-existing-screen
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: existing_screen
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: existing_screen, type: BOOLEAN, defaultValueBoolean: false }
+
+  - changeSet:
+      id: venue-columns-fix-ibm-table-length
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ibm_table_length
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ibm_table_length, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-ibm-table-width
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ibm_table_width
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ibm_table_width, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-ibm-table-height
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: ibm_table_height
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: ibm_table_height, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-round-table-diameter
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: round_table_diameter
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: round_table_diameter, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-round-table-height
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: round_table_height
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: round_table_height, type: "DECIMAL(10,2)" }
+
+  - changeSet:
+      id: venue-columns-fix-electricity-watt
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: electricity_watt
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: electricity_watt, type: INTEGER }
+
+  - changeSet:
+      id: venue-columns-fix-sound-system-watt
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: sound_system_watt
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: sound_system_watt, type: INTEGER }
+
+  - changeSet:
+      id: venue-columns-fix-microphone-provided
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: microphone_provided
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: microphone_provided, type: BOOLEAN, defaultValueBoolean: false }
+
+  - changeSet:
+      id: venue-columns-fix-microphone-model
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: microphone_model
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: microphone_model, type: VARCHAR(255) }
+
+  - changeSet:
+      id: venue-columns-fix-microphone-quantity
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: microphone_quantity
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: microphone_quantity, type: INTEGER }
+
+  - changeSet:
+      id: venue-columns-fix-total-stage-modules
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: total_stage_modules
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: total_stage_modules, type: INTEGER }
+
+  - changeSet:
+      id: venue-columns-fix-generator-allowed
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - not:
+              columnExists:
+                tableName: venues
+                columnName: generator_allowed
+      changes:
+        - addColumn:
+            tableName: venues
+            columns:
+              - column: { name: generator_allowed, type: BOOLEAN, defaultValueBoolean: false }

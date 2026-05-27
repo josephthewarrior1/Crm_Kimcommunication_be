@@ -51,6 +51,7 @@ public class FrontendController {
         String status = p.getStatus() != null ? p.getStatus().name() : "IN_PROGRESS";
         String statusLabel = switch (p.getStatus()) {
             case PENDING -> "Pending";
+            case PITCHING -> "Pitching";
             case IN_PROGRESS -> "In Progress";
             case APPROVAL_PENDING -> "Approval Pending";
             case COMPLETED -> "Completed";

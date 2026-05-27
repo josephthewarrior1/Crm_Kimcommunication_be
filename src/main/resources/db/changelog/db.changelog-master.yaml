@@ -36,6 +36,8 @@ databaseChangeLog:
     - include:
           file: db/changelog/changes/changelog-po-invoice-links.yml
     - include:
+          file: db/changelog/changes/changelog-project-finance-columns-fix.yml
+    - include:
           file: db/changelog/changes/changelog-stage-team-id.yml
     - include:
           file: db/changelog/changes/changelog-tasks.yml

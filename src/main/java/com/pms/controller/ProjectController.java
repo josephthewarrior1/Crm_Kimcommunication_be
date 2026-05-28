@@ -252,12 +252,13 @@ public class ProjectController {
             @RequestHeader(value = "Authorization", required = false) String auth) {
         System.out.println("PUT /api/projects/" + id + " called with updates: " + updates);
         AppUser u = currentUser(auth);
-        if (u == null || !isAdminOrManager(u)) {
-            System.err.println("Unauthorized access attempt for project " + id);
-            return ResponseEntity.status(403).body((FrontendProjectDto) null);
-        }
         return projectRepository.findById(id)
                 .map(existing -> {
+                    if (u == null || !permissionService.canUpdate(existing, u)) {
+                        System.err.println("Unauthorized update attempt for project " + id + " by user "
+                                + (u != null ? u.getId() : null));
+                        return ResponseEntity.status(403).body((FrontendProjectDto) null);
+                    }
                     System.out.println("Found project: " + existing.getId() + " - " + existing.getName());
                     // Merge fields from incoming updates with existing project (partial update
                     // support)

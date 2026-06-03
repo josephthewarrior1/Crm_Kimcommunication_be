@@ -40,22 +40,34 @@ databaseChangeLog:
       preConditions:
         onFail: MARK_RAN
         onError: MARK_RAN
-        dbms:
-          type: postgresql
+        and:
+          - dbms:
+              type: postgresql
+          - tableExists:
+              tableName: cities
       changes:
-        - addColumn:
-            tableName: cities
-            columns:
-              - column: { name: province_id, type: BIGINT }
-              - column: { name: latitude, type: "DECIMAL(10,6)" }
-              - column: { name: longitude, type: "DECIMAL(10,6)" }
-        - addForeignKeyConstraint:
-            baseTableName: cities
-            baseColumnNames: province_id
-            referencedTableName: provinces
-            referencedColumnNames: id
-            constraintName: fk_cities_province
-            onDelete: SET NULL
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE public.cities ADD COLUMN IF NOT EXISTS province_id BIGINT;
+              ALTER TABLE public.cities ADD COLUMN IF NOT EXISTS latitude DECIMAL(10,6);
+              ALTER TABLE public.cities ADD COLUMN IF NOT EXISTS longitude DECIMAL(10,6);
+
+              DO $$
+              BEGIN
+                IF NOT EXISTS (
+                  SELECT 1
+                  FROM pg_constraint
+                  WHERE conname = 'fk_cities_province'
+                ) THEN
+                  ALTER TABLE public.cities
+                  ADD CONSTRAINT fk_cities_province
+                  FOREIGN KEY (province_id)
+                  REFERENCES public.provinces(id)
+                  ON DELETE SET NULL;
+                END IF;
+              END
+              $$;
 
   - changeSet:
       id: seed-indonesia-provinces-and-cities

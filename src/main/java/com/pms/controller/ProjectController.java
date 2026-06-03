@@ -16,6 +16,7 @@ import java.net.URI;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -36,6 +37,7 @@ public class ProjectController {
     private final ClientRepository clientRepository;
     private final ClientContactRepository clientContactRepository;
     private final VenueRepository venueRepository;
+    private final VenueRoomRepository venueRoomRepository;
     private final CityRepository cityRepository;
     private final ProjectBrandAllianceRepository brandAllianceRepository;
     private final ProjectFinanceHistoryRepository financeHistoryRepository;
@@ -58,6 +60,7 @@ public class ProjectController {
             ClientRepository clientRepository,
             ClientContactRepository clientContactRepository,
             VenueRepository venueRepository,
+            VenueRoomRepository venueRoomRepository,
             CityRepository cityRepository,
             ProjectBrandAllianceRepository brandAllianceRepository,
             ProjectFinanceHistoryRepository financeHistoryRepository,
@@ -76,6 +79,7 @@ public class ProjectController {
         this.clientRepository = clientRepository;
         this.clientContactRepository = clientContactRepository;
         this.venueRepository = venueRepository;
+        this.venueRoomRepository = venueRoomRepository;
         this.cityRepository = cityRepository;
         this.brandAllianceRepository = brandAllianceRepository;
         this.financeHistoryRepository = financeHistoryRepository;
@@ -119,7 +123,7 @@ public class ProjectController {
         Project project = new Project();
         project.setName(request.name);
         project.setDescription(request.description);
-        project.setStatus(ProjectStatus.IN_PROGRESS);
+        project.setStatus(ProjectStatus.PENDING);
         project.setProgress(0);
 
         if (request.target != null) {
@@ -130,17 +134,33 @@ public class ProjectController {
             project.setHedging(request.hedging);
         }
 
-        if (request.eventDate != null && !request.eventDate.isBlank()) {
-            try {
-                String dateStr = request.eventDate.contains("T")
-                        ? request.eventDate.split("T")[0]
-                        : request.eventDate;
-                java.time.LocalDate date = java.time.LocalDate.parse(dateStr);
-                project.setStartDate(date);
-                project.setEndDate(date);
-            } catch (Exception e) {
-                // Invalid date format, skip
+        LocalDate startDate = parseIncomingDate(request.startDate);
+        LocalDate endDate = parseIncomingDate(request.endDate);
+        LocalDate eventDate = parseIncomingDate(request.eventDate);
+
+        if (startDate == null && endDate == null && eventDate != null) {
+            startDate = eventDate;
+            endDate = eventDate;
+        } else {
+            if (startDate == null) {
+                startDate = endDate != null ? endDate : eventDate;
             }
+            if (endDate == null) {
+                endDate = eventDate != null ? eventDate : startDate;
+            }
+        }
+
+        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
+            LocalDate tmp = startDate;
+            startDate = endDate;
+            endDate = tmp;
+        }
+
+        if (startDate != null) {
+            project.setStartDate(startDate);
+        }
+        if (endDate != null) {
+            project.setEndDate(endDate);
         }
 
         // Resolve client (company)
@@ -204,6 +224,11 @@ public class ProjectController {
                     });
             project.setVenue(venue);
         }
+        if (request.venueRoomId != null && project.getVenue() != null) {
+            venueRoomRepository.findById(request.venueRoomId)
+                    .filter(room -> room.getVenue() != null && room.getVenue().getId().equals(project.getVenue().getId()))
+                    .ifPresent(project::setVenueRoom);
+        }
 
         // Build team assignments map — Account Manager is the top-level role (PROJECT_ADMIN)
         java.util.Map<String, Long> departmentHeads = new java.util.LinkedHashMap<>();
@@ -248,7 +273,7 @@ public class ProjectController {
 
     @PutMapping("/{id}")
     public ResponseEntity<FrontendProjectDto> updateProject(@PathVariable Long id,
-            @RequestBody java.util.Map<String, Object> updates,
+            @RequestBody Map<String, Object> updates,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         System.out.println("PUT /api/projects/" + id + " called with updates: " + updates);
         AppUser u = currentUser(auth);
@@ -315,41 +340,14 @@ public class ProjectController {
                         }
                     }
                     if (updates.containsKey("startDate")) {
-                        Object startDateObj = updates.get("startDate");
-                        if (startDateObj != null) {
-                            try {
-                                existing.setStartDate(java.time.LocalDate.parse(startDateObj.toString()));
-                            } catch (Exception e) {
-                                // Invalid date format, skip
-                            }
-                        }
+                        existing.setStartDate(parseIncomingDate(updates.get("startDate")));
                     }
                     // Handle both endDate and eventDate (eventDate is mapped to endDate)
                     if (updates.containsKey("endDate") || updates.containsKey("eventDate")) {
-                        Object dateObj = updates.containsKey("endDate") ? updates.get("endDate")
+                        Object dateObj = updates.containsKey("endDate")
+                                ? updates.get("endDate")
                                 : updates.get("eventDate");
-                        if (dateObj != null && !dateObj.toString().trim().isEmpty()) {
-                            try {
-                                // Handle both LocalDate objects and string dates
-                                if (dateObj instanceof java.time.LocalDate) {
-                                    existing.setEndDate((java.time.LocalDate) dateObj);
-                                    System.out.println("Updated endDate from LocalDate: " + existing.getEndDate());
-                                } else {
-                                    String dateStr = dateObj.toString().trim();
-                                    // Handle date strings that might include time (take only the date part)
-                                    if (dateStr.contains("T")) {
-                                        dateStr = dateStr.split("T")[0];
-                                    }
-                                    existing.setEndDate(java.time.LocalDate.parse(dateStr));
-                                    System.out.println(
-                                            "Updated endDate from string: " + dateStr + " -> " + existing.getEndDate());
-                                }
-                            } catch (Exception e) {
-                                System.err.println("Failed to parse date: " + dateObj + " - " + e.getMessage());
-                                e.printStackTrace();
-                                // Invalid date format, skip
-                            }
-                        }
+                        existing.setEndDate(parseIncomingDate(dateObj));
                     }
                     if (updates.containsKey("budget")) {
                         Object budgetObj = updates.get("budget");
@@ -409,6 +407,25 @@ public class ProjectController {
                             existing.setClient(clientObj.toString());
                         }
                     }
+                    if (updates.containsKey("clientName") || updates.containsKey("client")) {
+                        Object clientNameObj = updates.containsKey("clientName")
+                                ? updates.get("clientName")
+                                : updates.get("client");
+                        String clientName = clientNameObj != null ? clientNameObj.toString().trim() : null;
+                        if (clientName == null || clientName.isBlank()) {
+                            existing.setClient(null);
+                            existing.setClientEntity(null);
+                        } else {
+                            Client resolvedClient = clientRepository.findByName(clientName)
+                                    .orElseGet(() -> {
+                                        Client c = new Client();
+                                        c.setName(clientName);
+                                        return clientRepository.save(c);
+                                    });
+                            existing.setClient(clientName);
+                            existing.setClientEntity(resolvedClient);
+                        }
+                    }
                     if (updates.containsKey("venueId")) {
                         Object venueIdObj = updates.get("venueId");
                         if (venueIdObj != null) {
@@ -420,7 +437,39 @@ public class ProjectController {
                             }
                         } else {
                             existing.setVenue(null);
+                            existing.setVenueRoom(null);
                         }
+                        if (existing.getVenue() != null && existing.getVenueRoom() != null
+                                && (existing.getVenueRoom().getVenue() == null
+                                || !existing.getVenue().getId().equals(existing.getVenueRoom().getVenue().getId()))) {
+                            existing.setVenueRoom(null);
+                        }
+                    }
+                    if (updates.containsKey("venueRoomId")) {
+                        Object roomIdObj = updates.get("venueRoomId");
+                        if (roomIdObj != null && existing.getVenue() != null) {
+                            Long roomId = null;
+                            try {
+                                roomId = Long.parseLong(roomIdObj.toString());
+                            } catch (NumberFormatException ignored) {
+                            }
+                            if (roomId != null) {
+                                final Long venueId = existing.getVenue().getId();
+                                venueRoomRepository.findById(roomId)
+                                        .filter(room -> room.getVenue() != null && room.getVenue().getId().equals(venueId))
+                                        .ifPresentOrElse(existing::setVenueRoom, () -> existing.setVenueRoom(null));
+                            } else {
+                                existing.setVenueRoom(null);
+                            }
+                        } else {
+                            existing.setVenueRoom(null);
+                        }
+                    }
+                    if (existing.getStartDate() != null && existing.getEndDate() != null
+                            && existing.getEndDate().isBefore(existing.getStartDate())) {
+                        LocalDate tmp = existing.getStartDate();
+                        existing.setStartDate(existing.getEndDate());
+                        existing.setEndDate(tmp);
                     }
                     // Note: We don't update relationships (clientEntity, stages, events, etc.) from
                     // the request
@@ -865,24 +914,23 @@ public class ProjectController {
     }
 
     private FrontendProjectDto toFrontendDto(Project p) {
-        String status = p.getStatus() != null ? p.getStatus().name() : "IN_PROGRESS";
+        String status = p.getStatus() != null ? p.getStatus().name() : "PENDING";
         String statusLabel;
         if (p.getStatus() == null) {
-            statusLabel = "In Progress";
+            statusLabel = "Pending";
         } else {
             statusLabel = switch (p.getStatus()) {
                 case PENDING -> "Pending";
                 case PITCHING -> "Pitching";
-                case IN_PROGRESS -> "In Progress";
-                case APPROVAL_PENDING -> "Approval Pending";
+                case APPROVED -> "Approved";
                 case COMPLETED -> "Completed";
-                case DELIVERED -> "Delivered";
                 case CANCELLED -> "Cancelled";
-                case DELAYED -> "Delayed";
             };
         }
 
-        String eventDate = p.getEndDate() != null ? p.getEndDate().toString() : null;
+        String startDate = p.getStartDate() != null ? p.getStartDate().toString() : null;
+        String endDate = p.getEndDate() != null ? p.getEndDate().toString() : null;
+        String eventDate = endDate;
         Integer daysUntilEvent = p.getEndDate() != null
                 ? (int) ChronoUnit.DAYS.between(LocalDate.now(), p.getEndDate())
                 : null;
@@ -904,6 +952,8 @@ public class ProjectController {
                 ? p.getVenue().getCity().getName()
                 : null;
         Long venueId = p.getVenue() != null ? p.getVenue().getId() : null;
+        Long venueRoomId = p.getVenueRoom() != null ? p.getVenueRoom().getId() : null;
+        String venueRoomName = p.getVenueRoom() != null ? p.getVenueRoom().getRoomName() : null;
         String venueAddress = p.getVenue() != null ? p.getVenue().getAddress() : null;
         String venueProvince = p.getVenue() != null ? p.getVenue().getProvince() : null;
         String venueGoogleMapsLink = p.getVenue() != null ? p.getVenue().getGoogleMapsLink() : null;
@@ -913,6 +963,8 @@ public class ProjectController {
                 p.getName(),
                 client,
                 clientId,
+                startDate,
+                endDate,
                 eventDate,
                 status,
                 statusLabel,
@@ -925,6 +977,8 @@ public class ProjectController {
                 venueName,
                 venueCity,
                 venueId,
+                venueRoomId,
+                venueRoomName,
                 venueAddress,
                 venueProvince,
                 venueGoogleMapsLink,
@@ -978,6 +1032,8 @@ public class ProjectController {
         public String name;
         public String description;
         public Integer target;
+        public String startDate;
+        public String endDate;
         public String eventDate;
         // Client fields
         public Long clientId;
@@ -986,6 +1042,7 @@ public class ProjectController {
         public String contactName;
         // Venue fields
         public Long venueId;
+        public Long venueRoomId;
         public String venueName;
         public String venueCity;
         public String venueProvince;
@@ -1023,6 +1080,10 @@ public class ProjectController {
         public void setDescription(String description) { this.description = description; }
         public Integer getTarget() { return target; }
         public void setTarget(Integer target) { this.target = target; }
+        public String getStartDate() { return startDate; }
+        public void setStartDate(String startDate) { this.startDate = startDate; }
+        public String getEndDate() { return endDate; }
+        public void setEndDate(String endDate) { this.endDate = endDate; }
         public String getEventDate() { return eventDate; }
         public void setEventDate(String eventDate) { this.eventDate = eventDate; }
         public Long getClientId() { return clientId; }
@@ -1035,6 +1096,8 @@ public class ProjectController {
         public void setContactName(String contactName) { this.contactName = contactName; }
         public Long getVenueId() { return venueId; }
         public void setVenueId(Long venueId) { this.venueId = venueId; }
+        public Long getVenueRoomId() { return venueRoomId; }
+        public void setVenueRoomId(Long venueRoomId) { this.venueRoomId = venueRoomId; }
         public String getVenueName() { return venueName; }
         public void setVenueName(String venueName) { this.venueName = venueName; }
         public String getVenueCity() { return venueCity; }
@@ -1061,5 +1124,30 @@ public class ProjectController {
         public void setFinanceUserId(Long v) { this.financeUserId = v; }
         public java.util.List<BrandAllianceInput> getBrandAlliances() { return brandAlliances; }
         public void setBrandAlliances(java.util.List<BrandAllianceInput> v) { this.brandAlliances = v; }
+    }
+
+    private LocalDate parseIncomingDate(Object rawValue) {
+        if (rawValue == null) {
+            return null;
+        }
+
+        if (rawValue instanceof LocalDate localDate) {
+            return localDate;
+        }
+
+        String value = rawValue.toString().trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+            return null;
+        }
+
+        if (value.contains("T")) {
+            value = value.split("T")[0];
+        }
+
+        try {
+            return LocalDate.parse(value);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }

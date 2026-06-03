@@ -6,6 +6,7 @@ import com.pms.repository.ClientRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,8 +34,15 @@ public class ClientContactController {
             ClientContact contact = ClientContact.builder()
                     .name(String.valueOf(body.getOrDefault("name", "")).trim())
                     .email(body.get("email") != null ? String.valueOf(body.get("email")).trim() : null)
+                    .phoneCode(body.get("phoneCode") != null ? String.valueOf(body.get("phoneCode")).trim() : null)
                     .phone(body.get("phone") != null ? String.valueOf(body.get("phone")).trim() : null)
                     .jobTitle(body.get("jobTitle") != null ? String.valueOf(body.get("jobTitle")).trim() : null)
+                    .birthday(body.get("birthday") != null ? String.valueOf(body.get("birthday")).trim() : null)
+                    .religion(body.get("religion") != null ? String.valueOf(body.get("religion")).trim() : null)
+                    .hobbies(body.get("hobbies") != null ? String.valueOf(body.get("hobbies")).trim() : null)
+                    .familyMembers(body.get("familyMembers") != null ? String.valueOf(body.get("familyMembers")).trim() : null)
+                    .homeAddress(body.get("homeAddress") != null ? String.valueOf(body.get("homeAddress")).trim() : null)
+                    .notes(body.get("notes") != null ? String.valueOf(body.get("notes")).trim() : null)
                     .primary(body.get("isPrimary") instanceof Boolean b ? b : false)
                     .client(client)
                     .build();
@@ -42,15 +50,7 @@ public class ClientContactController {
                 return ResponseEntity.badRequest().body((Object) Map.of("error", "Name is required"));
             }
             contactRepository.save(contact);
-            return ResponseEntity.ok((Object) Map.of(
-                    "id", contact.getId(),
-                    "name", contact.getName(),
-                    "email", contact.getEmail(),
-                    "phone", contact.getPhone(),
-                    "jobTitle", contact.getJobTitle(),
-                    "isPrimary", contact.isPrimary(),
-                    "clientId", clientId
-            ));
+            return ResponseEntity.ok((Object) toResponse(contact, clientId));
         }).orElse(ResponseEntity.notFound().build());
     }
 
@@ -66,14 +66,28 @@ public class ClientContactController {
                 contact.setName(String.valueOf(body.get("name")).trim());
             if (body.containsKey("email"))
                 contact.setEmail(body.get("email") != null ? String.valueOf(body.get("email")).trim() : null);
+            if (body.containsKey("phoneCode"))
+                contact.setPhoneCode(body.get("phoneCode") != null ? String.valueOf(body.get("phoneCode")).trim() : null);
             if (body.containsKey("phone"))
                 contact.setPhone(body.get("phone") != null ? String.valueOf(body.get("phone")).trim() : null);
             if (body.containsKey("jobTitle"))
                 contact.setJobTitle(body.get("jobTitle") != null ? String.valueOf(body.get("jobTitle")).trim() : null);
+            if (body.containsKey("birthday"))
+                contact.setBirthday(body.get("birthday") != null ? String.valueOf(body.get("birthday")).trim() : null);
+            if (body.containsKey("religion"))
+                contact.setReligion(body.get("religion") != null ? String.valueOf(body.get("religion")).trim() : null);
+            if (body.containsKey("hobbies"))
+                contact.setHobbies(body.get("hobbies") != null ? String.valueOf(body.get("hobbies")).trim() : null);
+            if (body.containsKey("familyMembers"))
+                contact.setFamilyMembers(body.get("familyMembers") != null ? String.valueOf(body.get("familyMembers")).trim() : null);
+            if (body.containsKey("homeAddress"))
+                contact.setHomeAddress(body.get("homeAddress") != null ? String.valueOf(body.get("homeAddress")).trim() : null);
+            if (body.containsKey("notes"))
+                contact.setNotes(body.get("notes") != null ? String.valueOf(body.get("notes")).trim() : null);
             if (body.containsKey("isPrimary"))
                 contact.setPrimary(body.get("isPrimary") instanceof Boolean b ? b : false);
             contactRepository.save(contact);
-            return ResponseEntity.ok().build();
+            return ResponseEntity.ok((Object) toResponse(contact, clientId));
         }).orElse(ResponseEntity.notFound().build());
     }
 
@@ -86,5 +100,24 @@ public class ClientContactController {
             contactRepository.delete(contact);
             return ResponseEntity.noContent().build();
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    private Map<String, Object> toResponse(ClientContact contact, Long clientId) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", contact.getId());
+        response.put("name", contact.getName());
+        response.put("email", contact.getEmail());
+        response.put("phoneCode", contact.getPhoneCode());
+        response.put("phone", contact.getPhone());
+        response.put("jobTitle", contact.getJobTitle());
+        response.put("birthday", contact.getBirthday());
+        response.put("religion", contact.getReligion());
+        response.put("hobbies", contact.getHobbies());
+        response.put("familyMembers", contact.getFamilyMembers());
+        response.put("homeAddress", contact.getHomeAddress());
+        response.put("notes", contact.getNotes());
+        response.put("isPrimary", contact.isPrimary());
+        response.put("clientId", clientId);
+        return response;
     }
 }

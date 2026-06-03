@@ -34,6 +34,11 @@ public class Country {
     @Builder.Default
     private List<City> cities = new ArrayList<>();
 
+    @OneToMany(mappedBy = "country")
+    @JsonIgnore
+    @Builder.Default
+    private List<Province> provinces = new ArrayList<>();
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

@@ -1,43 +1,42 @@
 package com.pms.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.*;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "cities", uniqueConstraints = {
-    @UniqueConstraint(columnNames = {"name", "country_id"})
-})
+@Table(name = "vendors")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class City {
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+public class Vendor {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @NotBlank(message = "City name is required")
+    @NotBlank(message = "Vendor name is required")
     private String name;
 
-    @ManyToOne
-    @JoinColumn(name = "country_id")
-    private Country country;
+    private String owner;
 
-    @ManyToOne
-    @JoinColumn(name = "province_id")
-    private Province province;
+    @Column(name = "pic_name")
+    private String picName;
 
-    @Column(precision = 10, scale = 6)
-    private BigDecimal latitude;
+    @Column(name = "pic_phone")
+    private String picPhone;
 
-    @Column(precision = 10, scale = 6)
-    private BigDecimal longitude;
+    @Column(name = "pic_email")
+    private String picEmail;
+
+    @Column(name = "category_types_json", columnDefinition = "TEXT")
+    private String categoryTypesJson;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

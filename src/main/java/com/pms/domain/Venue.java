@@ -1,5 +1,6 @@
 package com.pms.domain;
 
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.*;
@@ -131,6 +132,12 @@ public class Venue {
     // ── Generator ────────────────────────────────────────────────────
     @Column(name = "generator_allowed")
     private Boolean generatorAllowed;
+
+    @OneToMany(mappedBy = "venue", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    @OrderBy("id ASC")
+    @JsonManagedReference
+    @Builder.Default
+    private List<VenueRoom> rooms = new ArrayList<>();
 
     // ── Attachments ──────────────────────────────────────────────────
     @OneToMany(mappedBy = "venue", cascade = CascadeType.ALL, orphanRemoval = true)

@@ -70,6 +70,10 @@ public class Project {
         @JoinColumn(name = "venue_id")
         private Venue venue;
 
+        @ManyToOne(fetch = FetchType.EAGER)
+        @JoinColumn(name = "venue_room_id")
+        private VenueRoom venueRoom;
+
         @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
         @JsonManagedReference
         @Builder.Default

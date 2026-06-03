@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-client-contact-profile-fields
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - tableExists:
+              tableName: client_contacts
+      changes:
+        - addColumn:
+            tableName: client_contacts
+            columns:
+              - column: { name: phone_code, type: VARCHAR(20) }
+              - column: { name: birthday, type: VARCHAR(100) }
+              - column: { name: religion, type: VARCHAR(100) }
+              - column: { name: hobbies, type: VARCHAR(500) }
+              - column: { name: family_members, type: TEXT }
+              - column: { name: home_address, type: TEXT }
+              - column: { name: notes, type: TEXT }

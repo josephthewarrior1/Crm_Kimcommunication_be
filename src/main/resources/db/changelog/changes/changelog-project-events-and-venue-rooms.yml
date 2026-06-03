@@ -1,0 +1,89 @@
+databaseChangeLog:
+  - changeSet:
+      id: project-events-start-end-notes
+      author: openai
+      changes:
+        - addColumn:
+            tableName: project_events
+            columns:
+              - column:
+                  name: start_time
+                  type: TIME
+              - column:
+                  name: end_time
+                  type: TIME
+              - column:
+                  name: notes
+                  type: VARCHAR(1000)
+
+  - changeSet:
+      id: create-venue-rooms
+      author: openai
+      changes:
+        - createTable:
+            tableName: venue_rooms
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: venue_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column: { name: room_name, type: VARCHAR(255) }
+              - column: { name: room_floor, type: VARCHAR(100) }
+              - column: { name: room_length, type: "DECIMAL(10,2)" }
+              - column: { name: room_width, type: "DECIMAL(10,2)" }
+              - column: { name: room_height, type: "DECIMAL(10,2)" }
+              - column: { name: room_unit, type: VARCHAR(5) }
+              - column: { name: foyer_length, type: "DECIMAL(10,2)" }
+              - column: { name: foyer_width, type: "DECIMAL(10,2)" }
+              - column: { name: foyer_height, type: "DECIMAL(10,2)" }
+              - column: { name: foyer_unit, type: VARCHAR(5) }
+              - column: { name: screen_length, type: "DECIMAL(10,2)" }
+              - column: { name: screen_width, type: "DECIMAL(10,2)" }
+              - column: { name: existing_screen, type: BOOLEAN }
+              - column: { name: screen_unit, type: VARCHAR(5) }
+              - column: { name: ibm_table_length, type: "DECIMAL(10,2)" }
+              - column: { name: ibm_table_width, type: "DECIMAL(10,2)" }
+              - column: { name: ibm_table_height, type: "DECIMAL(10,2)" }
+              - column: { name: round_table_diameter, type: "DECIMAL(10,2)" }
+              - column: { name: round_table_height, type: "DECIMAL(10,2)" }
+              - column: { name: table_unit, type: VARCHAR(5) }
+              - column: { name: electricity_watt, type: INT }
+              - column: { name: sound_system_watt, type: INT }
+              - column: { name: microphone_provided, type: BOOLEAN }
+              - column: { name: microphone_model, type: VARCHAR(255) }
+              - column: { name: microphone_quantity, type: INT }
+              - column: { name: total_stage_modules, type: INT }
+              - column: { name: generator_allowed, type: BOOLEAN }
+        - addForeignKeyConstraint:
+            baseTableName: venue_rooms
+            baseColumnNames: venue_id
+            referencedTableName: venues
+            referencedColumnNames: id
+            constraintName: fk_venue_rooms_venue
+            onDelete: CASCADE
+
+  - changeSet:
+      id: add-project-venue-room-id
+      author: openai
+      changes:
+        - addColumn:
+            tableName: projects
+            columns:
+              - column:
+                  name: venue_room_id
+                  type: BIGINT
+        - addForeignKeyConstraint:
+            baseTableName: projects
+            baseColumnNames: venue_room_id
+            referencedTableName: venue_rooms
+            referencedColumnNames: id
+            constraintName: fk_projects_venue_room
+            onDelete: SET NULL

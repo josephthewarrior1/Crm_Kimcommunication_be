@@ -35,6 +35,7 @@ public class AuthController {
 
     record RegisterRequest(@NotBlank String name, @NotBlank String username, @Email @NotBlank String email, @NotBlank String password, @NotBlank String confirmPassword, @NotBlank String dob) {}
     record LoginRequest(@NotBlank String email, @NotBlank String password) {}
+    record ChangePasswordRequest(@NotBlank String currentPassword, @NotBlank String newPassword, @NotBlank String confirmPassword) {}
 
     @PostMapping("/register")
     public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest req) {
@@ -175,6 +176,37 @@ public class AuthController {
                         u.setAvatar(body.get("avatar") != null ? String.valueOf(body.get("avatar")).trim() : null);
                     users.save(u);
                     return ResponseEntity.ok(Map.of("message", "Profile updated"));
+                })
+                .orElse(ResponseEntity.status(401).build());
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(
+            @RequestHeader(value = "Authorization", required = false) String auth,
+            @Valid @RequestBody ChangePasswordRequest req) {
+        String token = extractToken(auth);
+        if (token == null) return ResponseEntity.status(401).build();
+        return sessions.findByTokenAndRevokedFalse(token)
+                .filter(st -> st.getExpiresAt().isAfter(Instant.now()))
+                .map(st -> st.getUser())
+                .map(u -> {
+                    if (!encoder.matches(req.currentPassword(), u.getPasswordHash())) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Current password is incorrect"));
+                    }
+                    if (!req.newPassword().equals(req.confirmPassword())) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Passwords do not match"));
+                    }
+                    if (!isStrongPassword(req.newPassword())) {
+                        return ResponseEntity.badRequest().body(Map.of(
+                                "error", "Password must be 8+ chars with uppercase, number and symbol"
+                        ));
+                    }
+                    if (encoder.matches(req.newPassword(), u.getPasswordHash())) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "New password must be different from current password"));
+                    }
+                    u.setPasswordHash(encoder.encode(req.newPassword()));
+                    users.save(u);
+                    return ResponseEntity.ok(Map.of("message", "Password updated"));
                 })
                 .orElse(ResponseEntity.status(401).build());
     }

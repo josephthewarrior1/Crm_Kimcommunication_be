@@ -4,6 +4,7 @@ import com.pms.domain.ProjectTeam;
 import com.pms.repository.ProjectRepository;
 import com.pms.repository.ProjectTeamRepository;
 import com.pms.repository.ProjectMemberRepository;
+import com.pms.repository.TaskRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,13 +18,16 @@ public class ProjectTeamGroupController {
     private final ProjectRepository projectRepository;
     private final ProjectTeamRepository teamRepository;
     private final ProjectMemberRepository memberRepository;
+    private final TaskRepository taskRepository;
 
     public ProjectTeamGroupController(ProjectRepository projectRepository,
             ProjectTeamRepository teamRepository,
-            ProjectMemberRepository memberRepository) {
+            ProjectMemberRepository memberRepository,
+            TaskRepository taskRepository) {
         this.projectRepository = projectRepository;
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
+        this.taskRepository = taskRepository;
     }
 
     @GetMapping
@@ -137,6 +141,10 @@ public class ProjectTeamGroupController {
                 memberRepository.save(member);
             }
         }
+        taskRepository.findByTeamId(teamId).forEach(task -> {
+            task.setTeam(null);
+            taskRepository.save(task);
+        });
 
         teamRepository.delete(team);
         return ResponseEntity.ok().build();

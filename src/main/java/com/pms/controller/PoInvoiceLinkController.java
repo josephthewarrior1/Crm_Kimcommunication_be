@@ -59,13 +59,13 @@ public class PoInvoiceLinkController {
 
         String poNo = body.get("poNo");
         String invoiceNo = body.get("invoiceNo");
-        if (poNo == null || poNo.isBlank() || invoiceNo == null || invoiceNo.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error", "PO No. and Invoice No. are required"));
+        if (poNo == null || poNo.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "PO No. is required"));
 
         PoInvoiceLink link = PoInvoiceLink.builder()
                 .project(projectOpt.get())
                 .poNo(poNo.trim())
-                .invoiceNo(invoiceNo.trim())
+                .invoiceNo(invoiceNo != null && !invoiceNo.isBlank() ? invoiceNo.trim() : null)
                 .notes(body.get("notes"))
                 .createdBy(u)
                 .build();

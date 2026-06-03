@@ -25,6 +25,11 @@ public class VenueAttachment {
     @JsonIgnore
     private Venue venue;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "room_id")
+    @JsonIgnore
+    private VenueRoom room;
+
     private String label;
 
     @Column(length = 1000)

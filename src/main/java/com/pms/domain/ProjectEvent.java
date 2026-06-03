@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 @Entity
 @Table(name = "project_events")
@@ -25,6 +26,15 @@ public class ProjectEvent {
 
     @NotNull(message = "Event date is required")
     private LocalDate date;
+
+    @Column(name = "start_time")
+    private LocalTime startTime;
+
+    @Column(name = "end_time")
+    private LocalTime endTime;
+
+    @Column(length = 1000)
+    private String notes;
 
     @Enumerated(EnumType.STRING)
     @NotNull(message = "Event type is required")

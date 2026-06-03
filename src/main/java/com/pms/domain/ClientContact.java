@@ -24,9 +24,24 @@ public class ClientContact {
 
     private String email;
     private String phone;
+    @Column(name = "phone_code")
+    private String phoneCode;
 
     @Column(name = "job_title")
     private String jobTitle;
+
+    private String birthday;
+    private String religion;
+    private String hobbies;
+
+    @Column(name = "family_members", columnDefinition = "TEXT")
+    private String familyMembers;
+
+    @Column(name = "home_address", columnDefinition = "TEXT")
+    private String homeAddress;
+
+    @Column(columnDefinition = "TEXT")
+    private String notes;
 
     @Builder.Default
     @Column(name = "is_primary")

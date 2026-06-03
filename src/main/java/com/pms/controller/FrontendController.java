@@ -48,25 +48,24 @@ public class FrontendController {
     private FrontendProjectDto toFrontendDto(Project p) {
 
         // STATUS
-        String status = p.getStatus() != null ? p.getStatus().name() : "IN_PROGRESS";
+        String status = p.getStatus() != null ? p.getStatus().name() : "PENDING";
         String statusLabel = switch (p.getStatus()) {
             case PENDING -> "Pending";
             case PITCHING -> "Pitching";
-            case IN_PROGRESS -> "In Progress";
-            case APPROVAL_PENDING -> "Approval Pending";
+            case APPROVED -> "Approved";
             case COMPLETED -> "Completed";
-            case DELIVERED -> "Delivered";
             case CANCELLED -> "Cancelled";
-            case DELAYED -> "Delayed";
-            default -> "In Progress";
+            default -> "Pending";
         };
 
         // CURRENT STAGE (DERIVED)
         String currentStage = deriveCurrentStageEnum(p);
         String currentStageLabel = deriveCurrentStageLabel(p);
 
-        // EVENT DATE (derived from endDate)
-        String eventDate = (p.getEndDate() != null) ? p.getEndDate().toString() : null;
+        String startDate = (p.getStartDate() != null) ? p.getStartDate().toString() : null;
+        String endDate = (p.getEndDate() != null) ? p.getEndDate().toString() : null;
+        // EVENT DATE (kept for backwards compatibility, derived from endDate)
+        String eventDate = endDate;
 
         // DAYS UNTIL EVENT
         Integer daysUntilEvent = (p.getEndDate() != null)
@@ -92,6 +91,8 @@ public class FrontendController {
         String venueCity = (p.getVenue() != null && p.getVenue().getCity() != null)
                 ? p.getVenue().getCity().getName() : null;
         Long venueId = p.getVenue() != null ? p.getVenue().getId() : null;
+        Long venueRoomId = p.getVenueRoom() != null ? p.getVenueRoom().getId() : null;
+        String venueRoomName = p.getVenueRoom() != null ? p.getVenueRoom().getRoomName() : null;
         String venueAddress = p.getVenue() != null ? p.getVenue().getAddress() : null;
         String venueProvince = p.getVenue() != null ? p.getVenue().getProvince() : null;
         String venueGoogleMapsLink = p.getVenue() != null ? p.getVenue().getGoogleMapsLink() : null;
@@ -104,6 +105,8 @@ public class FrontendController {
                 p.getName(),
                 client,
                 clientId,
+                startDate,
+                endDate,
                 eventDate,
                 status,
                 statusLabel,
@@ -116,6 +119,8 @@ public class FrontendController {
                 venueName,
                 venueCity,
                 venueId,
+                venueRoomId,
+                venueRoomName,
                 venueAddress,
                 venueProvince,
                 venueGoogleMapsLink,

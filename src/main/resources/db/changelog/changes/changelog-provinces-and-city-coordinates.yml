@@ -35,6 +35,56 @@ databaseChangeLog:
             constraintName: uq_provinces_name_country
 
   - changeSet:
+      id: ensure-provinces-columns-and-constraints
+      author: codex
+      preConditions:
+        onFail: MARK_RAN
+        onError: MARK_RAN
+        and:
+          - dbms:
+              type: postgresql
+          - tableExists:
+              tableName: provinces
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE public.provinces ADD COLUMN IF NOT EXISTS code VARCHAR(20);
+              ALTER TABLE public.provinces ADD COLUMN IF NOT EXISTS country_id BIGINT;
+              ALTER TABLE public.provinces ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+              ALTER TABLE public.provinces ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+              DO $$
+              BEGIN
+                IF NOT EXISTS (
+                  SELECT 1
+                  FROM pg_constraint
+                  WHERE conrelid = 'public.provinces'::regclass
+                    AND contype = 'f'
+                    AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (country_id)%REFERENCES countries(id)%'
+                ) THEN
+                  ALTER TABLE public.provinces
+                  ADD CONSTRAINT fk_provinces_country
+                  FOREIGN KEY (country_id)
+                  REFERENCES public.countries(id)
+                  ON DELETE CASCADE;
+                END IF;
+
+                IF NOT EXISTS (
+                  SELECT 1
+                  FROM pg_constraint
+                  WHERE conrelid = 'public.provinces'::regclass
+                    AND contype = 'u'
+                    AND pg_get_constraintdef(oid) = 'UNIQUE (name, country_id)'
+                ) THEN
+                  ALTER TABLE public.provinces
+                  ADD CONSTRAINT uq_provinces_name_country
+                  UNIQUE (name, country_id);
+                END IF;
+              END
+              $$;
+
+  - changeSet:
       id: add-province-and-coordinates-to-cities
       author: codex
       preConditions:
@@ -58,7 +108,9 @@ databaseChangeLog:
                 IF NOT EXISTS (
                   SELECT 1
                   FROM pg_constraint
-                  WHERE conname = 'fk_cities_province'
+                  WHERE conrelid = 'public.cities'::regclass
+                    AND contype = 'f'
+                    AND pg_get_constraintdef(oid) LIKE 'FOREIGN KEY (province_id)%REFERENCES provinces(id)%'
                 ) THEN
                   ALTER TABLE public.cities
                   ADD CONSTRAINT fk_cities_province

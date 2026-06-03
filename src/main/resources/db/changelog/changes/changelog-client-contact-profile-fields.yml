@@ -11,13 +11,13 @@ databaseChangeLog:
           - tableExists:
               tableName: client_contacts
       changes:
-        - addColumn:
-            tableName: client_contacts
-            columns:
-              - column: { name: phone_code, type: VARCHAR(20) }
-              - column: { name: birthday, type: VARCHAR(100) }
-              - column: { name: religion, type: VARCHAR(100) }
-              - column: { name: hobbies, type: VARCHAR(500) }
-              - column: { name: family_members, type: TEXT }
-              - column: { name: home_address, type: TEXT }
-              - column: { name: notes, type: TEXT }
+        - sql:
+            splitStatements: false
+            sql: |
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS phone_code VARCHAR(20);
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS birthday VARCHAR(100);
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS religion VARCHAR(100);
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS hobbies VARCHAR(500);
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS family_members TEXT;
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS home_address TEXT;
+              ALTER TABLE public.client_contacts ADD COLUMN IF NOT EXISTS notes TEXT;

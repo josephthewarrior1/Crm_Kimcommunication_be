@@ -16,6 +16,20 @@ databaseChangeLog:
           - sqlCheck:
               expectedResult: 1
               sql: SELECT COUNT(*) FROM countries WHERE code = 'ID'
+          - sqlCheck:
+              expectedResult: 0
+              sql: |
+                SELECT COUNT(*)
+                FROM provinces p
+                JOIN countries c ON c.id = p.country_id
+                WHERE c.code = 'ID'
+          - sqlCheck:
+              expectedResult: 0
+              sql: |
+                SELECT COUNT(*)
+                FROM cities ci
+                JOIN countries c ON c.id = ci.country_id
+                WHERE c.code = 'ID'
       changes:
         - sqlFile:
             path: db/changelog/changes/seed-indonesia-full-cities.sql

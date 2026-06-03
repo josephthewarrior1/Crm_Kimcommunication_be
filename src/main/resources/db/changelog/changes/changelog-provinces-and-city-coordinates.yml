@@ -87,6 +87,8 @@ databaseChangeLog:
   - changeSet:
       id: add-province-and-coordinates-to-cities
       author: codex
+      validCheckSum:
+        - 9:9cef1277cf6dc26aaf7faa9b61aa082d
       preConditions:
         onFail: MARK_RAN
         onError: MARK_RAN

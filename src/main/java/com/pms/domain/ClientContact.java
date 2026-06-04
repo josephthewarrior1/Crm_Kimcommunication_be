@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -30,7 +31,8 @@ public class ClientContact {
     @Column(name = "job_title")
     private String jobTitle;
 
-    private String birthday;
+    @Column(name = "birthdate")
+    private LocalDate birthdate;
     private String religion;
     private String hobbies;
 

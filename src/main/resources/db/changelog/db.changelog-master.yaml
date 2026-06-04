@@ -8,6 +8,8 @@ databaseChangeLog:
     - include:
           file: db/changelog/changes/changelog-client-contact-profile-fields.yml
     - include:
+          file: db/changelog/changes/changelog-client-contact-birthdate-date.yml
+    - include:
           file: db/changelog/changes/changelog-schema-sync.yml
     - include:
           file: db/changelog/changes/changelog-reference-tables.yml

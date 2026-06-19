@@ -7,6 +7,8 @@ import com.pms.repository.UserRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
@@ -83,6 +85,86 @@ public class AdminUserController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @PutMapping("/{id}")
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        return updateUser(id, body);
+    }
+
+    @PatchMapping("/{id}")
+    public ResponseEntity<?> patch(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        return updateUser(id, body);
+    }
+
+    private ResponseEntity<?> updateUser(Long id, Map<String, Object> body) {
+        try {
+            AppUser u = users.findById(id).orElse(null);
+            if (u == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            String name = stringValue(body.get("name"));
+            String username = stringValue(body.get("username")).toLowerCase();
+            String email = stringValue(body.get("email")).toLowerCase();
+
+            if (name.isBlank() || username.isBlank() || email.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "name, username, email required"));
+            }
+
+            if (users.findByEmail(email).filter(existing -> !existing.getId().equals(id)).isPresent()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Email already in use"));
+            }
+            if (users.findByUsername(username).filter(existing -> !existing.getId().equals(id)).isPresent()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Username already in use"));
+            }
+
+            u.setName(name);
+            u.setUsername(username);
+            u.setEmail(email);
+
+            if (body.containsKey("dob")) {
+                String dob = stringValue(body.get("dob"));
+                try {
+                    u.setDob(dob.isBlank() ? null : LocalDate.parse(dob));
+                } catch (DateTimeParseException e) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "dob must use yyyy-MM-dd format"));
+                }
+            }
+
+            if (body.containsKey("employmentType")) {
+                String empTypeStr = stringValue(body.get("employmentType")).toUpperCase();
+                if (empTypeStr.isBlank()) {
+                    u.setEmploymentType(null);
+                } else {
+                    try {
+                        u.setEmploymentType(EmploymentType.valueOf(empTypeStr));
+                    } catch (IllegalArgumentException e) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Invalid employmentType"));
+                    }
+                }
+            }
+
+            if (body.containsKey("phone")) u.setPhone(blankToNull(body.get("phone")));
+            if (body.containsKey("location")) u.setLocation(blankToNull(body.get("location")));
+            if (body.containsKey("avatar")) u.setAvatar(blankToNull(body.get("avatar")));
+            if (body.containsKey("active")) u.setActive(parseBoolean(body.get("active")));
+            if (body.containsKey("approved")) u.setApproved(parseBoolean(body.get("approved")));
+
+            if (body.containsKey("roles")) {
+                Set<Role> newRoles = parseRolesFlexible(body.get("roles"));
+                if (newRoles == null || newRoles.isEmpty()) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "roles must include at least one valid role"));
+                }
+                u.setRoles(newRoles);
+            }
+
+            users.save(u);
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? "Invalid request" : e.getMessage();
+            return ResponseEntity.badRequest().body(Map.of("error", message));
+        }
+    }
+
     @PostMapping
     public ResponseEntity<?> create(@RequestBody Map<String, Object> body) {
         try {
@@ -141,6 +223,15 @@ public class AdminUserController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    private String stringValue(Object value) {
+        if (value == null) return "";
+        return String.valueOf(value).trim();
+    }
+
+    private String blankToNull(Object value) {
+        String s = stringValue(value);
+        return s.isBlank() ? null : s;
+    }
     private boolean parseBoolean(Object value) {
         if (value instanceof Boolean b)
             return b;
@@ -183,3 +274,4 @@ public class AdminUserController {
         }
     }
 }
+

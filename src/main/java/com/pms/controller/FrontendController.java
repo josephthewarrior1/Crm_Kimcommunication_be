@@ -78,11 +78,18 @@ public class FrontendController {
 
         // ACCOUNT MANAGER — find project member with PROJECT_ADMIN role
         String accountManager = null;
+        Long accountManagerUserId = null;
+        String picName = null;
+        Long picUserId = null;
         List<ProjectMember> members = projectMemberRepository.findByProjectId(p.getId());
         for (ProjectMember m : members) {
             if (m.getRole() != null && "PROJECT_ADMIN".equals(m.getRole().getName())) {
                 accountManager = m.getUser() != null ? m.getUser().getName() : null;
-                break;
+                accountManagerUserId = m.getUser() != null ? m.getUser().getId() : null;
+            }
+            if ("Project Officer".equalsIgnoreCase(m.getJobTitle())) {
+                picName = m.getUser() != null ? m.getUser().getName() : null;
+                picUserId = m.getUser() != null ? m.getUser().getId() : null;
             }
         }
 
@@ -116,6 +123,9 @@ public class FrontendController {
                 currentStageLabel,
                 p.getTarget(),
                 accountManager,
+                accountManagerUserId,
+                picName,
+                picUserId,
                 venueName,
                 venueCity,
                 venueId,

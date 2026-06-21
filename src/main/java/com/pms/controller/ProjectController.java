@@ -10,13 +10,16 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @RestController
@@ -42,6 +45,7 @@ public class ProjectController {
     private final ProjectBrandAllianceRepository brandAllianceRepository;
     private final ProjectFinanceHistoryRepository financeHistoryRepository;
     private final TaskRepository taskRepository;
+    private final ProjectRoleRepository projectRoleRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -64,7 +68,8 @@ public class ProjectController {
             CityRepository cityRepository,
             ProjectBrandAllianceRepository brandAllianceRepository,
             ProjectFinanceHistoryRepository financeHistoryRepository,
-            TaskRepository taskRepository) {
+            TaskRepository taskRepository,
+            ProjectRoleRepository projectRoleRepository) {
         this.projectRepository = projectRepository;
         this.workflowStageRepository = workflowStageRepository;
         this.projectEventRepository = projectEventRepository;
@@ -84,6 +89,7 @@ public class ProjectController {
         this.brandAllianceRepository = brandAllianceRepository;
         this.financeHistoryRepository = financeHistoryRepository;
         this.taskRepository = taskRepository;
+        this.projectRoleRepository = projectRoleRepository;
     }
 
     @GetMapping
@@ -272,7 +278,8 @@ public class ProjectController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<FrontendProjectDto> updateProject(@PathVariable Long id,
+    @Transactional
+    public ResponseEntity<?> updateProject(@PathVariable Long id,
             @RequestBody Map<String, Object> updates,
             @RequestHeader(value = "Authorization", required = false) String auth) {
         System.out.println("PUT /api/projects/" + id + " called with updates: " + updates);
@@ -284,6 +291,51 @@ public class ProjectController {
                                 + (u != null ? u.getId() : null));
                         return ResponseEntity.status(403).body((FrontendProjectDto) null);
                     }
+
+                    try {
+                        boolean updateAccountManager = updates.containsKey("accountManagerUserId");
+                        boolean updateProjectOfficer = updates.containsKey("picUserId");
+                        if (updateAccountManager || updateProjectOfficer) {
+                            List<ProjectMember> projectMembers = projectMemberRepository.findByProjectId(existing.getId());
+                            ProjectMember currentAccountManager = findAccountManagerMember(projectMembers).orElse(null);
+                            ProjectMember currentProjectOfficer = findProjectOfficerMember(projectMembers).orElse(null);
+
+                            Long requestedAccountManagerUserId = updateAccountManager
+                                    ? parseOptionalLong(updates.get("accountManagerUserId"))
+                                    : (currentAccountManager != null && currentAccountManager.getUser() != null
+                                            ? currentAccountManager.getUser().getId()
+                                            : null);
+                            Long requestedProjectOfficerUserId = updateProjectOfficer
+                                    ? parseOptionalLong(updates.get("picUserId"))
+                                    : (currentProjectOfficer != null && currentProjectOfficer.getUser() != null
+                                            ? currentProjectOfficer.getUser().getId()
+                                            : null);
+
+                            if (updateAccountManager && requestedAccountManagerUserId == null) {
+                                return ResponseEntity.badRequest().body("Account Manager is required");
+                            }
+                            if (requestedAccountManagerUserId != null
+                                    && requestedAccountManagerUserId.equals(requestedProjectOfficerUserId)) {
+                                return ResponseEntity.badRequest()
+                                        .body("Account Manager and Project Officer must be different users");
+                            }
+
+                            ProjectMember updatedAccountManager = currentAccountManager;
+                            if (updateAccountManager) {
+                                updatedAccountManager = reassignAccountManager(existing, projectMembers,
+                                        requestedAccountManagerUserId);
+                            }
+                            if (updateProjectOfficer) {
+                                reassignProjectOfficer(existing, projectMembers, requestedProjectOfficerUserId,
+                                        updatedAccountManager);
+                            }
+                        }
+                    } catch (IllegalArgumentException e) {
+                        return ResponseEntity.badRequest().body(e.getMessage());
+                    } catch (IllegalStateException e) {
+                        return ResponseEntity.internalServerError().body(e.getMessage());
+                    }
+
                     System.out.println("Found project: " + existing.getId() + " - " + existing.getName());
                     // Merge fields from incoming updates with existing project (partial update
                     // support)
@@ -939,11 +991,18 @@ public class ProjectController {
         Long clientId = p.getClientEntity() != null ? p.getClientEntity().getId() : null;
 
         String accountManager = null;
+        Long accountManagerUserId = null;
+        String picName = null;
+        Long picUserId = null;
         List<ProjectMember> members = projectMemberRepository.findByProjectId(p.getId());
         for (ProjectMember m : members) {
             if (m.getRole() != null && "PROJECT_ADMIN".equals(m.getRole().getName())) {
                 accountManager = m.getUser() != null ? m.getUser().getName() : null;
-                break;
+                accountManagerUserId = m.getUser() != null ? m.getUser().getId() : null;
+            }
+            if ("Project Officer".equalsIgnoreCase(m.getJobTitle())) {
+                picName = m.getUser() != null ? m.getUser().getName() : null;
+                picUserId = m.getUser() != null ? m.getUser().getId() : null;
             }
         }
 
@@ -974,6 +1033,9 @@ public class ProjectController {
                 deriveCurrentStageLabel(p),
                 p.getTarget(),
                 accountManager,
+                accountManagerUserId,
+                picName,
+                picUserId,
                 venueName,
                 venueCity,
                 venueId,
@@ -987,6 +1049,152 @@ public class ProjectController {
                 p.getQtnNo(),
                 p.getPoNo(),
                 p.getInvoiceNo());
+    }
+
+    private Optional<ProjectMember> findAccountManagerMember(List<ProjectMember> members) {
+        return members.stream()
+                .filter(member -> member.getRole() != null && "PROJECT_ADMIN".equals(member.getRole().getName()))
+                .findFirst();
+    }
+
+    private Optional<ProjectMember> findProjectOfficerMember(List<ProjectMember> members) {
+        return members.stream()
+                .filter(member -> "Project Officer".equalsIgnoreCase(member.getJobTitle()))
+                .findFirst();
+    }
+
+    private Optional<ProjectMember> findMemberByUserId(List<ProjectMember> members, Long userId) {
+        return members.stream()
+                .filter(member -> member.getUser() != null && Objects.equals(member.getUser().getId(), userId))
+                .findFirst();
+    }
+
+    private Long parseOptionalLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String raw = value.toString().trim();
+        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) {
+            return null;
+        }
+        return Long.parseLong(raw);
+    }
+
+    private ProjectRole requireProjectRole(String roleName) {
+        return projectRoleRepository.findByName(roleName)
+                .orElseThrow(() -> new IllegalStateException("Required project role is not configured: " + roleName));
+    }
+
+    private AppUser requireUser(Long userId) {
+        return users.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Selected user not found: " + userId));
+    }
+
+    private ProjectMember reassignAccountManager(Project project, List<ProjectMember> projectMembers, Long userId) {
+        ProjectRole adminRole = requireProjectRole("PROJECT_ADMIN");
+        ProjectRole editorRole = requireProjectRole("EDITOR");
+        ProjectMember previousAccountManager = findAccountManagerMember(projectMembers).orElse(null);
+        ProjectMember targetMember = findMemberByUserId(projectMembers, userId).orElse(null);
+
+        if (targetMember == null) {
+            targetMember = projectMemberRepository.save(ProjectMember.builder()
+                    .project(project)
+                    .user(requireUser(userId))
+                    .role(adminRole)
+                    .jobTitle("Account Manager")
+                    .teamType("ADMINISTRATION")
+                    .joinedAt(LocalDateTime.now())
+                    .build());
+            projectMembers.add(targetMember);
+        } else {
+            targetMember.setRole(adminRole);
+            targetMember.setJobTitle("Account Manager");
+            targetMember.setManager(null);
+            if (targetMember.getTeamType() == null || targetMember.getTeamType().isBlank()) {
+                targetMember.setTeamType("ADMINISTRATION");
+            }
+            targetMember = projectMemberRepository.save(targetMember);
+        }
+
+        if (previousAccountManager != null && !Objects.equals(previousAccountManager.getId(), targetMember.getId())) {
+            for (ProjectMember member : projectMembers) {
+                if (member.getManager() != null
+                        && Objects.equals(member.getManager().getId(), previousAccountManager.getId())
+                        && !Objects.equals(member.getId(), targetMember.getId())) {
+                    member.setManager(targetMember);
+                    projectMemberRepository.save(member);
+                }
+            }
+
+            previousAccountManager.setRole(editorRole);
+            if ("Account Manager".equalsIgnoreCase(previousAccountManager.getJobTitle())) {
+                previousAccountManager.setJobTitle("Project Member");
+            }
+            if (previousAccountManager.getManager() != null
+                    && Objects.equals(previousAccountManager.getManager().getId(), previousAccountManager.getId())) {
+                previousAccountManager.setManager(null);
+            }
+            projectMemberRepository.save(previousAccountManager);
+        }
+
+        return targetMember;
+    }
+
+    private void reassignProjectOfficer(Project project, List<ProjectMember> projectMembers, Long userId,
+            ProjectMember accountManager) {
+        ProjectRole editorRole = requireProjectRole("EDITOR");
+        ProjectMember previousProjectOfficer = findProjectOfficerMember(projectMembers).orElse(null);
+
+        if (userId == null) {
+            if (previousProjectOfficer != null) {
+                previousProjectOfficer.setJobTitle("Project Member");
+                previousProjectOfficer.setRole(editorRole);
+                if (accountManager != null && !Objects.equals(previousProjectOfficer.getId(), accountManager.getId())) {
+                    previousProjectOfficer.setManager(accountManager);
+                } else {
+                    previousProjectOfficer.setManager(null);
+                }
+                projectMemberRepository.save(previousProjectOfficer);
+            }
+            return;
+        }
+
+        ProjectMember targetMember = findMemberByUserId(projectMembers, userId).orElse(null);
+        if (targetMember == null) {
+            targetMember = projectMemberRepository.save(ProjectMember.builder()
+                    .project(project)
+                    .user(requireUser(userId))
+                    .role(editorRole)
+                    .jobTitle("Project Officer")
+                    .manager(accountManager)
+                    .teamType("ADMINISTRATION")
+                    .joinedAt(LocalDateTime.now())
+                    .build());
+            projectMembers.add(targetMember);
+        } else {
+            targetMember.setRole(editorRole);
+            targetMember.setJobTitle("Project Officer");
+            if (accountManager != null && !Objects.equals(targetMember.getId(), accountManager.getId())) {
+                targetMember.setManager(accountManager);
+            } else {
+                targetMember.setManager(null);
+            }
+            if (targetMember.getTeamType() == null || targetMember.getTeamType().isBlank()) {
+                targetMember.setTeamType("ADMINISTRATION");
+            }
+            targetMember = projectMemberRepository.save(targetMember);
+        }
+
+        if (previousProjectOfficer != null && !Objects.equals(previousProjectOfficer.getId(), targetMember.getId())) {
+            previousProjectOfficer.setJobTitle("Project Member");
+            previousProjectOfficer.setRole(editorRole);
+            if (accountManager != null && !Objects.equals(previousProjectOfficer.getId(), accountManager.getId())) {
+                previousProjectOfficer.setManager(accountManager);
+            } else {
+                previousProjectOfficer.setManager(null);
+            }
+            projectMemberRepository.save(previousProjectOfficer);
+        }
     }
 
     private String deriveCurrentStageEnum(Project p) {

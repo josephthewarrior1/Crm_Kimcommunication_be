@@ -1,0 +1,590 @@
+{
+	"info": {
+		"_postman_id": "crm-kimtele-api-collection-id",
+		"name": "CRM Kimtele API",
+		"description": "API Collection for CRM Kimtele Backend System",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Groups",
+			"item": [
+				{
+					"name": "Create Group",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Astra Group\",\n  \"notes\": \"Holding company otomotif dan finansial\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/groups",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"groups"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Groups",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/groups",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"groups"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Companies",
+			"item": [
+				{
+					"name": "Create Company",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"brandName\": \"Toyota Astra Motor\",\n  \"name\": \"PT Toyota Astra Motor\",\n  \"address\": \"Sunter, Jakarta Utara\",\n  \"officePhone\": \"021-654321\",\n  \"website\": \"https://toyota.astra.co.id\",\n  \"industry\": \"Otomotif\",\n  \"companySizeRevenue\": \"Large\",\n  \"companySizeEmployee\": \"1000+\",\n  \"city\": \"Jakarta\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/companies?groupId={{group_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"companies"
+							],
+							"query": [
+								{
+									"key": "groupId",
+									"value": "{{group_id}}",
+									"description": "UUID of the Group"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Companies",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/companies",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"companies"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Contacts",
+			"item": [
+				{
+					"name": "Create Contact",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"salutation\": \"Mr\",\n  \"firstName\": \"Joseph\",\n  \"lastName\": \"Warrior\",\n  \"positionLevel\": \"Manager\",\n  \"specialityDivision\": \"IT Infrastructure\",\n  \"jobTitle\": \"IT Manager\",\n  \"mobilePhone\": \"08123456789\",\n  \"normalizedPhone\": \"+628123456789\",\n  \"linkedinUrl\": \"https://linkedin.com/in/josephthewarrior\",\n  \"contactType\": \"partner_it\",\n  \"source\": \"manual\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/contacts?companyId={{company_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"contacts"
+							],
+							"query": [
+								{
+									"key": "companyId",
+									"value": "{{company_id}}",
+									"description": "UUID of the Company"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Contacts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/contacts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"contacts"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Add Contact Email",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"joseph@toyota.astra.co.id\",\n  \"emailType\": \"company\",\n  \"isPrimary\": true,\n  \"isCorporate\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/contacts/{{contact_id}}/emails",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"contacts",
+								"{{contact_id}}",
+								"emails"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Contact Emails",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/contacts/{{contact_id}}/emails",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"contacts",
+								"{{contact_id}}",
+								"emails"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Events",
+			"item": [
+				{
+					"name": "Create Event",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Cloud Security Summit 2026\",\n  \"eventType\": \"partner\",\n  \"clientName\": \"Google Cloud\",\n  \"dateStart\": \"2026-07-15\",\n  \"dateEnd\": \"2026-07-16\",\n  \"notes\": \"Summit untuk partner IT holding company\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/events",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"events"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Events",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/events",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"events"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Event Leads",
+			"item": [
+				{
+					"name": "Create Event Lead",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"eventId\": \"{{event_id}}\",\n  \"contactId\": \"{{contact_id}}\",\n  \"leadStatus\": \"white\",\n  \"attendanceStatus\": \"invited\",\n  \"notes\": \"Pertama kali didaftarkan\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/event-leads",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"event-leads"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Event Leads",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/event-leads",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"event-leads"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Lead Status",
+					"request": {
+						"method": "PUT",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/event-leads/{{event_lead_id}}/status?leadStatus=green&attendanceStatus=registered&notes=Konfirmasi hadir lewat wa",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"event-leads",
+								"{{event_lead_id}}",
+								"status"
+							],
+							"query": [
+								{
+									"key": "leadStatus",
+									"value": "green"
+								},
+								{
+									"key": "attendanceStatus",
+									"value": "registered"
+								},
+								{
+									"key": "notes",
+									"value": "Konfirmasi hadir lewat wa"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Removal Requests",
+			"item": [
+				{
+					"name": "Create Removal Request",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"contactId\": \"{{contact_id}}\",\n  \"reason\": \"resign\",\n  \"requestedBy\": \"HR Dept\",\n  \"sourceDb\": \"pms_old\",\n  \"notes\": \"Minta data di take out dari database aktif\",\n  \"status\": \"pending\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/removal-requests",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"removal-requests"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Removal Requests",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/removal-requests",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"removal-requests"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Removal Status (Approve/Done)",
+					"request": {
+						"method": "PUT",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/removal-requests/{{removal_request_id}}/status?status=done",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"removal-requests",
+								"{{removal_request_id}}",
+								"status"
+							],
+							"query": [
+								{
+									"key": "status",
+									"value": "done"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Personal Email Domains",
+			"item": [
+				{
+					"name": "Add Personal Email Domain",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"domain\": \"gmail.com\",\n  \"riskLevel\": \"low\",\n  \"notes\": \"Domain email personal populer\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/personal-email-domains",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"personal-email-domains"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Personal Email Domains",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/personal-email-domains",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"personal-email-domains"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Flagged Identities",
+			"item": [
+				{
+					"name": "Create Flagged Identity",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"nameUsed\": \"Fake Name\",\n  \"emailUsed\": \"fake@gmail.com\",\n  \"phoneUsed\": \"089999999\",\n  \"flagReason\": \"fake_company\",\n  \"evidenceNotes\": \"Perusahaan fiktif terdeteksi\",\n  \"status\": \"suspected\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/flagged-identities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"flagged-identities"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Flagged Identities",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/flagged-identities",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"flagged-identities"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8081",
+			"type": "string"
+		},
+		{
+			"key": "group_id",
+			"value": "ganti-dengan-uuid-group",
+			"type": "string"
+		},
+		{
+			"key": "company_id",
+			"value": "ganti-dengan-uuid-company",
+			"type": "string"
+		},
+		{
+			"key": "contact_id",
+			"value": "ganti-dengan-uuid-contact",
+			"type": "string"
+		},
+		{
+			"key": "event_id",
+			"value": "ganti-dengan-uuid-event",
+			"type": "string"
+		},
+		{
+			"key": "event_lead_id",
+			"value": "ganti-dengan-uuid-event-lead",
+			"type": "string"
+		},
+		{
+			"key": "removal_request_id",
+			"value": "ganti-dengan-uuid-removal-request",
+			"type": "string"
+		}
+	]
+}

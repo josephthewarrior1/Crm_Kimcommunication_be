@@ -1,9 +1,10 @@
+name: crm-kimtele
 version: "3.9"
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: crm-postgres
+    container_name: crm-kimtele-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pms_dev}
@@ -12,9 +13,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - crm_postgres_data:/var/lib/postgresql/data
+      - crm_kimtele_postgres_data:/var/lib/postgresql/data
     networks:
-      - crm-telemarketing
+      - crm-kimtele
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
@@ -25,7 +26,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: crm-backend
+    container_name: crm-kimtele-backend
     restart: unless-stopped
     ports:
       - "8081:8081"
@@ -44,11 +45,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - crm-telemarketing
+      - crm-kimtele
 
   onlyoffice:
     image: onlyoffice/documentserver
-    container_name: crm-onlyoffice
+    container_name: crm-kimtele-onlyoffice
     restart: unless-stopped
     ports:
       - "8083:80"
@@ -57,11 +58,11 @@ services:
       ALLOW_PRIVATE_IP_ADDRESS: "true"
       ALLOW_META_IP_ADDRESS: "true"
     networks:
-      - crm-telemarketing
+      - crm-kimtele
 
 networks:
-  crm-telemarketing:
+  crm-kimtele:
     driver: bridge
 
 volumes:
-  crm_postgres_data:
+  crm_kimtele_postgres_data:

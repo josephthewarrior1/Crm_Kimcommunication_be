@@ -3,7 +3,7 @@ version: "3.9"
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: pms-postgres
+    container_name: crm-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pms_dev}
@@ -12,9 +12,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data_v17:/var/lib/postgresql/data
+      - crm_postgres_data:/var/lib/postgresql/data
     networks:
-      - pms-network
+      - crm-telemarketing
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: pms-backend
+    container_name: crm-backend
     restart: unless-stopped
     ports:
       - "8081:8081"
@@ -44,11 +44,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - pms-network
+      - crm-telemarketing
 
   onlyoffice:
     image: onlyoffice/documentserver
-    container_name: pms-onlyoffice
+    container_name: crm-onlyoffice
     restart: unless-stopped
     ports:
       - "8083:80"
@@ -57,13 +57,11 @@ services:
       ALLOW_PRIVATE_IP_ADDRESS: "true"
       ALLOW_META_IP_ADDRESS: "true"
     networks:
-      - pms-network
+      - crm-telemarketing
 
 networks:
-  pms-network:
-    external: true
+  crm-telemarketing:
     driver: bridge
-    name: pms-network
 
 volumes:
-  postgres_data_v17:
+  crm_postgres_data:

@@ -2,11 +2,11 @@
     "configurations": [
         {
             "type": "java",
-            "name": "Spring Boot-PmsApplication<pms-be>",
+            "name": "Spring Boot-CrmApplication<crm-kimtele-be>",
             "request": "launch",
             "cwd": "${workspaceFolder}",
-            "mainClass": "com.pms.PmsApplication",
-            "projectName": "pms-be",
+            "mainClass": "com.crm.CrmApplication",
+            "projectName": "crm-kimtele-be",
             "args": "",
             "envFile": "${workspaceFolder}/.env"
         }

@@ -1,0 +1,678 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1-create-crm-tables
+      author: antigravity
+      changes:
+        - sql:
+            dbms: postgresql
+            sql: |
+              CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+        # 1. Groups
+        - createTable:
+            tableName: groups
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    unique: true
+                    nullable: false
+              - column:
+                  name: notes
+                  type: TEXT
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 2. Companies
+        - createTable:
+            tableName: companies
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: group_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_companies_group_id
+                    referencedTableName: groups
+                    referencedColumnNames: id
+                    nullable: true
+              - column:
+                  name: brand_name
+                  type: VARCHAR(255)
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+              - column:
+                  name: address
+                  type: TEXT
+              - column:
+                  name: office_phone
+                  type: VARCHAR(50)
+              - column:
+                  name: website
+                  type: VARCHAR(255)
+              - column:
+                  name: industry
+                  type: VARCHAR(100)
+              - column:
+                  name: company_size_revenue
+                  type: VARCHAR(100)
+              - column:
+                  name: company_size_employee
+                  type: VARCHAR(100)
+              - column:
+                  name: company_hardware
+                  type: TEXT
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 3. Contacts
+        - createTable:
+            tableName: contacts
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_contacts_company_id
+                    referencedTableName: companies
+                    referencedColumnNames: id
+                    nullable: true
+              - column:
+                  name: salutation
+                  type: VARCHAR(50)
+              - column:
+                  name: first_name
+                  type: VARCHAR(255)
+              - column:
+                  name: last_name
+                  type: VARCHAR(255)
+              - column:
+                  name: position_level
+                  type: VARCHAR(100)
+              - column:
+                  name: speciality_division
+                  type: VARCHAR(100)
+              - column:
+                  name: job_title
+                  type: VARCHAR(255)
+              - column:
+                  name: mobile_phone
+                  type: VARCHAR(50)
+              - column:
+                  name: normalized_phone
+                  type: VARCHAR(50)
+              - column:
+                  name: linkedin_url
+                  type: TEXT
+              - column:
+                  name: contact_type
+                  type: VARCHAR(50)
+              - column:
+                  name: source
+                  type: VARCHAR(50)
+              - column:
+                  name: is_active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 4. Contact Emails
+        - createTable:
+            tableName: contact_emails
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: contact_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_contact_emails_contact_id
+                    referencedTableName: contacts
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+                  constraints:
+                    unique: true
+                    nullable: false
+              - column:
+                  name: email_type
+                  type: VARCHAR(50)
+              - column:
+                  name: is_primary
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: is_verified
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: is_corporate
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: domain
+                  type: VARCHAR(100)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 5. Events
+        - createTable:
+            tableName: events
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_type
+                  type: VARCHAR(50)
+              - column:
+                  name: client_name
+                  type: VARCHAR(255)
+              - column:
+                  name: date_start
+                  type: DATE
+              - column:
+                  name: date_end
+                  type: DATE
+              - column:
+                  name: notes
+                  type: TEXT
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 6. Event Leads
+        - createTable:
+            tableName: event_leads
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_event_leads_event_id
+                    referencedTableName: events
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: contact_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_event_leads_contact_id
+                    referencedTableName: contacts
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: lead_status
+                  type: VARCHAR(50)
+              - column:
+                  name: requested_at
+                  type: TIMESTAMP
+              - column:
+                  name: responded_at
+                  type: TIMESTAMP
+              - column:
+                  name: attendance_status
+                  type: VARCHAR(50)
+              - column:
+                  name: notes
+                  type: TEXT
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: event_leads
+            columnNames: event_id, contact_id
+            constraintName: unique_event_contact
+
+        # 7. Removal Requests
+        - createTable:
+            tableName: removal_requests
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: contact_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_removal_requests_contact_id
+                    referencedTableName: contacts
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: reason
+                  type: VARCHAR(100)
+              - column:
+                  name: requested_by
+                  type: VARCHAR(255)
+              - column:
+                  name: request_date
+                  type: DATE
+              - column:
+                  name: source_db
+                  type: VARCHAR(255)
+              - column:
+                  name: notes
+                  type: TEXT
+              - column:
+                  name: status
+                  type: VARCHAR(50)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 8. Personal Email Domains
+        - createTable:
+            tableName: personal_email_domains
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: domain
+                  type: VARCHAR(100)
+                  constraints:
+                    unique: true
+                    nullable: false
+              - column:
+                  name: risk_level
+                  type: VARCHAR(50)
+              - column:
+                  name: notes
+                  type: TEXT
+
+        # 9. Flagged Identities
+        - createTable:
+            tableName: flagged_identities
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: contact_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_flagged_identities_contact_id
+                    referencedTableName: contacts
+                    referencedColumnNames: id
+                    nullable: true
+              - column:
+                  name: event_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_flagged_identities_event_id
+                    referencedTableName: events
+                    referencedColumnNames: id
+                    nullable: true
+              - column:
+                  name: name_used
+                  type: VARCHAR(255)
+              - column:
+                  name: email_used
+                  type: VARCHAR(255)
+              - column:
+                  name: phone_used
+                  type: VARCHAR(50)
+              - column:
+                  name: flag_reason
+                  type: VARCHAR(100)
+              - column:
+                  name: linked_flag_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_flagged_identities_linked_flag_id
+                    referencedTableName: flagged_identities
+                    referencedColumnNames: id
+                    nullable: true
+              - column:
+                  name: evidence_notes
+                  type: TEXT
+              - column:
+                  name: status
+                  type: VARCHAR(50)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # Indexes
+        - createIndex:
+            tableName: groups
+            indexName: idx_groups_name
+            columns:
+              - column:
+                  name: name
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_group_id
+            columns:
+              - column:
+                  name: group_id
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_name
+            columns:
+              - column:
+                  name: name
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_brand_name
+            columns:
+              - column:
+                  name: brand_name
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_industry
+            columns:
+              - column:
+                  name: industry
+        - createIndex:
+            tableName: companies
+            indexName: idx_companies_city
+            columns:
+              - column:
+                  name: city
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_company_id
+            columns:
+              - column:
+                  name: company_id
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_first_name
+            columns:
+              - column:
+                  name: first_name
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_last_name
+            columns:
+              - column:
+                  name: last_name
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_mobile_phone
+            columns:
+              - column:
+                  name: mobile_phone
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_normalized_phone
+            columns:
+              - column:
+                  name: normalized_phone
+        - createIndex:
+            tableName: contacts
+            indexName: idx_contacts_is_active
+            columns:
+              - column:
+                  name: is_active
+        - createIndex:
+            tableName: contact_emails
+            indexName: idx_contact_emails_contact_id
+            columns:
+              - column:
+                  name: contact_id
+        - createIndex:
+            tableName: contact_emails
+            indexName: idx_contact_emails_email
+            columns:
+              - column:
+                  name: email
+        - createIndex:
+            tableName: contact_emails
+            indexName: idx_contact_emails_domain
+            columns:
+              - column:
+                  name: domain
+        - createIndex:
+            tableName: events
+            indexName: idx_events_event_type
+            columns:
+              - column:
+                  name: event_type
+        - createIndex:
+            tableName: events
+            indexName: idx_events_date_start
+            columns:
+              - column:
+                  name: date_start
+        - createIndex:
+            tableName: event_leads
+            indexName: idx_event_leads_event_id
+            columns:
+              - column:
+                  name: event_id
+        - createIndex:
+            tableName: event_leads
+            indexName: idx_event_leads_contact_id
+            columns:
+              - column:
+                  name: contact_id
+        - createIndex:
+            tableName: event_leads
+            indexName: idx_event_leads_lead_status
+            columns:
+              - column:
+                  name: lead_status
+        - createIndex:
+            tableName: event_leads
+            indexName: idx_event_leads_attendance_status
+            columns:
+              - column:
+                  name: attendance_status
+        - createIndex:
+            tableName: flagged_identities
+            indexName: idx_flagged_identities_contact_id
+            columns:
+              - column:
+                  name: contact_id
+        - createIndex:
+            tableName: flagged_identities
+            indexName: idx_flagged_identities_event_id
+            columns:
+              - column:
+                  name: event_id
+        - createIndex:
+            tableName: flagged_identities
+            indexName: idx_flagged_identities_status
+            columns:
+              - column:
+                  name: status
+        - createIndex:
+            tableName: flagged_identities
+            indexName: idx_flagged_identities_phone_used
+            columns:
+              - column:
+                  name: phone_used
+        - createIndex:
+            tableName: flagged_identities
+            indexName: idx_flagged_identities_email_used
+            columns:
+              - column:
+                  name: email_used
+
+        # 10. App Users
+        - createTable:
+            tableName: app_users
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: username
+                  type: VARCHAR(255)
+                  constraints:
+                    unique: true
+                    nullable: false
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+                  constraints:
+                    unique: true
+                    nullable: false
+              - column:
+                  name: full_name
+                  type: VARCHAR(255)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # 11. Session Tokens
+        - createTable:
+            tableName: session_tokens
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: UUID
+                  constraints:
+                    foreignKeyName: fk_session_tokens_user_id
+                    referencedTableName: app_users
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: expires_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        # Indexes for App Users & Sessions
+        - createIndex:
+            tableName: app_users
+            indexName: idx_app_users_username
+            columns:
+              - column:
+                  name: username
+        - createIndex:
+            tableName: app_users
+            indexName: idx_app_users_email
+            columns:
+              - column:
+                  name: email
+

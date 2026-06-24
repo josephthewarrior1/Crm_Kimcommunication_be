@@ -7,6 +7,64 @@
 	},
 	"item": [
 		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login (Auto Register)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"usernameOrEmail\": \"joseph\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/auth/logout",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"logout"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
 			"name": "Groups",
 			"item": [
 				{
@@ -554,6 +612,11 @@
 		{
 			"key": "base_url",
 			"value": "http://localhost:8081",
+			"type": "string"
+		},
+		{
+			"key": "session_token",
+			"value": "ganti-dengan-token-login",
 			"type": "string"
 		},
 		{

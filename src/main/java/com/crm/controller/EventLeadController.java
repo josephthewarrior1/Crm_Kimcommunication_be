@@ -29,26 +29,43 @@ public class EventLeadController {
     @PostMapping
     public ResponseEntity<?> createEventLead(@RequestBody EventLeadRequest request) {
         Event event = eventRepository.findById(request.getEventId()).orElse(null);
-        Contact contact = contactRepository.findById(request.getContactId()).orElse(null);
-
-        if (event == null || contact == null) {
-            return ResponseEntity.badRequest().body("Event or Contact not found");
+        if (event == null) {
+            return ResponseEntity.badRequest().body("Event not found");
         }
 
-        // Check if already exists
-        if (eventLeadRepository.findByEventIdAndContactId(request.getEventId(), request.getContactId()).isPresent()) {
-            return ResponseEntity.badRequest().body("Contact is already a lead for this event");
+        java.util.List<UUID> contactsToProcess = new java.util.ArrayList<>();
+        if (request.getContactIds() != null && !request.getContactIds().isEmpty()) {
+            contactsToProcess.addAll(request.getContactIds());
+        } else if (request.getContactId() != null) {
+            contactsToProcess.add(request.getContactId());
         }
 
-        EventLead eventLead = EventLead.builder()
-                .event(event)
-                .contact(contact)
-                .leadStatus(request.getLeadStatus() != null ? LeadStatus.valueOf(request.getLeadStatus()) : LeadStatus.white)
-                .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
-                .notes(request.getNotes())
-                .build();
+        if (contactsToProcess.isEmpty()) {
+            return ResponseEntity.badRequest().body("No Contact IDs provided");
+        }
 
-        return ResponseEntity.ok(eventLeadRepository.save(eventLead));
+        java.util.List<EventLead> savedLeads = new java.util.ArrayList<>();
+        for (UUID contactId : contactsToProcess) {
+            Contact contact = contactRepository.findById(contactId).orElse(null);
+            if (contact == null) {
+                continue;
+            }
+
+            if (eventLeadRepository.findByEventIdAndContactId(request.getEventId(), contactId).isPresent()) {
+                continue;
+            }
+
+            EventLead eventLead = EventLead.builder()
+                    .event(event)
+                    .contact(contact)
+                    .leadStatus(request.getLeadStatus() != null ? LeadStatus.valueOf(request.getLeadStatus()) : LeadStatus.white)
+                    .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
+                    .notes(request.getNotes())
+                    .build();
+            savedLeads.add(eventLeadRepository.save(eventLead));
+        }
+
+        return ResponseEntity.ok(savedLeads);
     }
 
     @PutMapping("/{id}/status")
@@ -83,6 +100,7 @@ public class EventLeadController {
     public static class EventLeadRequest {
         private UUID eventId;
         private UUID contactId;
+        private List<UUID> contactIds;
         private String leadStatus;
         private String attendanceStatus;
         private String notes;

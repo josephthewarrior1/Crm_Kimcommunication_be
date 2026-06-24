@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -19,6 +20,10 @@ public class Contact {
     @GeneratedValue(strategy = GenerationType.AUTO)
     private UUID id;
 
+    @OneToMany(mappedBy = "contact", fetch = FetchType.EAGER, cascade = CascadeType.ALL)
+    @JsonIgnoreProperties("contact")
+    private List<ContactEmail> emails;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id")
     private Company company;
@@ -32,7 +37,7 @@ public class Contact {
     private String lastName;
 
     @Column(name = "position_level")
-    private String positionLevel;
+    private PositionLevel positionLevel;
 
     @Column(name = "speciality_division")
     private String specialityDivision;

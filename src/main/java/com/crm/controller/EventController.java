@@ -27,7 +27,7 @@ public class EventController {
         }
 
         String cleanName = event.getName().trim();
-        if (eventRepository.findByName(cleanName).isPresent()) {
+        if (eventRepository.findByNameIgnoreCase(cleanName).isPresent()) {
             return ResponseEntity.badRequest().body("Event name already exists");
         }
 

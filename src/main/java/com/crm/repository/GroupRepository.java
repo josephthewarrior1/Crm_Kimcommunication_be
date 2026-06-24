@@ -8,5 +8,5 @@ import java.util.UUID;
 
 @Repository
 public interface GroupRepository extends JpaRepository<Group, UUID> {
-    Optional<Group> findByName(String name);
+    Optional<Group> findByNameIgnoreCase(String name);
 }

@@ -36,11 +36,11 @@ public class AuthController {
         String username = request.getUsername().trim();
         String email = request.getEmail().trim();
 
-        if (userRepository.findByUsername(username).isPresent()) {
+        if (userRepository.findByUsernameIgnoreCase(username).isPresent()) {
             return ResponseEntity.badRequest().body("Username is already taken");
         }
 
-        if (userRepository.findByEmail(email).isPresent()) {
+        if (userRepository.findByEmailIgnoreCase(email).isPresent()) {
             return ResponseEntity.badRequest().body("Email is already registered");
         }
 

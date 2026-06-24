@@ -32,7 +32,7 @@ public class CompanyController {
         }
 
         String cleanName = company.getName().trim();
-        if (companyRepository.findByName(cleanName).isPresent()) {
+        if (companyRepository.findByNameIgnoreCase(cleanName).isPresent()) {
             return ResponseEntity.badRequest().body("Company name already exists");
         }
 

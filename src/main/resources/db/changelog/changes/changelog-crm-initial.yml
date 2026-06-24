@@ -681,3 +681,127 @@ databaseChangeLog:
               - column:
                   name: email
 
+  - changeSet:
+      id: 2-case-insensitive-uniqueness
+      author: antigravity
+      changes:
+        - sql:
+            dbms: postgresql
+            sql: |
+              -- 1. Merge duplicate Groups and update Companies referencing them
+              WITH kept_groups AS (
+                SELECT DISTINCT ON (LOWER(name)) id, name
+                FROM groups
+                ORDER BY LOWER(name), created_at ASC
+              )
+              UPDATE companies
+              SET group_id = kg.id
+              FROM groups g
+              JOIN kept_groups kg ON LOWER(g.name) = LOWER(kg.name)
+              WHERE companies.group_id = g.id AND g.id != kg.id;
+
+              DELETE FROM groups
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (LOWER(name)) id
+                FROM groups
+                ORDER BY LOWER(name), created_at ASC
+              );
+
+              -- 2. Merge duplicate Companies and update Contacts referencing them
+              WITH kept_companies AS (
+                SELECT DISTINCT ON (LOWER(name)) id, name
+                FROM companies
+                ORDER BY LOWER(name), created_at ASC
+              )
+              UPDATE contacts
+              SET company_id = kc.id
+              FROM companies c
+              JOIN kept_companies kc ON LOWER(c.name) = LOWER(kc.name)
+              WHERE contacts.company_id = c.id AND c.id != kc.id;
+
+              DELETE FROM companies
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (LOWER(name)) id
+                FROM companies
+                ORDER BY LOWER(name), created_at ASC
+              );
+
+              -- 3. Merge duplicate Events and update Event Leads referencing them
+              WITH kept_events AS (
+                SELECT DISTINCT ON (LOWER(name)) id, name
+                FROM events
+                ORDER BY LOWER(name), created_at ASC
+              )
+              UPDATE event_leads
+              SET event_id = ke.id
+              FROM events e
+              JOIN kept_events ke ON LOWER(e.name) = LOWER(ke.name)
+              WHERE event_leads.event_id = e.id AND e.id != ke.id;
+
+              -- Delete duplicate event_leads (same contact_id and same event_id) before enforcing unique event_leads
+              DELETE FROM event_leads
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (event_id, contact_id) id
+                FROM event_leads
+                ORDER BY event_id, contact_id, created_at ASC
+              );
+
+              DELETE FROM events
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (LOWER(name)) id
+                FROM events
+                ORDER BY LOWER(name), created_at ASC
+              );
+
+              -- 4. Merge duplicate App Users (by Username) and update Session Tokens
+              WITH kept_users_username AS (
+                SELECT DISTINCT ON (LOWER(username)) id, username
+                FROM app_users
+                ORDER BY LOWER(username), created_at ASC
+              )
+              UPDATE session_tokens
+              SET user_id = ku.id
+              FROM app_users u
+              JOIN kept_users_username ku ON LOWER(u.username) = LOWER(ku.username)
+              WHERE session_tokens.user_id = u.id AND u.id != ku.id;
+
+              DELETE FROM app_users
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (LOWER(username)) id
+                FROM app_users
+                ORDER BY LOWER(username), created_at ASC
+              );
+
+              -- 5. Merge duplicate App Users (by Email) and update Session Tokens
+              WITH kept_users_email AS (
+                SELECT DISTINCT ON (LOWER(email)) id, email
+                FROM app_users
+                ORDER BY LOWER(email), created_at ASC
+              )
+              UPDATE session_tokens
+              SET user_id = ku.id
+              FROM app_users u
+              JOIN kept_users_email ku ON LOWER(u.email) = LOWER(ku.email)
+              WHERE session_tokens.user_id = u.id AND u.id != ku.id;
+
+              DELETE FROM app_users
+              WHERE id NOT IN (
+                SELECT DISTINCT ON (LOWER(email)) id
+                FROM app_users
+                ORDER BY LOWER(email), created_at ASC
+              );
+
+              -- 6. Drop existing case-sensitive unique constraints
+              ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_name_key;
+              ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_username_key;
+              ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_email_key;
+
+              -- 7. Create case-insensitive unique indexes
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_companies_name_lower ON companies (LOWER(name));
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_groups_name_lower ON groups (LOWER(name));
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_events_name_lower ON events (LOWER(name));
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_app_users_username_lower ON app_users (LOWER(username));
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_app_users_email_lower ON app_users (LOWER(email));
+
+
+

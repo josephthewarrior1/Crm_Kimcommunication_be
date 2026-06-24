@@ -27,7 +27,7 @@ public class GroupController {
         }
 
         String cleanName = group.getName().trim();
-        if (groupRepository.findByName(cleanName).isPresent()) {
+        if (groupRepository.findByNameIgnoreCase(cleanName).isPresent()) {
             return ResponseEntity.badRequest().body("Group name already exists");
         }
 

@@ -628,6 +628,11 @@ databaseChangeLog:
                   name: full_name
                   type: VARCHAR(255)
               - column:
+                  name: password
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
                   name: created_at
                   type: TIMESTAMP
                   constraints:

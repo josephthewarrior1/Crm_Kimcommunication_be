@@ -5,7 +5,9 @@ import com.crm.domain.SessionToken;
 import com.crm.repository.SessionTokenRepository;
 import com.crm.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -21,48 +23,69 @@ public class AuthController {
     @Autowired
     private SessionTokenRepository sessionTokenRepository;
 
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
+        if (request.getUsername() == null || request.getUsername().trim().isEmpty() ||
+            request.getEmail() == null || request.getEmail().trim().isEmpty() ||
+            request.getPassword() == null || request.getPassword().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Username, email, and password are required");
+        }
+
+        String username = request.getUsername().trim();
+        String email = request.getEmail().trim();
+
+        if (userRepository.findByUsername(username).isPresent()) {
+            return ResponseEntity.badRequest().body("Username is already taken");
+        }
+
+        if (userRepository.findByEmail(email).isPresent()) {
+            return ResponseEntity.badRequest().body("Email is already registered");
+        }
+
+        AppUser user = AppUser.builder()
+                .username(username)
+                .email(email)
+                .fullName(request.getFullName() != null ? request.getFullName().trim() : username)
+                .password(passwordEncoder.encode(request.getPassword()))
+                .build();
+
+        AppUser savedUser = userRepository.save(user);
+        
+        // Hide password in response
+        savedUser.setPassword(null);
+        return ResponseEntity.status(HttpStatus.CREATED).body(savedUser);
+    }
+
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
         String identifier = request.getUsernameOrEmail();
-        if (identifier == null || identifier.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("usernameOrEmail is required");
+        String rawPassword = request.getPassword();
+
+        if (identifier == null || identifier.trim().isEmpty() ||
+            rawPassword == null || rawPassword.isEmpty()) {
+            return ResponseEntity.badRequest().body("Username/Email and password are required");
         }
 
         identifier = identifier.trim();
-        AppUser user;
-        
+        Optional<AppUser> userOpt;
+
         if (identifier.contains("@")) {
-            // Identifier is email
-            Optional<AppUser> existing = userRepository.findByEmail(identifier);
-            if (existing.isPresent()) {
-                user = existing.get();
-            } else {
-                // Auto register
-                String username = identifier.split("@")[0];
-                if (userRepository.findByUsername(username).isPresent()) {
-                    username = username + "_" + UUID.randomUUID().toString().substring(0, 4);
-                }
-                user = AppUser.builder()
-                        .username(username)
-                        .email(identifier)
-                        .fullName(username)
-                        .build();
-                user = userRepository.save(user);
-            }
+            userOpt = userRepository.findByEmail(identifier);
         } else {
-            // Identifier is username
-            Optional<AppUser> existing = userRepository.findByUsername(identifier);
-            if (existing.isPresent()) {
-                user = existing.get();
-            } else {
-                // Auto register
-                user = AppUser.builder()
-                        .username(identifier)
-                        .email(identifier + "@example.com")
-                        .fullName(identifier)
-                        .build();
-                user = userRepository.save(user);
-            }
+            userOpt = userRepository.findByUsername(identifier);
+        }
+
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid username/email or password");
+        }
+
+        AppUser user = userOpt.get();
+
+        // Check password matching
+        if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid username/email or password");
         }
 
         // Create Session Token
@@ -111,8 +134,17 @@ public class AuthController {
     }
 
     @lombok.Data
+    public static class RegisterRequest {
+        private String username;
+        private String email;
+        private String fullName;
+        private String password;
+    }
+
+    @lombok.Data
     public static class LoginRequest {
         private String usernameOrEmail;
+        private String password;
     }
 
     @lombok.Data

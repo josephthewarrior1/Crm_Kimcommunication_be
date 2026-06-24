@@ -10,13 +10,41 @@
 			"name": "Authentication",
 			"item": [
 				{
-					"name": "Login (Auto Register)",
+					"name": "Register",
 					"request": {
 						"method": "POST",
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"usernameOrEmail\": \"joseph\"\n}",
+							"raw": "{\n  \"username\": \"joseph\",\n  \"email\": \"joseph@example.com\",\n  \"fullName\": \"Joseph Warrior\",\n  \"password\": \"mypassword123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/auth/register",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"register"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"usernameOrEmail\": \"joseph\",\n  \"password\": \"mypassword123\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"

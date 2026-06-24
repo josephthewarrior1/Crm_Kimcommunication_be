@@ -26,6 +26,9 @@ public class AppUser {
     @Column(name = "full_name")
     private String fullName;
 
+    @Column(nullable = false)
+    private String password;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

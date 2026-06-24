@@ -26,11 +26,21 @@ public class CompanyController {
     }
 
     @PostMapping
-    public ResponseEntity<Company> createCompany(@RequestBody Company company, @RequestParam(required = false) UUID groupId) {
+    public ResponseEntity<?> createCompany(@RequestBody Company company, @RequestParam(required = false) UUID groupId) {
+        if (company.getName() == null || company.getName().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Company name is required");
+        }
+
+        String cleanName = company.getName().trim();
+        if (companyRepository.findByName(cleanName).isPresent()) {
+            return ResponseEntity.badRequest().body("Company name already exists");
+        }
+
         if (groupId != null) {
             Group group = groupRepository.findById(groupId).orElse(null);
             company.setGroup(group);
         }
+        company.setName(cleanName);
         return ResponseEntity.ok(companyRepository.save(company));
     }
 

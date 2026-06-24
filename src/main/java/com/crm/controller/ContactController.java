@@ -47,9 +47,19 @@ public class ContactController {
     }
 
     @PostMapping("/{contactId}/emails")
-    public ResponseEntity<ContactEmail> addContactEmail(@PathVariable UUID contactId, @RequestBody ContactEmail contactEmail) {
+    public ResponseEntity<?> addContactEmail(@PathVariable UUID contactId, @RequestBody ContactEmail contactEmail) {
+        if (contactEmail.getEmail() == null || contactEmail.getEmail().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Email address is required");
+        }
+
+        String cleanEmail = contactEmail.getEmail().trim().toLowerCase();
+        if (contactEmailRepository.findByEmail(cleanEmail).isPresent()) {
+            return ResponseEntity.badRequest().body("Email address is already in use");
+        }
+
         return contactRepository.findById(contactId).map(contact -> {
             contactEmail.setContact(contact);
+            contactEmail.setEmail(cleanEmail);
             return ResponseEntity.ok(contactEmailRepository.save(contactEmail));
         }).orElse(ResponseEntity.notFound().build());
     }

@@ -21,8 +21,18 @@ public class EventController {
     }
 
     @PostMapping
-    public Event createEvent(@RequestBody Event event) {
-        return eventRepository.save(event);
+    public ResponseEntity<?> createEvent(@RequestBody Event event) {
+        if (event.getName() == null || event.getName().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Event name is required");
+        }
+
+        String cleanName = event.getName().trim();
+        if (eventRepository.findByName(cleanName).isPresent()) {
+            return ResponseEntity.badRequest().body("Event name already exists");
+        }
+
+        event.setName(cleanName);
+        return ResponseEntity.ok(eventRepository.save(event));
     }
 
     @GetMapping("/{id}")

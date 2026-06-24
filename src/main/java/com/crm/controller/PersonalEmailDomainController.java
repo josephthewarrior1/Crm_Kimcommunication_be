@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
+import org.springframework.http.ResponseEntity;
+
 @RestController
 @RequestMapping("/api/personal-email-domains")
 public class PersonalEmailDomainController {
@@ -19,7 +21,17 @@ public class PersonalEmailDomainController {
     }
 
     @PostMapping
-    public PersonalEmailDomain createDomain(@RequestBody PersonalEmailDomain domain) {
-        return personalEmailDomainRepository.save(domain);
+    public ResponseEntity<?> createDomain(@RequestBody PersonalEmailDomain domain) {
+        if (domain.getDomain() == null || domain.getDomain().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Domain name is required");
+        }
+
+        String cleanDomain = domain.getDomain().trim().toLowerCase();
+        if (personalEmailDomainRepository.findByDomain(cleanDomain).isPresent()) {
+            return ResponseEntity.badRequest().body("Domain already exists");
+        }
+
+        domain.setDomain(cleanDomain);
+        return ResponseEntity.ok(personalEmailDomainRepository.save(domain));
     }
 }

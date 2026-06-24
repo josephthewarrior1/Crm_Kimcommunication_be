@@ -15,7 +15,7 @@ FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
 # Copy the built JAR from build stage
-COPY --from=build /app/target/pms-be-0.0.1-SNAPSHOT.jar app.jar
+COPY --from=build /app/target/crm-kimtele-be-0.0.1-SNAPSHOT.jar app.jar
 
 # Create uploads directory
 RUN mkdir -p /app/uploads

@@ -21,8 +21,18 @@ public class GroupController {
     }
 
     @PostMapping
-    public Group createGroup(@RequestBody Group group) {
-        return groupRepository.save(group);
+    public ResponseEntity<?> createGroup(@RequestBody Group group) {
+        if (group.getName() == null || group.getName().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Group name is required");
+        }
+
+        String cleanName = group.getName().trim();
+        if (groupRepository.findByName(cleanName).isPresent()) {
+            return ResponseEntity.badRequest().body("Group name already exists");
+        }
+
+        group.setName(cleanName);
+        return ResponseEntity.ok(groupRepository.save(group));
     }
 
     @GetMapping("/{id}")

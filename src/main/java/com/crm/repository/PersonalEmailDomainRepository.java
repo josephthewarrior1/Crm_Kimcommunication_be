@@ -7,6 +7,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface PersonalEmailDomainRepository extends JpaRepository<PersonalEmailDomain, UUID> {
+public interface PersonalEmailDomainRepository extends JpaRepository<PersonalEmailDomain, Long> {
     Optional<PersonalEmailDomain> findByDomain(String domain);
 }

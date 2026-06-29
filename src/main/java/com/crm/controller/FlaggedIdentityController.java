@@ -26,7 +26,7 @@ public class FlaggedIdentityController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<FlaggedIdentity> updateFlaggedIdentity(@PathVariable UUID id, @RequestBody FlaggedIdentity details) {
+    public ResponseEntity<FlaggedIdentity> updateFlaggedIdentity(@PathVariable Long id, @RequestBody FlaggedIdentity details) {
         return flaggedIdentityRepository.findById(id).map(existing -> {
             existing.setNameUsed(details.getNameUsed());
             existing.setEmailUsed(details.getEmailUsed());
@@ -49,7 +49,7 @@ public class FlaggedIdentityController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteFlaggedIdentity(@PathVariable UUID id) {
+    public ResponseEntity<?> deleteFlaggedIdentity(@PathVariable Long id) {
         if (flaggedIdentityRepository.existsById(id)) {
             flaggedIdentityRepository.deleteById(id);
             return ResponseEntity.noContent().build();

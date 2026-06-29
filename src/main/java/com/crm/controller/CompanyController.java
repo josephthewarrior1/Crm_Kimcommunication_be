@@ -30,7 +30,7 @@ public class CompanyController {
     }
 
     @PostMapping
-    public ResponseEntity<?> createCompany(@RequestBody Company company, @RequestParam(required = false) UUID groupId) {
+    public ResponseEntity<?> createCompany(@RequestBody Company company, @RequestParam(required = false) Long groupId) {
         if (company.getName() == null || company.getName().trim().isEmpty()) {
             return ResponseEntity.badRequest().body("Company name is required");
         }
@@ -49,14 +49,14 @@ public class CompanyController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Company> getCompanyById(@PathVariable UUID id) {
+    public ResponseEntity<Company> getCompanyById(@PathVariable Long id) {
         return companyRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateCompany(@PathVariable UUID id, @RequestBody Company companyDetails, @RequestParam(required = false) UUID groupId) {
+    public ResponseEntity<?> updateCompany(@PathVariable Long id, @RequestBody Company companyDetails, @RequestParam(required = false) Long groupId) {
         return companyRepository.findById(id).map(existing -> {
             if (companyDetails.getName() == null || companyDetails.getName().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body("Company name is required");
@@ -92,7 +92,7 @@ public class CompanyController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteCompany(@PathVariable UUID id) {
+    public ResponseEntity<?> deleteCompany(@PathVariable Long id) {
         if (companyRepository.existsById(id)) {
             // Nullify company references in contacts
             contactRepository.findAll().stream()

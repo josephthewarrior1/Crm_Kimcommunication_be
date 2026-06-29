@@ -54,7 +54,7 @@ public class RemovalRequestController {
     }
 
     @PutMapping("/{id}/status")
-    public ResponseEntity<?> updateStatus(@PathVariable UUID id, @RequestParam String status) {
+    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestParam String status) {
         return removalRequestRepository.findById(id).map(req -> {
             try {
                 RemovalStatus newStatus = RemovalStatus.valueOf(status);
@@ -76,7 +76,7 @@ public class RemovalRequestController {
 
     @lombok.Data
     public static class RemovalRequestDto {
-        private UUID contactId;
+        private Long contactId;
         private String reason;
         private String requestedBy;
         private String sourceDb;

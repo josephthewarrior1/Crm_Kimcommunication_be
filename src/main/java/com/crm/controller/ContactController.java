@@ -5,11 +5,14 @@ import com.crm.domain.Contact;
 import com.crm.domain.ContactEmail;
 import com.crm.domain.EventLead;
 import com.crm.domain.RemovalRequest;
+import com.crm.domain.FlaggedIdentity;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.ContactEmailRepository;
 import com.crm.repository.ContactRepository;
 import com.crm.repository.EventLeadRepository;
 import com.crm.repository.RemovalRequestRepository;
+import com.crm.repository.FlaggedIdentityRepository;
+import com.crm.service.SuspiciousIdentityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -36,29 +39,37 @@ public class ContactController {
     @Autowired
     private RemovalRequestRepository removalRequestRepository;
 
+    @Autowired
+    private FlaggedIdentityRepository flaggedIdentityRepository;
+
+    @Autowired
+    private SuspiciousIdentityService suspiciousIdentityService;
+
     @GetMapping
     public List<Contact> getAllContacts() {
         return contactRepository.findAll();
     }
 
     @PostMapping
-    public ResponseEntity<Contact> createContact(@RequestBody Contact contact, @RequestParam(required = false) UUID companyId) {
+    public ResponseEntity<Contact> createContact(@RequestBody Contact contact, @RequestParam(required = false) Long companyId) {
         if (companyId != null) {
             Company company = companyRepository.findById(companyId).orElse(null);
             contact.setCompany(company);
         }
-        return ResponseEntity.ok(contactRepository.save(contact));
+        Contact saved = contactRepository.save(contact);
+        suspiciousIdentityService.checkAndFlagContact(saved);
+        return ResponseEntity.ok(saved);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Contact> getContactById(@PathVariable UUID id) {
+    public ResponseEntity<Contact> getContactById(@PathVariable Long id) {
         return contactRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateContact(@PathVariable UUID id, @RequestBody Contact contactDetails, @RequestParam(required = false) UUID companyId) {
+    public ResponseEntity<?> updateContact(@PathVariable Long id, @RequestBody Contact contactDetails, @RequestParam(required = false) Long companyId) {
         return contactRepository.findById(id).map(existing -> {
             existing.setSalutation(contactDetails.getSalutation());
             existing.setFirstName(contactDetails.getFirstName());
@@ -84,12 +95,14 @@ public class ContactController {
                 existing.setCompany(null);
             }
 
-            return ResponseEntity.ok(contactRepository.save(existing));
+            Contact saved = contactRepository.save(existing);
+            suspiciousIdentityService.checkAndFlagContact(saved);
+            return ResponseEntity.ok(saved);
         }).orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteContact(@PathVariable UUID id) {
+    public ResponseEntity<?> deleteContact(@PathVariable Long id) {
         if (contactRepository.existsById(id)) {
             // Delete associated emails
             List<ContactEmail> emails = contactEmailRepository.findAll().stream()
@@ -107,6 +120,12 @@ public class ContactController {
                     .toList();
             removalRequestRepository.deleteAll(removalRequests);
 
+            // Delete associated flagged identities
+            List<FlaggedIdentity> flaggedIdentities = flaggedIdentityRepository.findAll().stream()
+                    .filter(f -> f.getContact() != null && f.getContact().getId().equals(id))
+                    .toList();
+            flaggedIdentityRepository.deleteAll(flaggedIdentities);
+
             contactRepository.deleteById(id);
             return ResponseEntity.noContent().build();
         }
@@ -114,7 +133,7 @@ public class ContactController {
     }
 
     @PostMapping("/{contactId}/emails")
-    public ResponseEntity<?> addContactEmail(@PathVariable UUID contactId, @RequestBody ContactEmail contactEmail) {
+    public ResponseEntity<?> addContactEmail(@PathVariable Long contactId, @RequestBody ContactEmail contactEmail) {
         if (contactEmail.getEmail() == null || contactEmail.getEmail().trim().isEmpty()) {
             return ResponseEntity.badRequest().body("Email address is required");
         }
@@ -127,12 +146,14 @@ public class ContactController {
         return contactRepository.findById(contactId).map(contact -> {
             contactEmail.setContact(contact);
             contactEmail.setEmail(cleanEmail);
-            return ResponseEntity.ok(contactEmailRepository.save(contactEmail));
+            ContactEmail savedEmail = contactEmailRepository.save(contactEmail);
+            suspiciousIdentityService.checkAndFlagContact(contact);
+            return ResponseEntity.ok(savedEmail);
         }).orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/{contactId}/emails")
-    public ResponseEntity<List<ContactEmail>> getContactEmails(@PathVariable UUID contactId) {
+    public ResponseEntity<List<ContactEmail>> getContactEmails(@PathVariable Long contactId) {
         return contactRepository.findById(contactId).map(contact -> {
             List<ContactEmail> emails = contactEmailRepository.findAll().stream()
                     .filter(e -> e.getContact().getId().equals(contactId))
@@ -141,8 +162,17 @@ public class ContactController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/{contactId}/event-leads")
+    public ResponseEntity<?> getContactEventLeads(@PathVariable("contactId") Long contactId) {
+        if (!contactRepository.existsById(contactId)) {
+            return ResponseEntity.notFound().build();
+        }
+        List<EventLead> leads = eventLeadRepository.findByContactId(contactId);
+        return ResponseEntity.ok(leads);
+    }
+
     @PutMapping("/{contactId}/emails/{emailId}")
-    public ResponseEntity<?> updateContactEmail(@PathVariable UUID contactId, @PathVariable UUID emailId, @RequestBody ContactEmail updated) {
+    public ResponseEntity<?> updateContactEmail(@PathVariable Long contactId, @PathVariable Long emailId, @RequestBody ContactEmail updated) {
         return contactEmailRepository.findById(emailId).map(email -> {
             if (updated.getEmail() != null && !updated.getEmail().trim().isEmpty()) {
                 String cleanEmail = updated.getEmail().trim().toLowerCase();
@@ -158,12 +188,16 @@ public class ContactController {
             if (updated.getIsPrimary() != null) {
                 email.setIsPrimary(updated.getIsPrimary());
             }
-            return ResponseEntity.ok(contactEmailRepository.save(email));
+            ContactEmail savedEmail = contactEmailRepository.save(email);
+            if (email.getContact() != null) {
+                suspiciousIdentityService.checkAndFlagContact(email.getContact());
+            }
+            return ResponseEntity.ok(savedEmail);
         }).orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{contactId}/emails/{emailId}")
-    public ResponseEntity<?> deleteContactEmail(@PathVariable UUID contactId, @PathVariable UUID emailId) {
+    public ResponseEntity<?> deleteContactEmail(@PathVariable Long contactId, @PathVariable Long emailId) {
         if (contactEmailRepository.existsById(emailId)) {
             contactEmailRepository.deleteById(emailId);
             return ResponseEntity.noContent().build();

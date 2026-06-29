@@ -13,8 +13,8 @@ import java.util.UUID;
 @Builder
 public class PersonalEmailDomain {
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
-    private UUID id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     @Column(nullable = false, unique = true)
     private String domain;

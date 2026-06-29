@@ -6,5 +6,5 @@ import org.springframework.stereotype.Repository;
 import java.util.UUID;
 
 @Repository
-public interface RemovalRequestRepository extends JpaRepository<RemovalRequest, UUID> {
+public interface RemovalRequestRepository extends JpaRepository<RemovalRequest, Long> {
 }

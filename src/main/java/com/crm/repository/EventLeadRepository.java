@@ -8,8 +8,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface EventLeadRepository extends JpaRepository<EventLead, UUID> {
-    Optional<EventLead> findByEventIdAndContactId(UUID eventId, UUID contactId);
-    List<EventLead> findByEventId(UUID eventId);
-    List<EventLead> findByContactId(UUID contactId);
+public interface EventLeadRepository extends JpaRepository<EventLead, Long> {
+    Optional<EventLead> findByEventIdAndContactId(Long eventId, Long contactId);
+    List<EventLead> findByEventId(Long eventId);
+    List<EventLead> findByContactId(Long contactId);
 }

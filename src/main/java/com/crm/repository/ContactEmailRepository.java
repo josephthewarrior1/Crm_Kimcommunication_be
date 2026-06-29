@@ -7,6 +7,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface ContactEmailRepository extends JpaRepository<ContactEmail, UUID> {
+public interface ContactEmailRepository extends JpaRepository<ContactEmail, Long> {
     Optional<ContactEmail> findByEmail(String email);
 }

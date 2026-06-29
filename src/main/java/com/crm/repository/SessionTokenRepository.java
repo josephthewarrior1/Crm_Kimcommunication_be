@@ -6,5 +6,5 @@ import org.springframework.stereotype.Repository;
 import java.util.UUID;
 
 @Repository
-public interface SessionTokenRepository extends JpaRepository<SessionToken, UUID> {
+public interface SessionTokenRepository extends JpaRepository<SessionToken, Long> {
 }

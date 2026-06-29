@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.UUID;
 
 @Repository
-public interface ContactRepository extends JpaRepository<Contact, UUID> {
+public interface ContactRepository extends JpaRepository<Contact, Long> {
     List<Contact> findByFirstNameIgnoreCaseAndLastNameIgnoreCase(String firstName, String lastName);
+    List<Contact> findByMobilePhone(String mobilePhone);
+    List<Contact> findByNormalizedPhone(String normalizedPhone);
 }

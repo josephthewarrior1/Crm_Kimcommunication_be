@@ -33,7 +33,7 @@ public class EventLeadController {
             return ResponseEntity.badRequest().body("Event not found");
         }
 
-        java.util.List<UUID> contactsToProcess = new java.util.ArrayList<>();
+        java.util.List<Long> contactsToProcess = new java.util.ArrayList<>();
         if (request.getContactIds() != null && !request.getContactIds().isEmpty()) {
             contactsToProcess.addAll(request.getContactIds());
         } else if (request.getContactId() != null) {
@@ -45,7 +45,7 @@ public class EventLeadController {
         }
 
         java.util.List<EventLead> savedLeads = new java.util.ArrayList<>();
-        for (UUID contactId : contactsToProcess) {
+        for (Long contactId : contactsToProcess) {
             Contact contact = contactRepository.findById(contactId).orElse(null);
             if (contact == null) {
                 continue;
@@ -70,7 +70,7 @@ public class EventLeadController {
 
     @PutMapping("/{id}/status")
     public ResponseEntity<?> updateStatus(
-            @PathVariable UUID id,
+            @PathVariable Long id,
             @RequestParam(required = false) String leadStatus,
             @RequestParam(required = false) String attendanceStatus,
             @RequestParam(required = false) String notes) {
@@ -98,9 +98,9 @@ public class EventLeadController {
 
     @lombok.Data
     public static class EventLeadRequest {
-        private UUID eventId;
-        private UUID contactId;
-        private List<UUID> contactIds;
+        private Long eventId;
+        private Long contactId;
+        private List<Long> contactIds;
         private String leadStatus;
         private String attendanceStatus;
         private String notes;

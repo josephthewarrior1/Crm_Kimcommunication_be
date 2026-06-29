@@ -40,14 +40,14 @@ public class EventController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Event> getEventById(@PathVariable UUID id) {
+    public ResponseEntity<Event> getEventById(@PathVariable Long id) {
         return eventRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateEvent(@PathVariable UUID id, @RequestBody Event eventDetails) {
+    public ResponseEntity<?> updateEvent(@PathVariable Long id, @RequestBody Event eventDetails) {
         return eventRepository.findById(id).map(existing -> {
             if (eventDetails.getName() == null || eventDetails.getName().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body("Event name is required");
@@ -70,7 +70,7 @@ public class EventController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteEvent(@PathVariable UUID id) {
+    public ResponseEntity<?> deleteEvent(@PathVariable Long id) {
         if (eventRepository.existsById(id)) {
             // Delete associated event leads
             List<com.crm.domain.EventLead> leads = eventLeadRepository.findByEventId(id);

@@ -41,14 +41,14 @@ public class GroupController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Group> getGroupById(@PathVariable UUID id) {
+    public ResponseEntity<Group> getGroupById(@PathVariable Long id) {
         return groupRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateGroup(@PathVariable UUID id, @RequestBody Group groupDetails) {
+    public ResponseEntity<?> updateGroup(@PathVariable Long id, @RequestBody Group groupDetails) {
         return groupRepository.findById(id).map(existing -> {
             if (groupDetails.getName() == null || groupDetails.getName().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body("Group name is required");
@@ -65,7 +65,7 @@ public class GroupController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteGroup(@PathVariable UUID id) {
+    public ResponseEntity<?> deleteGroup(@PathVariable Long id) {
         if (groupRepository.existsById(id)) {
             // Nullify group_id references in companies
             companyRepository.findAll().stream()

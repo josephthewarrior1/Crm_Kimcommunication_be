@@ -98,6 +98,7 @@ public class AuthController {
         return ResponseEntity.ok(LoginResponse.builder()
                 .token(savedToken.getId().toString())
                 .expiresAt(savedToken.getExpiresAt())
+                .userId(user.getId())
                 .username(user.getUsername())
                 .email(user.getEmail())
                 .fullName(user.getFullName())
@@ -121,14 +122,14 @@ public class AuthController {
         }
 
         try {
-            UUID tokenUuid = UUID.fromString(tokenStr.trim());
-            if (sessionTokenRepository.existsById(tokenUuid)) {
-                sessionTokenRepository.deleteById(tokenUuid);
+            Long tokenLong = Long.parseLong(tokenStr.trim());
+            if (sessionTokenRepository.existsById(tokenLong)) {
+                sessionTokenRepository.deleteById(tokenLong);
                 return ResponseEntity.ok("Logged out successfully");
             } else {
                 return ResponseEntity.ok("Session not found or already logged out");
             }
-        } catch (IllegalArgumentException e) {
+        } catch (NumberFormatException e) {
             return ResponseEntity.badRequest().body("Invalid token format");
         }
     }
@@ -152,6 +153,7 @@ public class AuthController {
     public static class LoginResponse {
         private String token;
         private LocalDateTime expiresAt;
+        private Long userId;
         private String username;
         private String email;
         private String fullName;

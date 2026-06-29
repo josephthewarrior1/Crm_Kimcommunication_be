@@ -27,6 +27,9 @@ public class ExcelImportController {
     @Autowired
     private ContactEmailRepository contactEmailRepository;
 
+    @Autowired
+    private com.crm.service.SuspiciousIdentityService suspiciousIdentityService;
+
     @PostMapping("/import")
     public ResponseEntity<?> importContacts(@RequestParam("file") MultipartFile file) {
         if (file.isEmpty()) {
@@ -119,16 +122,45 @@ public class ExcelImportController {
                     }
                 }
 
-                // 3. Resolve Contact
+                // 3. Resolve Contact (Must match name to be a duplicate/update target)
                 Contact contact = null;
-                // Find matches by name
-                List<Contact> matches = contactRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
-                final Company finalCompany = company;
-                contact = matches.stream()
-                        .filter(c -> (finalCompany == null && c.getCompany() == null) || 
-                                     (finalCompany != null && c.getCompany() != null && c.getCompany().getId().equals(finalCompany.getId())))
-                        .findFirst()
-                        .orElse(null);
+                List<Contact> nameMatches = contactRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
+                for (Contact c : nameMatches) {
+                    boolean companyMatch = (company == null && c.getCompany() == null) || 
+                                           (company != null && c.getCompany() != null && c.getCompany().getId().equals(company.getId()));
+                    
+                    boolean phoneMatch = false;
+                    if (!mobilePhone.isEmpty()) {
+                        String normPhone = "+62" + mobilePhone.replaceAll("^0", "");
+                        phoneMatch = (c.getNormalizedPhone() != null && c.getNormalizedPhone().equals(normPhone)) ||
+                                     (c.getMobilePhone() != null && c.getMobilePhone().equals(mobilePhone));
+                    }
+                    
+                    boolean emailMatch = false;
+                    if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
+                        final Long contactId = c.getId();
+                        List<ContactEmail> cEmails = contactEmailRepository.findAll().stream()
+                            .filter(e -> e.getContact() != null && e.getContact().getId().equals(contactId))
+                            .toList();
+                        for (ContactEmail ce : cEmails) {
+                            if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
+                                emailMatch = true;
+                            }
+                            if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
+                                emailMatch = true;
+                            }
+                        }
+                    }
+                    
+                    if (companyMatch || phoneMatch || emailMatch) {
+                        contact = c;
+                        break;
+                    }
+                }
+
+                if (contact == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
+                    contact = nameMatches.get(0);
+                }
 
                 if (contact == null) {
                     contact = Contact.builder()
@@ -205,6 +237,7 @@ public class ExcelImportController {
                             contactEmailRepository.save(pe);
                         }
                     }
+                    suspiciousIdentityService.checkAndFlagContact(contact);
                 }
                 successCount++;
             }
@@ -213,6 +246,192 @@ public class ExcelImportController {
                 "message", "Excel data imported successfully",
                 "count", successCount
             ));
+            
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "message", "Failed to parse Excel file",
+                "error", e.getMessage()
+            ));
+        }
+    }
+
+    @PostMapping("/import/preview")
+    public ResponseEntity<?> previewImport(@RequestParam("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
+        }
+
+        try (InputStream is = file.getInputStream();
+             Workbook workbook = new XSSFWorkbook(is)) {
+            
+            Sheet sheet = workbook.getSheetAt(0);
+            int lastRowNum = sheet.getLastRowNum();
+            
+            List<RowPreview> previews = new ArrayList<>();
+            int newCount = 0;
+            int duplicateCount = 0;
+            int totalValid = 0;
+            
+            for (int r = 1; r <= lastRowNum; r++) {
+                Row row = sheet.getRow(r);
+                if (row == null) {
+                    continue;
+                }
+
+                String groupName = getCellValueAsString(row.getCell(1)).trim();
+                String brandName = getCellValueAsString(row.getCell(2)).trim();
+                String companyName = cleanCompanyName(getCellValueAsString(row.getCell(3)).trim());
+                String salutation = getCellValueAsString(row.getCell(4)).trim();
+                String firstName = getCellValueAsString(row.getCell(5)).trim();
+                String lastName = getCellValueAsString(row.getCell(6)).trim();
+                String positionStr = getCellValueAsString(row.getCell(7)).trim();
+                String jobTitle = getCellValueAsString(row.getCell(9)).trim();
+                String companyEmail = getCellValueAsString(row.getCell(13)).trim();
+                String personalEmail = getCellValueAsString(row.getCell(14)).trim();
+                String mobilePhone = getCellValueAsString(row.getCell(12)).trim();
+
+                // Validate minimum requirements: First Name and Last Name
+                if (firstName.isEmpty() && lastName.isEmpty()) {
+                    continue; // Skip blank rows
+                }
+                
+                totalValid++;
+
+                // Check duplicate contact in DB
+                Company company = null;
+                if (!companyName.isEmpty()) {
+                    company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
+                }
+
+                Contact existingContact = null;
+                boolean matchedByPhone = false;
+                List<Contact> nameMatches = contactRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
+                for (Contact c : nameMatches) {
+                    boolean companyMatch = (company == null && c.getCompany() == null) || 
+                                           (company != null && c.getCompany() != null && c.getCompany().getId().equals(company.getId()));
+                    
+                    boolean phoneMatch = false;
+                    if (!mobilePhone.isEmpty()) {
+                        String normPhone = "+62" + mobilePhone.replaceAll("^0", "");
+                        phoneMatch = (c.getNormalizedPhone() != null && c.getNormalizedPhone().equals(normPhone)) ||
+                                     (c.getMobilePhone() != null && c.getMobilePhone().equals(mobilePhone));
+                    }
+                    
+                    boolean emailMatch = false;
+                    if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
+                        final Long contactId = c.getId();
+                        List<ContactEmail> cEmails = contactEmailRepository.findAll().stream()
+                            .filter(e -> e.getContact() != null && e.getContact().getId().equals(contactId))
+                            .toList();
+                        for (ContactEmail ce : cEmails) {
+                            if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
+                                emailMatch = true;
+                            }
+                            if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
+                                emailMatch = true;
+                            }
+                        }
+                    }
+                    
+                    if (companyMatch || phoneMatch || emailMatch) {
+                        existingContact = c;
+                        if (phoneMatch) {
+                            matchedByPhone = true;
+                        }
+                        break;
+                    }
+                }
+
+                if (existingContact == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
+                    existingContact = nameMatches.get(0);
+                }
+
+                // Check if phone or email is shared/used by a DIFFERENT contact name (tikus warning candidate)
+                boolean phoneShared = false;
+                String sharedContactName = "";
+                if (!mobilePhone.isEmpty()) {
+                    String normPhone = "+62" + mobilePhone.replaceAll("^0", "");
+                    Contact otherPhoneContact = contactRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null);
+                    if (otherPhoneContact == null) {
+                        otherPhoneContact = contactRepository.findByMobilePhone(mobilePhone).stream().findFirst().orElse(null);
+                    }
+                    if (otherPhoneContact != null && (existingContact == null || !existingContact.getId().equals(otherPhoneContact.getId()))) {
+                        phoneShared = true;
+                        sharedContactName = otherPhoneContact.getFirstName() + " " + otherPhoneContact.getLastName();
+                    }
+                }
+
+                boolean emailShared = false;
+                String sharedEmailContactName = "";
+                if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
+                    String emailToCheck = companyEmail.isEmpty() ? personalEmail : companyEmail;
+                    ContactEmail otherEmailRecord = contactEmailRepository.findByEmail(emailToCheck.toLowerCase()).stream().findFirst().orElse(null);
+                    if (otherEmailRecord != null && otherEmailRecord.getContact() != null) {
+                        Contact other = otherEmailRecord.getContact();
+                        if (existingContact == null || !existingContact.getId().equals(other.getId())) {
+                            emailShared = true;
+                            sharedEmailContactName = other.getFirstName() + " " + other.getLastName();
+                        }
+                    }
+                }
+
+                // Also check if emails are already used
+                boolean emailDuplicate = false;
+                String duplicateMsg = "";
+                if (!companyEmail.isEmpty()) {
+                    if (contactEmailRepository.findByEmail(companyEmail.toLowerCase()).isPresent()) {
+                        emailDuplicate = true;
+                        duplicateMsg = "Company email already exists";
+                    }
+                }
+                if (!personalEmail.isEmpty()) {
+                    if (contactEmailRepository.findByEmail(personalEmail.toLowerCase()).isPresent()) {
+                        emailDuplicate = true;
+                        duplicateMsg = duplicateMsg.isEmpty() ? "Personal email already exists" : "Both emails already exist";
+                    }
+                }
+
+                String status = "NEW";
+                String message = "Will be created as a new contact";
+                
+                if (existingContact != null) {
+                    status = "DUPLICATE";
+                    message = matchedByPhone 
+                        ? "Contact already exists (phone matched). Details will be updated."
+                        : "Contact already exists. Details will be updated.";
+                    duplicateCount++;
+                } else if (emailDuplicate && !emailShared) {
+                    status = "DUPLICATE";
+                    message = "Email duplicate: " + duplicateMsg + ". Details will be updated.";
+                    duplicateCount++;
+                } else {
+                    newCount++;
+                    if (phoneShared) {
+                        message = "Will be created. Warning: Phone number is identical to contact '" + sharedContactName + "' (Tikus candidate).";
+                    } else if (emailShared) {
+                        message = "Will be created. Warning: Email is identical to contact '" + sharedEmailContactName + "' (Tikus candidate).";
+                    }
+                }
+
+                previews.add(RowPreview.builder()
+                        .rowNum(r)
+                        .groupName(groupName)
+                        .companyName(companyName)
+                        .firstName(firstName)
+                        .lastName(lastName)
+                        .jobTitle(jobTitle)
+                        .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
+                        .status(status)
+                        .message(message)
+                        .build());
+            }
+            
+            return ResponseEntity.ok(ImportPreviewResponse.builder()
+                    .totalRows(totalValid)
+                    .newCount(newCount)
+                    .duplicateCount(duplicateCount)
+                    .rows(previews)
+                    .build());
             
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of(
@@ -272,5 +491,28 @@ public class ExcelImportController {
             return "PT " + base;
         }
         return name;
+    }
+
+    @lombok.Data
+    @lombok.Builder
+    public static class ImportPreviewResponse {
+        private int totalRows;
+        private int newCount;
+        private int duplicateCount;
+        private List<RowPreview> rows;
+    }
+
+    @lombok.Data
+    @lombok.Builder
+    public static class RowPreview {
+        private int rowNum;
+        private String groupName;
+        private String companyName;
+        private String firstName;
+        private String lastName;
+        private String jobTitle;
+        private String email;
+        private String status;
+        private String message;
     }
 }

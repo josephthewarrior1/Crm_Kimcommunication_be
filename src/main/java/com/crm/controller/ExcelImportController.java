@@ -30,8 +30,21 @@ public class ExcelImportController {
     @Autowired
     private com.crm.service.SuspiciousIdentityService suspiciousIdentityService;
 
+    @Autowired
+    private com.crm.service.SecurityHelper securityHelper;
+
     @PostMapping("/import")
-    public ResponseEntity<?> importContacts(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<?> importContacts(
+            @RequestParam("file") MultipartFile file,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body(Map.of("message", "Forbidden: Only ADMIN or MANAGER can import contacts"));
+        }
+
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }

@@ -2,14 +2,15 @@ package com.crm.controller;
 
 import com.crm.domain.Company;
 import com.crm.domain.Group;
+import com.crm.domain.Role;
+import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.GroupRepository;
 import com.crm.repository.ContactRepository;
+import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/companies")
@@ -24,13 +25,31 @@ public class CompanyController {
     @Autowired
     private ContactRepository contactRepository;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     @GetMapping
-    public List<Company> getAllCompanies() {
-        return companyRepository.findAll();
+    public ResponseEntity<?> getAllCompanies(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(companyRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<?> createCompany(@RequestBody Company company, @RequestParam(required = false) Long groupId) {
+    public ResponseEntity<?> createCompany(
+            @RequestBody Company company, 
+            @RequestParam(required = false) Long groupId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can create companies");
+        }
+
         if (company.getName() == null || company.getName().trim().isEmpty()) {
             return ResponseEntity.badRequest().body("Company name is required");
         }
@@ -49,14 +68,33 @@ public class CompanyController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Company> getCompanyById(@PathVariable Long id) {
+    public ResponseEntity<?> getCompanyById(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         return companyRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateCompany(@PathVariable Long id, @RequestBody Company companyDetails, @RequestParam(required = false) Long groupId) {
+    public ResponseEntity<?> updateCompany(
+            @PathVariable Long id, 
+            @RequestBody Company companyDetails, 
+            @RequestParam(required = false) Long groupId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can update companies");
+        }
+
         return companyRepository.findById(id).map(existing -> {
             if (companyDetails.getName() == null || companyDetails.getName().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body("Company name is required");
@@ -92,7 +130,17 @@ public class CompanyController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteCompany(@PathVariable Long id) {
+    public ResponseEntity<?> deleteCompany(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can delete companies");
+        }
+
         if (companyRepository.existsById(id)) {
             // Nullify company references in contacts
             contactRepository.findAll().stream()

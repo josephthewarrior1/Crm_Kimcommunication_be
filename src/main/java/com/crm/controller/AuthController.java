@@ -13,6 +13,9 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.crm.service.SecurityHelper;
+import com.crm.domain.Role;
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -23,10 +26,27 @@ public class AuthController {
     @Autowired
     private SessionTokenRepository sessionTokenRepository;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
+    public ResponseEntity<?> register(
+            @RequestBody RegisterRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        
+        long userCount = userRepository.count();
+        if (userCount > 0) {
+            AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+            if (currentUser == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Unauthorized: Registering new accounts requires an admin session");
+            }
+            if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden: Only ADMIN users can register new accounts");
+            }
+        }
+
         if (request.getUsername() == null || request.getUsername().trim().isEmpty() ||
             request.getEmail() == null || request.getEmail().trim().isEmpty() ||
             request.getPassword() == null || request.getPassword().trim().isEmpty()) {
@@ -44,11 +64,30 @@ public class AuthController {
             return ResponseEntity.badRequest().body("Email is already registered");
         }
 
+        java.util.Set<com.crm.domain.Role> roles = new java.util.HashSet<>();
+        if (request.getRoles() != null && !request.getRoles().isEmpty()) {
+            for (String rStr : request.getRoles()) {
+                try {
+                    roles.add(com.crm.domain.Role.valueOf(rStr.toUpperCase().trim()));
+                } catch (IllegalArgumentException e) {
+                    // Ignore invalid roles
+                }
+            }
+        }
+        if (roles.isEmpty()) {
+            if (userRepository.count() == 0) {
+                roles.add(com.crm.domain.Role.ADMIN);
+            } else {
+                roles.add(com.crm.domain.Role.USER);
+            }
+        }
+
         AppUser user = AppUser.builder()
                 .username(username)
                 .email(email)
                 .fullName(request.getFullName() != null ? request.getFullName().trim() : username)
                 .password(passwordEncoder.encode(request.getPassword()))
+                .roles(roles)
                 .build();
 
         AppUser savedUser = userRepository.save(user);
@@ -83,6 +122,19 @@ public class AuthController {
 
         AppUser user = userOpt.get();
 
+        // If user has no roles assigned yet (from schema migration), assign defaults
+        if (user.getRoles() == null || user.getRoles().isEmpty()) {
+            java.util.Set<com.crm.domain.Role> fallbackRoles = new java.util.HashSet<>();
+            java.util.List<AppUser> allUsers = userRepository.findAll();
+            if (!allUsers.isEmpty() && allUsers.get(0).getId().equals(user.getId())) {
+                fallbackRoles.add(com.crm.domain.Role.ADMIN);
+            } else {
+                fallbackRoles.add(com.crm.domain.Role.USER);
+            }
+            user.setRoles(fallbackRoles);
+            user = userRepository.save(user);
+        }
+
         // Check password matching
         if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid username/email or password");
@@ -102,6 +154,7 @@ public class AuthController {
                 .username(user.getUsername())
                 .email(user.getEmail())
                 .fullName(user.getFullName())
+                .roles(user.getRoles().stream().map(Enum::name).collect(java.util.stream.Collectors.toSet()))
                 .build());
     }
 
@@ -140,6 +193,7 @@ public class AuthController {
         private String email;
         private String fullName;
         private String password;
+        private java.util.List<String> roles;
     }
 
     @lombok.Data
@@ -157,5 +211,6 @@ public class AuthController {
         private String username;
         private String email;
         private String fullName;
+        private java.util.Set<String> roles;
     }
 }

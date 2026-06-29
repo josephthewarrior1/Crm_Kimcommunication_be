@@ -4,13 +4,15 @@ import com.crm.domain.Contact;
 import com.crm.domain.RemovalReason;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.RemovalStatus;
+import com.crm.domain.Role;
+import com.crm.domain.AppUser;
 import com.crm.repository.ContactRepository;
 import com.crm.repository.RemovalRequestRepository;
+import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/removal-requests")
@@ -22,13 +24,33 @@ public class RemovalRequestController {
     @Autowired
     private ContactRepository contactRepository;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     @GetMapping
-    public List<RemovalRequest> getAllRemovalRequests() {
-        return removalRequestRepository.findAll();
+    public ResponseEntity<?> getAllRemovalRequests(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized: Invalid session");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN users can audit opt-out requests");
+        }
+        return ResponseEntity.ok(removalRequestRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<?> createRemovalRequest(@RequestBody RemovalRequestDto request) {
+    public ResponseEntity<?> createRemovalRequest(
+            @RequestBody RemovalRequestDto request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can request opt-outs");
+        }
+
         Contact contact = contactRepository.findById(request.getContactId()).orElse(null);
         if (contact == null) {
             return ResponseEntity.badRequest().body("Contact not found");
@@ -54,7 +76,18 @@ public class RemovalRequestController {
     }
 
     @PutMapping("/{id}/status")
-    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestParam String status) {
+    public ResponseEntity<?> updateStatus(
+            @PathVariable Long id, 
+            @RequestParam String status,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can approve/reject opt-outs");
+        }
+
         return removalRequestRepository.findById(id).map(req -> {
             try {
                 RemovalStatus newStatus = RemovalStatus.valueOf(status);

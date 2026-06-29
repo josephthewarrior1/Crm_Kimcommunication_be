@@ -1,13 +1,15 @@
 package com.crm.controller;
 
 import com.crm.domain.Event;
+import com.crm.domain.Role;
+import com.crm.domain.AppUser;
 import com.crm.repository.EventRepository;
 import com.crm.repository.EventLeadRepository;
+import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/events")
@@ -19,13 +21,30 @@ public class EventController {
     @Autowired
     private EventLeadRepository eventLeadRepository;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     @GetMapping
-    public List<Event> getAllEvents() {
-        return eventRepository.findAll();
+    public ResponseEntity<?> getAllEvents(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(eventRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<?> createEvent(@RequestBody Event event) {
+    public ResponseEntity<?> createEvent(
+            @RequestBody Event event,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can create events");
+        }
+
         if (event.getName() == null || event.getName().trim().isEmpty()) {
             return ResponseEntity.badRequest().body("Event name is required");
         }
@@ -40,14 +59,32 @@ public class EventController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Event> getEventById(@PathVariable Long id) {
+    public ResponseEntity<?> getEventById(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         return eventRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateEvent(@PathVariable Long id, @RequestBody Event eventDetails) {
+    public ResponseEntity<?> updateEvent(
+            @PathVariable Long id, 
+            @RequestBody Event eventDetails,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can update events");
+        }
+
         return eventRepository.findById(id).map(existing -> {
             if (eventDetails.getName() == null || eventDetails.getName().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body("Event name is required");
@@ -70,7 +107,17 @@ public class EventController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteEvent(@PathVariable Long id) {
+    public ResponseEntity<?> deleteEvent(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can delete events");
+        }
+
         if (eventRepository.existsById(id)) {
             // Delete associated event leads
             List<com.crm.domain.EventLead> leads = eventLeadRepository.findByEventId(id);

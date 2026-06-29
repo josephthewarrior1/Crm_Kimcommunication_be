@@ -2,11 +2,11 @@ package com.crm.controller;
 
 import com.crm.domain.*;
 import com.crm.repository.*;
+import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/event-leads")
@@ -21,13 +21,27 @@ public class EventLeadController {
     @Autowired
     private ContactRepository contactRepository;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     @GetMapping
-    public List<EventLead> getAllEventLeads() {
-        return eventLeadRepository.findAll();
+    public ResponseEntity<?> getAllEventLeads(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(eventLeadRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<?> createEventLead(@RequestBody EventLeadRequest request) {
+    public ResponseEntity<?> createEventLead(
+            @RequestBody EventLeadRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         Event event = eventRepository.findById(request.getEventId()).orElse(null);
         if (event == null) {
             return ResponseEntity.badRequest().body("Event not found");
@@ -73,7 +87,13 @@ public class EventLeadController {
             @PathVariable Long id,
             @RequestParam(required = false) String leadStatus,
             @RequestParam(required = false) String attendanceStatus,
-            @RequestParam(required = false) String notes) {
+            @RequestParam(required = false) String notes,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         return eventLeadRepository.findById(id).map(lead -> {
             if (leadStatus != null) {
                 try {

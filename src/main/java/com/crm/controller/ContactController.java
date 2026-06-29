@@ -6,6 +6,8 @@ import com.crm.domain.ContactEmail;
 import com.crm.domain.EventLead;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.FlaggedIdentity;
+import com.crm.domain.Role;
+import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.ContactEmailRepository;
 import com.crm.repository.ContactRepository;
@@ -13,11 +15,11 @@ import com.crm.repository.EventLeadRepository;
 import com.crm.repository.RemovalRequestRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SuspiciousIdentityService;
+import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
-import java.util.UUID;
 import java.util.Optional;
 
 @RestController
@@ -45,13 +47,31 @@ public class ContactController {
     @Autowired
     private SuspiciousIdentityService suspiciousIdentityService;
 
+    @Autowired
+    private SecurityHelper securityHelper;
+
     @GetMapping
-    public List<Contact> getAllContacts() {
-        return contactRepository.findAll();
+    public ResponseEntity<?> getAllContacts(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(contactRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<Contact> createContact(@RequestBody Contact contact, @RequestParam(required = false) Long companyId) {
+    public ResponseEntity<?> createContact(
+            @RequestBody Contact contact, 
+            @RequestParam(required = false) Long companyId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can create contacts");
+        }
+
         if (companyId != null) {
             Company company = companyRepository.findById(companyId).orElse(null);
             contact.setCompany(company);
@@ -62,14 +82,32 @@ public class ContactController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Contact> getContactById(@PathVariable Long id) {
+    public ResponseEntity<?> getContactById(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
         return contactRepository.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateContact(@PathVariable Long id, @RequestBody Contact contactDetails, @RequestParam(required = false) Long companyId) {
+    public ResponseEntity<?> updateContact(
+            @PathVariable Long id, 
+            @RequestBody Contact contactDetails, 
+            @RequestParam(required = false) Long companyId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can update contacts");
+        }
+
         return contactRepository.findById(id).map(existing -> {
             existing.setSalutation(contactDetails.getSalutation());
             existing.setFirstName(contactDetails.getFirstName());
@@ -102,7 +140,17 @@ public class ContactController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteContact(@PathVariable Long id) {
+    public ResponseEntity<?> deleteContact(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can delete contacts");
+        }
+
         if (contactRepository.existsById(id)) {
             // Delete associated emails
             List<ContactEmail> emails = contactEmailRepository.findAll().stream()
@@ -133,7 +181,18 @@ public class ContactController {
     }
 
     @PostMapping("/{contactId}/emails")
-    public ResponseEntity<?> addContactEmail(@PathVariable Long contactId, @RequestBody ContactEmail contactEmail) {
+    public ResponseEntity<?> addContactEmail(
+            @PathVariable Long contactId, 
+            @RequestBody ContactEmail contactEmail,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can add emails");
+        }
+
         if (contactEmail.getEmail() == null || contactEmail.getEmail().trim().isEmpty()) {
             return ResponseEntity.badRequest().body("Email address is required");
         }
@@ -153,7 +212,14 @@ public class ContactController {
     }
 
     @GetMapping("/{contactId}/emails")
-    public ResponseEntity<List<ContactEmail>> getContactEmails(@PathVariable Long contactId) {
+    public ResponseEntity<?> getContactEmails(
+            @PathVariable Long contactId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         return contactRepository.findById(contactId).map(contact -> {
             List<ContactEmail> emails = contactEmailRepository.findAll().stream()
                     .filter(e -> e.getContact().getId().equals(contactId))
@@ -163,7 +229,14 @@ public class ContactController {
     }
 
     @GetMapping("/{contactId}/event-leads")
-    public ResponseEntity<?> getContactEventLeads(@PathVariable("contactId") Long contactId) {
+    public ResponseEntity<?> getContactEventLeads(
+            @PathVariable("contactId") Long contactId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
         if (!contactRepository.existsById(contactId)) {
             return ResponseEntity.notFound().build();
         }
@@ -172,7 +245,19 @@ public class ContactController {
     }
 
     @PutMapping("/{contactId}/emails/{emailId}")
-    public ResponseEntity<?> updateContactEmail(@PathVariable Long contactId, @PathVariable Long emailId, @RequestBody ContactEmail updated) {
+    public ResponseEntity<?> updateContactEmail(
+            @PathVariable Long contactId, 
+            @PathVariable Long emailId, 
+            @RequestBody ContactEmail updated,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can edit emails");
+        }
+
         return contactEmailRepository.findById(emailId).map(email -> {
             if (updated.getEmail() != null && !updated.getEmail().trim().isEmpty()) {
                 String cleanEmail = updated.getEmail().trim().toLowerCase();
@@ -197,7 +282,18 @@ public class ContactController {
     }
 
     @DeleteMapping("/{contactId}/emails/{emailId}")
-    public ResponseEntity<?> deleteContactEmail(@PathVariable Long contactId, @PathVariable Long emailId) {
+    public ResponseEntity<?> deleteContactEmail(
+            @PathVariable Long contactId, 
+            @PathVariable Long emailId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can delete emails");
+        }
+
         if (contactEmailRepository.existsById(emailId)) {
             contactEmailRepository.deleteById(emailId);
             return ResponseEntity.noContent().build();
@@ -205,4 +301,3 @@ public class ContactController {
         return ResponseEntity.notFound().build();
     }
 }
-

@@ -4,7 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
-import java.util.UUID;
+import java.util.Set;
+import java.util.HashSet;
 
 @Entity
 @Table(name = "app_users")
@@ -30,6 +31,13 @@ public class AppUser {
 
     @Column(nullable = false)
     private String password;
+
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
+    @Enumerated(EnumType.STRING)
+    @Column(name = "role")
+    @Builder.Default
+    private Set<Role> roles = new HashSet<>();
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

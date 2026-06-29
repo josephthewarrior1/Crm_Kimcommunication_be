@@ -63,27 +63,29 @@ public class ExcelImportController {
                 }
 
                 // Get values from row columns
-                String groupName = getCellValueAsString(row.getCell(1)).trim();
-                String brandName = getCellValueAsString(row.getCell(2)).trim();
-                String companyName = cleanCompanyName(getCellValueAsString(row.getCell(3)).trim());
-                String salutation = getCellValueAsString(row.getCell(4)).trim();
-                String firstName = getCellValueAsString(row.getCell(5)).trim();
-                String lastName = getCellValueAsString(row.getCell(6)).trim();
-                String positionStr = getCellValueAsString(row.getCell(7)).trim();
-                String specialityDivision = getCellValueAsString(row.getCell(8)).trim();
-                String jobTitle = getCellValueAsString(row.getCell(9)).trim();
-                String address = getCellValueAsString(row.getCell(10)).trim();
-                String officePhone = getCellValueAsString(row.getCell(11)).trim();
-                String mobilePhone = getCellValueAsString(row.getCell(12)).trim();
-                String companyEmail = getCellValueAsString(row.getCell(13)).trim();
-                String personalEmail = getCellValueAsString(row.getCell(14)).trim();
-                String industry = getCellValueAsString(row.getCell(15)).trim();
-                String sizeRevenue = getCellValueAsString(row.getCell(16)).trim();
-                String sizeEmployee = getCellValueAsString(row.getCell(17)).trim();
-                String hardware = getCellValueAsString(row.getCell(18)).trim();
-                String linkedinUrl = getCellValueAsString(row.getCell(19)).trim();
-                String city = getCellValueAsString(row.getCell(20)).trim();
-                String website = getCellValueAsString(row.getCell(21)).trim();
+                // normalizeField() converts placeholders like "-", "N/A", "none" to empty string
+                // so they are never treated as real phone/email data.
+                String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
+                String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
+                String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
+                String salutation = normalizeField(getCellValueAsString(row.getCell(4)));
+                String firstName = normalizeField(getCellValueAsString(row.getCell(5)));
+                String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
+                String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
+                String specialityDivision = normalizeField(getCellValueAsString(row.getCell(8)));
+                String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
+                String address = normalizeField(getCellValueAsString(row.getCell(10)));
+                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
+                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
+                String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
+                String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
+                String industry = normalizeField(getCellValueAsString(row.getCell(15)));
+                String sizeRevenue = normalizeField(getCellValueAsString(row.getCell(16)));
+                String sizeEmployee = normalizeField(getCellValueAsString(row.getCell(17)));
+                String hardware = normalizeField(getCellValueAsString(row.getCell(18)));
+                String linkedinUrl = normalizeField(getCellValueAsString(row.getCell(19)));
+                String city = normalizeField(getCellValueAsString(row.getCell(20)));
+                String website = normalizeField(getCellValueAsString(row.getCell(21)));
 
                 // Validate minimum requirements: First Name and Last Name
                 if (firstName.isEmpty() && lastName.isEmpty()) {
@@ -291,17 +293,18 @@ public class ExcelImportController {
                     continue;
                 }
 
-                String groupName = getCellValueAsString(row.getCell(1)).trim();
-                String brandName = getCellValueAsString(row.getCell(2)).trim();
-                String companyName = cleanCompanyName(getCellValueAsString(row.getCell(3)).trim());
-                String salutation = getCellValueAsString(row.getCell(4)).trim();
-                String firstName = getCellValueAsString(row.getCell(5)).trim();
-                String lastName = getCellValueAsString(row.getCell(6)).trim();
-                String positionStr = getCellValueAsString(row.getCell(7)).trim();
-                String jobTitle = getCellValueAsString(row.getCell(9)).trim();
-                String companyEmail = getCellValueAsString(row.getCell(13)).trim();
-                String personalEmail = getCellValueAsString(row.getCell(14)).trim();
-                String mobilePhone = getCellValueAsString(row.getCell(12)).trim();
+                // normalizeField() converts placeholders like "-", "N/A", "none" to empty string
+                String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
+                String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
+                String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
+                String salutation = normalizeField(getCellValueAsString(row.getCell(4)));
+                String firstName = normalizeField(getCellValueAsString(row.getCell(5)));
+                String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
+                String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
+                String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
+                String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
+                String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
+                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
 
                 // Validate minimum requirements: First Name and Last Name
                 if (firstName.isEmpty() && lastName.isEmpty()) {
@@ -504,6 +507,52 @@ public class ExcelImportController {
             return "PT " + base;
         }
         return name;
+    }
+
+    /**
+     * Normalizes a field value: returns empty string if the value is a
+     * placeholder sentinel such as "-", "--", "N/A", "na", "none", "null",
+     * or any string that consists solely of dashes/hyphens.
+     * This prevents placeholder values from being treated as real data,
+     * which would cause false duplicate detection and erroneous tikus flagging.
+     */
+    private String normalizeField(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return "";
+        // Strings that are only dashes/hyphens (e.g. "-", "--", "---")
+        if (trimmed.matches("^-+$")) return "";
+        // Common placeholder literals (case-insensitive)
+        switch (trimmed.toLowerCase()) {
+            case "n/a":
+            case "na":
+            case "none":
+            case "null":
+            case "tidak ada":
+            case "kosong":
+                return "";
+            default:
+                return trimmed;
+        }
+    }
+
+    /**
+     * Cleans and normalizes phone number fields.
+     * Extracts only the digits to check if it's a placeholder (like "+62", "(+62)", "0", etc.).
+     * Returns empty string if no valid subscriber digits are found.
+     */
+    private String cleanPhone(String value) {
+        String normalized = normalizeField(value);
+        if (normalized.isEmpty()) return "";
+        
+        // Strip everything except digits
+        String digits = normalized.replaceAll("[^0-9]", "");
+        
+        // If it contains no digits, or just country code/zero placeholders (e.g. "62", "0")
+        if (digits.isEmpty() || digits.equals("62") || digits.equals("0")) {
+            return "";
+        }
+        return normalized;
     }
 
     @lombok.Data

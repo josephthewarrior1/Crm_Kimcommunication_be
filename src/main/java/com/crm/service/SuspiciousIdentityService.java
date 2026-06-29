@@ -27,8 +27,8 @@ public class SuspiciousIdentityService {
         }
 
         // 1. Auto-flag duplicate phone with different name
-        String phone = contact.getMobilePhone();
-        if (phone != null && !phone.trim().isEmpty()) {
+        String phone = cleanPhone(contact.getMobilePhone());
+        if (!phone.isEmpty()) {
             String normalized = "+62" + phone.trim().replaceAll("^0", "");
             List<Contact> matchedContacts = contactRepository.findByNormalizedPhone(normalized);
             
@@ -88,8 +88,8 @@ public class SuspiciousIdentityService {
                 .toList();
 
         for (ContactEmail ce : contactEmails) {
-            String emailStr = ce.getEmail();
-            if (emailStr != null && !emailStr.trim().isEmpty()) {
+            String emailStr = normalizeField(ce.getEmail());
+            if (!emailStr.isEmpty()) {
                 List<ContactEmail> matchedEmails = contactEmailRepository.findAll().stream()
                         .filter(e -> e.getEmail().equalsIgnoreCase(emailStr) && e.getContact() != null && !e.getContact().getId().equals(contact.getId()))
                         .toList();
@@ -142,5 +142,50 @@ public class SuspiciousIdentityService {
                 }
             }
         }
+    }
+
+    /**
+     * Normalizes a field value to empty string if it is a placeholder sentinel
+     * such as "-", "--", "N/A", "na", "none", "null".
+     * Prevents placeholders from being treated as real phone/email data
+     * and causing false tikus flags.
+     */
+    private String normalizeField(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return "";
+        // Strings that are only dashes/hyphens (e.g. "-", "--", "---")
+        if (trimmed.matches("^-+$")) return "";
+        // Common placeholder literals (case-insensitive)
+        switch (trimmed.toLowerCase()) {
+            case "n/a":
+            case "na":
+            case "none":
+            case "null":
+            case "tidak ada":
+            case "kosong":
+                return "";
+            default:
+                return trimmed;
+        }
+    }
+
+    /**
+     * Cleans and normalizes phone number fields.
+     * Extracts only the digits to check if it's a placeholder (like "+62", "(+62)", "0", etc.).
+     * Returns empty string if no valid subscriber digits are found.
+     */
+    private String cleanPhone(String value) {
+        String normalized = normalizeField(value);
+        if (normalized.isEmpty()) return "";
+        
+        // Strip everything except digits
+        String digits = normalized.replaceAll("[^0-9]", "");
+        
+        // If it contains no digits, or just country code/zero placeholders (e.g. "62", "0")
+        if (digits.isEmpty() || digits.equals("62") || digits.equals("0")) {
+            return "";
+        }
+        return normalized;
     }
 }

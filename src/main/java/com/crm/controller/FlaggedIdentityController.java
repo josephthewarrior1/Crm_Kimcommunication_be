@@ -25,9 +25,6 @@ public class FlaggedIdentityController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
-            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can view flagged identities");
-        }
         return ResponseEntity.ok(flaggedIdentityRepository.findAll());
     }
 

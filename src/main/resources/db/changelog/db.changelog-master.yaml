@@ -5,3 +5,6 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-roles.yml
   - include:
       file: db/changelog/changes/changelog-crm-lead-qualification.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-reminders.yml
+

@@ -43,6 +43,23 @@ public class EventLead {
     @Column(name = "lead_category")
     private String leadCategory;
 
+    @Column(name = "reminder_h7")
+    private String reminderH7;
+
+    @Column(name = "reminder_h3")
+    private String reminderH3;
+
+    @Column(name = "reminder_hari_h")
+    private String reminderHariH;
+
+    @Column(name = "reminder_h1")
+    private String reminderH1;
+
+
+    @Column(name = "confirmation_status")
+    @Builder.Default
+    private String confirmationStatus = "pending";
+
     @Column(name = "call_status")
     private String callStatus;
 

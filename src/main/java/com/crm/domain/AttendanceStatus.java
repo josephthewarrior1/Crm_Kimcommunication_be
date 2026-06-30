@@ -5,5 +5,8 @@ public enum AttendanceStatus {
     registered,
     attended,
     no_show,
-    cancelled
+    cancelled,
+    approve,
+    pending,
+    decline
 }

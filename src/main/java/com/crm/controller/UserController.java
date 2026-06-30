@@ -6,6 +6,7 @@ import com.crm.repository.UserRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Set;
@@ -20,6 +21,8 @@ public class UserController {
 
     @Autowired
     private SecurityHelper securityHelper;
+
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @GetMapping
     public ResponseEntity<?> getAllUsers(@RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -70,6 +73,31 @@ public class UserController {
         }
     }
 
+    @PutMapping("/{id}/password")
+    public ResponseEntity<?> updateUserPassword(
+            @PathVariable Long id,
+            @RequestBody UpdatePasswordRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN users can reset passwords");
+        }
+
+        if (request.getPassword() == null || request.getPassword().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Password cannot be empty");
+        }
+
+        return userRepository.findById(id).map(user -> {
+            user.setPassword(passwordEncoder.encode(request.getPassword().trim()));
+            AppUser saved = userRepository.save(user);
+            saved.setPassword(null);
+            return ResponseEntity.ok(saved);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteUser(
             @PathVariable Long id,
@@ -92,5 +120,10 @@ public class UserController {
             return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
+    }
+
+    @lombok.Data
+    public static class UpdatePasswordRequest {
+        private String password;
     }
 }

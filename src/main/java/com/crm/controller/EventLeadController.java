@@ -77,6 +77,7 @@ public class EventLeadController {
                     .contact(contact)
                     .leadStatus(request.getLeadStatus() != null ? LeadStatus.valueOf(request.getLeadStatus()) : LeadStatus.white)
                     .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
+                    .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
                     .notes(request.getNotes())
                     .build();
             savedLeads.add(eventLeadRepository.save(eventLead));
@@ -99,6 +100,11 @@ public class EventLeadController {
             @RequestParam(required = false) String businessChallenges,
             @RequestParam(required = false) String projectInfo,
             @RequestParam(required = false) String timeline,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
+            @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String confirmationStatus,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -110,7 +116,7 @@ public class EventLeadController {
                 try {
                     lead.setLeadStatus(LeadStatus.valueOf(leadStatus));
                 } catch (IllegalArgumentException e) {
-                    return ResponseEntity.badRequest().body("Invalid leadStatus. Must be white, yellow, green, or red.");
+                    return ResponseEntity.badRequest().body("Invalid leadStatus. Must be a valid LeadStatus enum value.");
                 }
             }
             if (attendanceStatus != null) {
@@ -122,6 +128,9 @@ public class EventLeadController {
             }
             if (notes != null) {
                 lead.setNotes(notes);
+            }
+            if (confirmationStatus != null) {
+                lead.setConfirmationStatus(confirmationStatus);
             }
             if (leadCategory != null) {
                 lead.setLeadCategory(leadCategory);
@@ -146,6 +155,18 @@ public class EventLeadController {
             }
             if (timeline != null) {
                 lead.setTimeline(timeline);
+            }
+            if (reminderH7 != null) {
+                lead.setReminderH7(reminderH7);
+            }
+            if (reminderH3 != null) {
+                lead.setReminderH3(reminderH3);
+            }
+            if (reminderH1 != null) {
+                lead.setReminderH1(reminderH1);
+            }
+            if (reminderHariH != null) {
+                lead.setReminderHariH(reminderHariH);
             }
             return ResponseEntity.ok(eventLeadRepository.save(lead));
         }).orElse(ResponseEntity.notFound().build());
@@ -220,7 +241,7 @@ public class EventLeadController {
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, (byte) 0xC4,
             (byte) 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, (byte) 0x9C, 0x63, 0x00, 0x01, 0x00,
             0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, (byte) 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
-            (byte) 0xAE, 0x42, 0x60, 0x82
+            (byte) 0xAE, 0x42, 0x60, (byte) 0x82
         };
 
         return ResponseEntity.ok()
@@ -288,6 +309,7 @@ public class EventLeadController {
         private List<Long> contactIds;
         private String leadStatus;
         private String attendanceStatus;
+        private String confirmationStatus;
         private String notes;
     }
 }

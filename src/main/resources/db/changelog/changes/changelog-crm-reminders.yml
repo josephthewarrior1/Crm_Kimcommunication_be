@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-event-leads-reminder-columns
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: event_leads
+            columns:
+              - column:
+                  name: reminder_h7
+                  type: VARCHAR(50)
+              - column:
+                  name: reminder_h3
+                  type: VARCHAR(50)
+              - column:
+                  name: reminder_hari_h
+                  type: VARCHAR(50)
+  - changeSet:
+      id: add-event-leads-reminder-h1-column
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: event_leads
+            columns:
+              - column:
+                  name: reminder_h1
+                  type: VARCHAR(50)
+  - changeSet:
+      id: add-event-leads-confirmation-status-column
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: event_leads
+            columns:
+              - column:
+                  name: confirmation_status
+                  type: VARCHAR(50)
+                  defaultValue: "pending"
+

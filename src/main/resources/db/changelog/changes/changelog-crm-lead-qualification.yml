@@ -1,0 +1,75 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-lead-qualification-fields-to-event-leads
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: event_leads
+            columns:
+              - column:
+                  name: lead_category
+                  type: VARCHAR(50)
+              - column:
+                  name: call_status
+                  type: VARCHAR(50)
+              - column:
+                  name: email_status
+                  type: VARCHAR(50)
+              - column:
+                  name: whatsapp_status
+                  type: VARCHAR(50)
+              - column:
+                  name: meeting_status
+                  type: VARCHAR(50)
+              - column:
+                  name: business_challenges
+                  type: TEXT
+              - column:
+                  name: project_info
+                  type: TEXT
+              - column:
+                  name: timeline
+                  type: VARCHAR(255)
+  - changeSet:
+      id: create-event-lead-activities-table
+      author: antigravity
+      changes:
+        - createTable:
+            tableName: event_lead_activities
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_event_lead_activities
+              - column:
+                  name: event_lead_id
+                  type: BIGINT
+                  constraints:
+                    foreignKeyName: fk_activities_event_lead_id
+                    referencedTableName: event_leads
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: activity_type
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: notes
+                  type: TEXT
+              - column:
+                  name: created_by
+                  type: VARCHAR(100)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false

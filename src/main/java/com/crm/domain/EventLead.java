@@ -40,6 +40,29 @@ public class EventLead {
     @Column(name = "attendance_status")
     private AttendanceStatus attendanceStatus;
 
+    @Column(name = "lead_category")
+    private String leadCategory;
+
+    @Column(name = "call_status")
+    private String callStatus;
+
+    @Column(name = "email_status")
+    private String emailStatus;
+
+    @Column(name = "whatsapp_status")
+    private String whatsappStatus;
+
+    @Column(name = "meeting_status")
+    private String meetingStatus;
+
+    @Column(name = "business_challenges", columnDefinition = "TEXT")
+    private String businessChallenges;
+
+    @Column(name = "project_info", columnDefinition = "TEXT")
+    private String projectInfo;
+
+    private String timeline;
+
     private String notes;
 
     @Column(name = "created_at", nullable = false, updatable = false)

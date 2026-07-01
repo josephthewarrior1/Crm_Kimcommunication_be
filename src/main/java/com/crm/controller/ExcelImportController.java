@@ -85,7 +85,8 @@ public class ExcelImportController {
                 String hardware = normalizeField(getCellValueAsString(row.getCell(18)));
                 String linkedinUrl = normalizeField(getCellValueAsString(row.getCell(19)));
                 String city = normalizeField(getCellValueAsString(row.getCell(20)));
-                String website = normalizeField(getCellValueAsString(row.getCell(21)));
+                String postalCode = normalizeField(getCellValueAsString(row.getCell(21)));
+                String website = normalizeField(getCellValueAsString(row.getCell(22)));
 
                 // Validate minimum requirements: First Name and Last Name
                 if (firstName.isEmpty() && lastName.isEmpty()) {
@@ -118,6 +119,7 @@ public class ExcelImportController {
                                 .companySizeEmployee(sizeEmployee.isEmpty() ? null : sizeEmployee)
                                 .companyHardware(hardware.isEmpty() ? null : hardware)
                                 .city(city.isEmpty() ? null : city)
+                                .postalCode(postalCode.isEmpty() ? null : postalCode)
                                 .group(group)
                                 .build();
                         company = companyRepository.save(company);
@@ -132,6 +134,7 @@ public class ExcelImportController {
                         if (!sizeEmployee.isEmpty()) company.setCompanySizeEmployee(sizeEmployee);
                         if (!hardware.isEmpty()) company.setCompanyHardware(hardware);
                         if (!city.isEmpty()) company.setCity(city);
+                        if (!postalCode.isEmpty()) company.setPostalCode(postalCode);
                         if (group != null) company.setGroup(group);
                         company = companyRepository.save(company);
                     }

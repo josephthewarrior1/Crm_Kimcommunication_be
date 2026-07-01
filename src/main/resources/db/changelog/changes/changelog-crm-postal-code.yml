@@ -1,0 +1,11 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-company-postal-code-column
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: companies
+            columns:
+              - column:
+                  name: postal_code
+                  type: VARCHAR(20)

@@ -48,6 +48,9 @@ public class Company {
 
     private String city;
 
+    @Column(name = "postal_code")
+    private String postalCode;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

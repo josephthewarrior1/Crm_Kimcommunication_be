@@ -1,0 +1,35 @@
+databaseChangeLog:
+  - changeSet:
+      id: seed-default-admin-user
+      author: antigravity
+      changes:
+        - insert:
+            tableName: app_users
+            columns:
+              - column:
+                  name: id
+                  valueNumeric: 1
+              - column:
+                  name: username
+                  value: admin
+              - column:
+                  name: email
+                  value: admin@example.com
+              - column:
+                  name: full_name
+                  value: Admin User
+              - column:
+                  name: password
+                  value: "$2b$10$QWaTvLxkbMy3Y6aZn.Dkau5bRc4i0WvBTmoAPNDkFTzpx/7BCe3Ni"
+              - column:
+                  name: created_at
+                  valueDate: "2026-07-01T10:00:00"
+        - insert:
+            tableName: user_roles
+            columns:
+              - column:
+                  name: user_id
+                  valueNumeric: 1
+              - column:
+                  name: role
+                  value: ADMIN

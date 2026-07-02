@@ -18,8 +18,8 @@ public class FlaggedIdentity {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "contact_id")
-    private Contact contact;
+    @JoinColumn(name = "database_id")
+    private Database database;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "event_id")

@@ -3,23 +3,22 @@ package com.crm.domain;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Entity
-@Table(name = "contact_emails")
+@Table(name = "database_emails")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ContactEmail {
+public class DatabaseEmail {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "contact_id", nullable = false)
-    private Contact contact;
+    @JoinColumn(name = "database_id", nullable = false)
+    private Database database;
 
     @Column(nullable = false, unique = true)
     private String email;

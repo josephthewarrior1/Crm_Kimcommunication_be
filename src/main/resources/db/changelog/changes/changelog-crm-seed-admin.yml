@@ -2,6 +2,11 @@ databaseChangeLog:
   - changeSet:
       id: seed-default-admin-user
       author: antigravity
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: SELECT COUNT(*) FROM app_users WHERE id = 1 OR username = 'admin'
       changes:
         - insert:
             tableName: app_users

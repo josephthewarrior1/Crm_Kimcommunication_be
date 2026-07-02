@@ -19,7 +19,7 @@ public class EventLeadController {
     private EventRepository eventRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
     private EventLeadActivityRepository eventLeadActivityRepository;
@@ -50,31 +50,31 @@ public class EventLeadController {
             return ResponseEntity.badRequest().body("Event not found");
         }
 
-        java.util.List<Long> contactsToProcess = new java.util.ArrayList<>();
-        if (request.getContactIds() != null && !request.getContactIds().isEmpty()) {
-            contactsToProcess.addAll(request.getContactIds());
-        } else if (request.getContactId() != null) {
-            contactsToProcess.add(request.getContactId());
+        java.util.List<Long> databasesToProcess = new java.util.ArrayList<>();
+        if (request.getDatabaseIds() != null && !request.getDatabaseIds().isEmpty()) {
+            databasesToProcess.addAll(request.getDatabaseIds());
+        } else if (request.getDatabaseId() != null) {
+            databasesToProcess.add(request.getDatabaseId());
         }
 
-        if (contactsToProcess.isEmpty()) {
-            return ResponseEntity.badRequest().body("No Contact IDs provided");
+        if (databasesToProcess.isEmpty()) {
+            return ResponseEntity.badRequest().body("No Database IDs provided");
         }
 
         java.util.List<EventLead> savedLeads = new java.util.ArrayList<>();
-        for (Long contactId : contactsToProcess) {
-            Contact contact = contactRepository.findById(contactId).orElse(null);
-            if (contact == null) {
+        for (Long databaseId : databasesToProcess) {
+            Database database = databaseRepository.findById(databaseId).orElse(null);
+            if (database == null) {
                 continue;
             }
 
-            if (eventLeadRepository.findByEventIdAndContactId(request.getEventId(), contactId).isPresent()) {
+            if (eventLeadRepository.findByEventIdAndDatabaseId(request.getEventId(), databaseId).isPresent()) {
                 continue;
             }
 
             EventLead eventLead = EventLead.builder()
                     .event(event)
-                    .contact(contact)
+                    .database(database)
                     .leadStatus(request.getLeadStatus() != null ? LeadStatus.valueOf(request.getLeadStatus()) : LeadStatus.white)
                     .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
@@ -305,8 +305,8 @@ public class EventLeadController {
     @lombok.Data
     public static class EventLeadRequest {
         private Long eventId;
-        private Long contactId;
-        private List<Long> contactIds;
+        private Long databaseId;
+        private List<Long> databaseIds;
         private String leadStatus;
         private String attendanceStatus;
         private String confirmationStatus;

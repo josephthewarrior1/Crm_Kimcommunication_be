@@ -1,6 +1,6 @@
 package com.crm.domain;
 
-public enum ContactSource {
+public enum DatabaseSource {
     contactout,
     old_db,
     manual,

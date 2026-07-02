@@ -6,7 +6,7 @@ import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.GroupRepository;
-import com.crm.repository.ContactRepository;
+import com.crm.repository.DatabaseRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -23,7 +23,7 @@ public class CompanyController {
     private GroupRepository groupRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
@@ -142,12 +142,12 @@ public class CompanyController {
         }
 
         if (companyRepository.existsById(id)) {
-            // Nullify company references in contacts
-            contactRepository.findAll().stream()
+            // Nullify company references in database records
+            databaseRepository.findAll().stream()
                     .filter(c -> c.getCompany() != null && c.getCompany().getId().equals(id))
                     .forEach(c -> {
                         c.setCompany(null);
-                        contactRepository.save(c);
+                        databaseRepository.save(c);
                     });
             companyRepository.deleteById(id);
             return ResponseEntity.noContent().build();

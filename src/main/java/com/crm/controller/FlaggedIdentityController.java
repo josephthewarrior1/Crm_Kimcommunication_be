@@ -1,18 +1,16 @@
 package com.crm.controller;
 
-import com.crm.domain.Contact;
+import com.crm.domain.Database;
 import com.crm.domain.FlaggedIdentity;
 import com.crm.domain.FlagStatus;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
-import com.crm.repository.ContactRepository;
+import com.crm.repository.DatabaseRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/flagged-identities")
@@ -22,7 +20,7 @@ public class FlaggedIdentityController {
     private FlaggedIdentityRepository flaggedIdentityRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
@@ -51,9 +49,9 @@ public class FlaggedIdentityController {
         // Save FlaggedIdentity
         FlaggedIdentity saved = flaggedIdentityRepository.save(flaggedIdentity);
 
-        // Auto update contact isActive status
-        if (saved.getContact() != null) {
-            updateContactActiveStatus(saved.getContact(), saved.getStatus());
+        // Auto update database record isActive status
+        if (saved.getDatabase() != null) {
+            updateDatabaseActiveStatus(saved.getDatabase(), saved.getStatus());
         }
 
         return ResponseEntity.ok(saved);
@@ -73,7 +71,7 @@ public class FlaggedIdentityController {
         }
 
         return flaggedIdentityRepository.findById(id).map(existing -> {
-            Contact oldContact = existing.getContact();
+            Database oldDatabase = existing.getDatabase();
 
             existing.setNameUsed(details.getNameUsed());
             existing.setEmailUsed(details.getEmailUsed());
@@ -82,12 +80,12 @@ public class FlaggedIdentityController {
             existing.setEvidenceNotes(details.getEvidenceNotes());
             existing.setStatus(details.getStatus());
 
-            Contact newContact = null;
-            if (details.getContact() != null && details.getContact().getId() != null) {
-                newContact = contactRepository.findById(details.getContact().getId()).orElse(null);
-                existing.setContact(newContact);
+            Database newDatabase = null;
+            if (details.getDatabase() != null && details.getDatabase().getId() != null) {
+                newDatabase = databaseRepository.findById(details.getDatabase().getId()).orElse(null);
+                existing.setDatabase(newDatabase);
             } else {
-                existing.setContact(null);
+                existing.setDatabase(null);
             }
 
             if (details.getEvent() != null) {
@@ -98,12 +96,12 @@ public class FlaggedIdentityController {
 
             FlaggedIdentity saved = flaggedIdentityRepository.save(existing);
 
-            // Update active status for both old and new contact
-            if (newContact != null) {
-                updateContactActiveStatus(newContact, existing.getStatus());
+            // Update active status for both old and new database record
+            if (newDatabase != null) {
+                updateDatabaseActiveStatus(newDatabase, existing.getStatus());
             }
-            if (oldContact != null && (newContact == null || !oldContact.getId().equals(newContact.getId()))) {
-                updateContactActiveStatus(oldContact, FlagStatus.cleared); // Reset old contact's state
+            if (oldDatabase != null && (newDatabase == null || !oldDatabase.getId().equals(newDatabase.getId()))) {
+                updateDatabaseActiveStatus(oldDatabase, FlagStatus.cleared); // Reset old record's state
             }
 
             return ResponseEntity.ok(saved);
@@ -123,12 +121,12 @@ public class FlaggedIdentityController {
         }
 
         return flaggedIdentityRepository.findById(id).map(flag -> {
-            Contact contact = flag.getContact();
+            Database database = flag.getDatabase();
             flaggedIdentityRepository.delete(flag);
 
-            // After deleting the flag, evaluate if the contact has other confirmed flags
-            if (contact != null) {
-                updateContactActiveStatus(contact, FlagStatus.cleared);
+            // After deleting the flag, evaluate if the database record has other confirmed flags
+            if (database != null) {
+                updateDatabaseActiveStatus(database, FlagStatus.cleared);
             }
 
             return ResponseEntity.noContent().build();
@@ -136,28 +134,28 @@ public class FlaggedIdentityController {
     }
 
     /**
-     * Updates the active status (isActive) of a contact based on flag status.
-     * If the flag is confirmed, contact is soft-deleted (isActive = false).
+     * Updates the active status (isActive) of a database record based on flag status.
+     * If the flag is confirmed, record is soft-deleted (isActive = false).
      * If suspected/cleared, it is restored, provided there are no other confirmed flags.
      */
-    private void updateContactActiveStatus(Contact contact, FlagStatus status) {
-        if (contact == null || contact.getId() == null) {
+    private void updateDatabaseActiveStatus(Database database, FlagStatus status) {
+        if (database == null || database.getId() == null) {
             return;
         }
-        contactRepository.findById(contact.getId()).ifPresent(c -> {
+        databaseRepository.findById(database.getId()).ifPresent(d -> {
             if (status == FlagStatus.confirmed) {
-                c.setIsActive(false);
+                d.setIsActive(false);
             } else {
-                // Check if there are any other CONFIRMED flags for this contact
+                // Check if there are any other CONFIRMED flags for this database record
                 boolean hasOtherConfirmed = flaggedIdentityRepository.findAll().stream()
-                        .anyMatch(f -> f.getContact() != null 
-                                       && f.getContact().getId().equals(c.getId()) 
+                        .anyMatch(f -> f.getDatabase() != null 
+                                       && f.getDatabase().getId().equals(d.getId()) 
                                        && f.getStatus() == FlagStatus.confirmed);
                 if (!hasOtherConfirmed) {
-                    c.setIsActive(true);
+                    d.setIsActive(true);
                 }
             }
-            contactRepository.save(c);
+            databaseRepository.save(d);
         });
     }
 }

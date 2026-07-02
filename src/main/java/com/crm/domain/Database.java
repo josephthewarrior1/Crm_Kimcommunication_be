@@ -5,24 +5,23 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 
 @Entity
-@Table(name = "contacts")
+@Table(name = "databases")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class Contact {
+public class Database {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @OneToMany(mappedBy = "contact", fetch = FetchType.EAGER, cascade = CascadeType.ALL)
-    @JsonIgnoreProperties("contact")
-    private List<ContactEmail> emails;
+    @OneToMany(mappedBy = "database", fetch = FetchType.EAGER, cascade = CascadeType.ALL)
+    @JsonIgnoreProperties("database")
+    private List<DatabaseEmail> emails;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id")
@@ -55,11 +54,11 @@ public class Contact {
     private String linkedinUrl;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "contact_type")
-    private ContactType contactType;
+    @Column(name = "database_type")
+    private DatabaseType databaseType;
 
     @Enumerated(EnumType.STRING)
-    private ContactSource source;
+    private DatabaseSource source;
 
     @Column(name = "is_active", nullable = false)
     @Builder.Default

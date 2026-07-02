@@ -1,0 +1,122 @@
+databaseChangeLog:
+  - changeSet:
+      id: rename-contact-to-database
+      author: antigravity
+      changes:
+        # 1. Drop old foreign keys first (so we don't have constraints under old names or referring to old columns)
+        - dropForeignKeyConstraint:
+            baseTableName: contact_emails
+            constraintName: fk_contact_emails_contact_id
+        - dropForeignKeyConstraint:
+            baseTableName: event_leads
+            constraintName: fk_event_leads_contact_id
+        - dropForeignKeyConstraint:
+            baseTableName: removal_requests
+            constraintName: fk_removal_requests_contact_id
+        - dropForeignKeyConstraint:
+            baseTableName: flagged_identities
+            constraintName: fk_flagged_identities_contact_id
+        - dropForeignKeyConstraint:
+            baseTableName: contacts
+            constraintName: fk_contacts_company_id
+
+        # 2. Drop unique constraint on event_leads
+        - dropUniqueConstraint:
+            tableName: event_leads
+            constraintName: unique_event_contact
+
+        # 3. Rename tables
+        - renameTable:
+            oldTableName: contacts
+            newTableName: databases
+        - renameTable:
+            oldTableName: contact_emails
+            newTableName: database_emails
+
+        # 4. Rename columns
+        - renameColumn:
+            tableName: databases
+            oldColumnName: contact_type
+            newColumnName: database_type
+            dataType: varchar(255)
+        - renameColumn:
+            tableName: database_emails
+            oldColumnName: contact_id
+            newColumnName: database_id
+            dataType: bigint
+        - renameColumn:
+            tableName: event_leads
+            oldColumnName: contact_id
+            newColumnName: database_id
+            dataType: bigint
+        - renameColumn:
+            tableName: removal_requests
+            oldColumnName: contact_id
+            newColumnName: database_id
+            dataType: bigint
+        - renameColumn:
+            tableName: flagged_identities
+            oldColumnName: contact_id
+            newColumnName: database_id
+            dataType: bigint
+
+        # 5. Create new foreign keys
+        - addForeignKeyConstraint:
+            baseTableName: databases
+            baseColumnNames: company_id
+            constraintName: fk_databases_company_id
+            referencedTableName: companies
+            referencedColumnNames: id
+            onDelete: SET NULL
+        - addForeignKeyConstraint:
+            baseTableName: database_emails
+            baseColumnNames: database_id
+            constraintName: fk_database_emails_database_id
+            referencedTableName: databases
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: event_leads
+            baseColumnNames: database_id
+            constraintName: fk_event_leads_database_id
+            referencedTableName: databases
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: removal_requests
+            baseColumnNames: database_id
+            constraintName: fk_removal_requests_database_id
+            referencedTableName: databases
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: flagged_identities
+            baseColumnNames: database_id
+            constraintName: fk_flagged_identities_database_id
+            referencedTableName: databases
+            referencedColumnNames: id
+            onDelete: SET NULL
+
+        # 6. Recreate unique constraint on event_leads
+        - addUniqueConstraint:
+            tableName: event_leads
+            columnNames: event_id, database_id
+            constraintName: unique_event_database
+
+        # 7. Rename Indexes using SQL (PostgreSQL RENAME INDEX syntax)
+        - sql:
+            sql: "ALTER INDEX idx_contacts_company_id RENAME TO idx_databases_company_id;"
+        - sql:
+            sql: "ALTER INDEX idx_contacts_first_name RENAME TO idx_databases_first_name;"
+        - sql:
+            sql: "ALTER INDEX idx_contacts_last_name RENAME TO idx_databases_last_name;"
+        - sql:
+            sql: "ALTER INDEX idx_contacts_mobile_phone RENAME TO idx_databases_mobile_phone;"
+        - sql:
+            sql: "ALTER INDEX idx_contacts_normalized_phone RENAME TO idx_databases_normalized_phone;"
+        - sql:
+            sql: "ALTER INDEX idx_contacts_is_active RENAME TO idx_databases_is_active;"
+        - sql:
+            sql: "ALTER INDEX idx_contact_emails_contact_id RENAME TO idx_database_emails_database_id;"
+        - sql:
+            sql: "ALTER INDEX idx_contact_emails_email RENAME TO idx_database_emails_email;"

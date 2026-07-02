@@ -1,12 +1,12 @@
 package com.crm.controller;
 
-import com.crm.domain.Contact;
+import com.crm.domain.Database;
 import com.crm.domain.RemovalReason;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.RemovalStatus;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
-import com.crm.repository.ContactRepository;
+import com.crm.repository.DatabaseRepository;
 import com.crm.repository.RemovalRequestRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +22,7 @@ public class RemovalRequestController {
     private RemovalRequestRepository removalRequestRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
@@ -51,13 +51,13 @@ public class RemovalRequestController {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can request opt-outs");
         }
 
-        Contact contact = contactRepository.findById(request.getContactId()).orElse(null);
-        if (contact == null) {
-            return ResponseEntity.badRequest().body("Contact not found");
+        Database database = databaseRepository.findById(request.getDatabaseId()).orElse(null);
+        if (database == null) {
+            return ResponseEntity.badRequest().body("Database record not found");
         }
 
         RemovalRequest removalRequest = RemovalRequest.builder()
-                .contact(contact)
+                .database(database)
                 .reason(request.getReason() != null ? RemovalReason.valueOf(request.getReason()) : RemovalReason.lainnya)
                 .requestedBy(request.getRequestedBy())
                 .sourceDb(request.getSourceDb())
@@ -68,8 +68,8 @@ public class RemovalRequestController {
         RemovalRequest saved = removalRequestRepository.save(removalRequest);
 
         if (saved.getStatus() == RemovalStatus.done || saved.getStatus() == RemovalStatus.approved) {
-            contact.setIsActive(false);
-            contactRepository.save(contact);
+            database.setIsActive(false);
+            databaseRepository.save(database);
         }
 
         return ResponseEntity.ok(saved);
@@ -95,9 +95,9 @@ public class RemovalRequestController {
                 RemovalRequest saved = removalRequestRepository.save(req);
 
                 if (newStatus == RemovalStatus.done || newStatus == RemovalStatus.approved) {
-                    Contact c = saved.getContact();
-                    c.setIsActive(false);
-                    contactRepository.save(c);
+                    Database d = saved.getDatabase();
+                    d.setIsActive(false);
+                    databaseRepository.save(d);
                 }
 
                 return ResponseEntity.ok(saved);
@@ -109,7 +109,7 @@ public class RemovalRequestController {
 
     @lombok.Data
     public static class RemovalRequestDto {
-        private Long contactId;
+        private Long databaseId;
         private String reason;
         private String requestedBy;
         private String sourceDb;

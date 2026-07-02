@@ -19,8 +19,8 @@ public class RemovalRequest {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "contact_id", nullable = false)
-    private Contact contact;
+    @JoinColumn(name = "database_id", nullable = false)
+    private Database database;
 
     @Enumerated(EnumType.STRING)
     private RemovalReason reason;

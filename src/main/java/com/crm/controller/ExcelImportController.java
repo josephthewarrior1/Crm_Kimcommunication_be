@@ -12,7 +12,7 @@ import java.io.InputStream;
 import java.util.*;
 
 @RestController
-@RequestMapping("/api/contacts")
+@RequestMapping("/api/databases")
 public class ExcelImportController {
 
     @Autowired
@@ -22,10 +22,10 @@ public class ExcelImportController {
     private CompanyRepository companyRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
-    private ContactEmailRepository contactEmailRepository;
+    private DatabaseEmailRepository databaseEmailRepository;
 
     @Autowired
     private com.crm.service.SuspiciousIdentityService suspiciousIdentityService;
@@ -34,7 +34,7 @@ public class ExcelImportController {
     private com.crm.service.SecurityHelper securityHelper;
 
     @PostMapping("/import")
-    public ResponseEntity<?> importContacts(
+    public ResponseEntity<?> importDatabases(
             @RequestParam("file") MultipartFile file,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -42,7 +42,7 @@ public class ExcelImportController {
             return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
         }
         if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
-            return ResponseEntity.status(403).body(Map.of("message", "Forbidden: Only ADMIN or MANAGER can import contacts"));
+            return ResponseEntity.status(403).body(Map.of("message", "Forbidden: Only ADMIN or MANAGER can import database records"));
         }
 
         if (file.isEmpty()) {
@@ -63,8 +63,6 @@ public class ExcelImportController {
                 }
 
                 // Get values from row columns
-                // normalizeField() converts placeholders like "-", "N/A", "none" to empty string
-                // so they are never treated as real phone/email data.
                 String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
                 String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
                 String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
@@ -140,10 +138,10 @@ public class ExcelImportController {
                     }
                 }
 
-                // 3. Resolve Contact (Must match name to be a duplicate/update target)
-                Contact contact = null;
-                List<Contact> nameMatches = contactRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
-                for (Contact c : nameMatches) {
+                // 3. Resolve Database Record (Must match name to be a duplicate/update target)
+                Database database = null;
+                List<Database> nameMatches = databaseRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
+                for (Database c : nameMatches) {
                     boolean companyMatch = (company == null && c.getCompany() == null) || 
                                            (company != null && c.getCompany() != null && c.getCompany().getId().equals(company.getId()));
                     
@@ -156,11 +154,11 @@ public class ExcelImportController {
                     
                     boolean emailMatch = false;
                     if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
-                        final Long contactId = c.getId();
-                        List<ContactEmail> cEmails = contactEmailRepository.findAll().stream()
-                            .filter(e -> e.getContact() != null && e.getContact().getId().equals(contactId))
+                        final Long databaseId = c.getId();
+                        List<DatabaseEmail> cEmails = databaseEmailRepository.findAll().stream()
+                            .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(databaseId))
                             .toList();
-                        for (ContactEmail ce : cEmails) {
+                        for (DatabaseEmail ce : cEmails) {
                             if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
                                 emailMatch = true;
                             }
@@ -171,17 +169,17 @@ public class ExcelImportController {
                     }
                     
                     if (companyMatch || phoneMatch || emailMatch) {
-                        contact = c;
+                        database = c;
                         break;
                     }
                 }
 
-                if (contact == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
-                    contact = nameMatches.get(0);
+                if (database == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
+                    database = nameMatches.get(0);
                 }
 
-                if (contact == null) {
-                    contact = Contact.builder()
+                if (database == null) {
+                    database = Database.builder()
                             .salutation(salutation.isEmpty() ? "Mr" : salutation)
                             .firstName(firstName)
                             .lastName(lastName)
@@ -192,35 +190,35 @@ public class ExcelImportController {
                             .normalizedPhone(mobilePhone.isEmpty() ? null : "+62" + mobilePhone.replaceAll("^0", ""))
                             .linkedinUrl(linkedinUrl.isEmpty() ? null : linkedinUrl)
                             .company(company)
-                            .contactType(ContactType.unknown)
-                            .source(ContactSource.excel_import)
+                            .databaseType(DatabaseType.unknown)
+                            .source(DatabaseSource.excel_import)
                             .isActive(true)
                             .build();
-                    contact = contactRepository.save(contact);
+                    database = databaseRepository.save(database);
                 } else {
                     // Update details
-                    if (!salutation.isEmpty()) contact.setSalutation(salutation);
-                    contact.setPositionLevel(PositionLevel.fromValue(positionStr));
-                    if (!specialityDivision.isEmpty()) contact.setSpecialityDivision(specialityDivision);
-                    if (!jobTitle.isEmpty()) contact.setJobTitle(jobTitle);
+                    if (!salutation.isEmpty()) database.setSalutation(salutation);
+                    database.setPositionLevel(PositionLevel.fromValue(positionStr));
+                    if (!specialityDivision.isEmpty()) database.setSpecialityDivision(specialityDivision);
+                    if (!jobTitle.isEmpty()) database.setJobTitle(jobTitle);
                     if (!mobilePhone.isEmpty()) {
-                        contact.setMobilePhone(mobilePhone);
-                        contact.setNormalizedPhone("+62" + mobilePhone.replaceAll("^0", ""));
+                        database.setMobilePhone(mobilePhone);
+                        database.setNormalizedPhone("+62" + mobilePhone.replaceAll("^0", ""));
                     }
-                    if (!linkedinUrl.isEmpty()) contact.setLinkedinUrl(linkedinUrl);
-                    if (company != null) contact.setCompany(company);
-                    contact = contactRepository.save(contact);
+                    if (!linkedinUrl.isEmpty()) database.setLinkedinUrl(linkedinUrl);
+                    if (company != null) database.setCompany(company);
+                    database = databaseRepository.save(database);
                 }
 
                 // 4. Resolve Emails
-                if (contact != null) {
+                if (database != null) {
                     if (!companyEmail.isEmpty()) {
                         String cleanEmail = companyEmail.toLowerCase();
-                        ContactEmail ce = contactEmailRepository.findByEmail(cleanEmail).orElse(null);
+                        DatabaseEmail ce = databaseEmailRepository.findByEmail(cleanEmail).orElse(null);
                         if (ce == null) {
                             String domain = cleanEmail.substring(cleanEmail.indexOf("@") + 1);
-                            ce = ContactEmail.builder()
-                                    .contact(contact)
+                            ce = DatabaseEmail.builder()
+                                    .database(database)
                                     .email(cleanEmail)
                                     .emailType("company")
                                     .isPrimary(true)
@@ -228,20 +226,20 @@ public class ExcelImportController {
                                     .isCorporate(true)
                                     .domain(domain)
                                     .build();
-                            contactEmailRepository.save(ce);
+                            databaseEmailRepository.save(ce);
                         } else {
-                            ce.setContact(contact);
-                            contactEmailRepository.save(ce);
+                            ce.setDatabase(database);
+                            databaseEmailRepository.save(ce);
                         }
                     }
 
                     if (!personalEmail.isEmpty()) {
                         String cleanEmail = personalEmail.toLowerCase();
-                        ContactEmail pe = contactEmailRepository.findByEmail(cleanEmail).orElse(null);
+                        DatabaseEmail pe = databaseEmailRepository.findByEmail(cleanEmail).orElse(null);
                         if (pe == null) {
                             String domain = cleanEmail.substring(cleanEmail.indexOf("@") + 1);
-                            pe = ContactEmail.builder()
-                                    .contact(contact)
+                            pe = DatabaseEmail.builder()
+                                    .database(database)
                                     .email(cleanEmail)
                                     .emailType("personal")
                                     .isPrimary(false)
@@ -249,13 +247,13 @@ public class ExcelImportController {
                                     .isCorporate(false)
                                     .domain(domain)
                                     .build();
-                            contactEmailRepository.save(pe);
+                            databaseEmailRepository.save(pe);
                         } else {
-                            pe.setContact(contact);
-                            contactEmailRepository.save(pe);
+                            pe.setDatabase(database);
+                            databaseEmailRepository.save(pe);
                         }
                     }
-                    suspiciousIdentityService.checkAndFlagContact(contact);
+                    suspiciousIdentityService.checkAndFlagDatabase(database);
                 }
                 successCount++;
             }
@@ -296,7 +294,6 @@ public class ExcelImportController {
                     continue;
                 }
 
-                // normalizeField() converts placeholders like "-", "N/A", "none" to empty string
                 String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
                 String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
                 String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
@@ -316,16 +313,16 @@ public class ExcelImportController {
                 
                 totalValid++;
 
-                // Check duplicate contact in DB
+                // Check duplicate database record in DB
                 Company company = null;
                 if (!companyName.isEmpty()) {
                     company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
                 }
 
-                Contact existingContact = null;
+                Database existingDatabase = null;
                 boolean matchedByPhone = false;
-                List<Contact> nameMatches = contactRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
-                for (Contact c : nameMatches) {
+                List<Database> nameMatches = databaseRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
+                for (Database c : nameMatches) {
                     boolean companyMatch = (company == null && c.getCompany() == null) || 
                                            (company != null && c.getCompany() != null && c.getCompany().getId().equals(company.getId()));
                     
@@ -338,11 +335,11 @@ public class ExcelImportController {
                     
                     boolean emailMatch = false;
                     if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
-                        final Long contactId = c.getId();
-                        List<ContactEmail> cEmails = contactEmailRepository.findAll().stream()
-                            .filter(e -> e.getContact() != null && e.getContact().getId().equals(contactId))
+                        final Long databaseId = c.getId();
+                        List<DatabaseEmail> cEmails = databaseEmailRepository.findAll().stream()
+                            .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(databaseId))
                             .toList();
-                        for (ContactEmail ce : cEmails) {
+                        for (DatabaseEmail ce : cEmails) {
                             if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
                                 emailMatch = true;
                             }
@@ -353,7 +350,7 @@ public class ExcelImportController {
                     }
                     
                     if (companyMatch || phoneMatch || emailMatch) {
-                        existingContact = c;
+                        existingDatabase = c;
                         if (phoneMatch) {
                             matchedByPhone = true;
                         }
@@ -361,35 +358,35 @@ public class ExcelImportController {
                     }
                 }
 
-                if (existingContact == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
-                    existingContact = nameMatches.get(0);
+                if (existingDatabase == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
+                    existingDatabase = nameMatches.get(0);
                 }
 
-                // Check if phone or email is shared/used by a DIFFERENT contact name (tikus warning candidate)
+                // Check if phone or email is shared/used by a DIFFERENT database record name (tikus warning candidate)
                 boolean phoneShared = false;
-                String sharedContactName = "";
+                String sharedDatabaseName = "";
                 if (!mobilePhone.isEmpty()) {
                     String normPhone = "+62" + mobilePhone.replaceAll("^0", "");
-                    Contact otherPhoneContact = contactRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null);
-                    if (otherPhoneContact == null) {
-                        otherPhoneContact = contactRepository.findByMobilePhone(mobilePhone).stream().findFirst().orElse(null);
+                    Database otherPhoneDatabase = databaseRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null);
+                    if (otherPhoneDatabase == null) {
+                        otherPhoneDatabase = databaseRepository.findByMobilePhone(mobilePhone).stream().findFirst().orElse(null);
                     }
-                    if (otherPhoneContact != null && (existingContact == null || !existingContact.getId().equals(otherPhoneContact.getId()))) {
+                    if (otherPhoneDatabase != null && (existingDatabase == null || !existingDatabase.getId().equals(otherPhoneDatabase.getId()))) {
                         phoneShared = true;
-                        sharedContactName = otherPhoneContact.getFirstName() + " " + otherPhoneContact.getLastName();
+                        sharedDatabaseName = otherPhoneDatabase.getFirstName() + " " + otherPhoneDatabase.getLastName();
                     }
                 }
 
                 boolean emailShared = false;
-                String sharedEmailContactName = "";
+                String sharedEmailDatabaseName = "";
                 if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
                     String emailToCheck = companyEmail.isEmpty() ? personalEmail : companyEmail;
-                    ContactEmail otherEmailRecord = contactEmailRepository.findByEmail(emailToCheck.toLowerCase()).stream().findFirst().orElse(null);
-                    if (otherEmailRecord != null && otherEmailRecord.getContact() != null) {
-                        Contact other = otherEmailRecord.getContact();
-                        if (existingContact == null || !existingContact.getId().equals(other.getId())) {
+                    DatabaseEmail otherEmailRecord = databaseEmailRepository.findByEmail(emailToCheck.toLowerCase()).stream().findFirst().orElse(null);
+                    if (otherEmailRecord != null && otherEmailRecord.getDatabase() != null) {
+                        Database other = otherEmailRecord.getDatabase();
+                        if (existingDatabase == null || !existingDatabase.getId().equals(other.getId())) {
                             emailShared = true;
-                            sharedEmailContactName = other.getFirstName() + " " + other.getLastName();
+                            sharedEmailDatabaseName = other.getFirstName() + " " + other.getLastName();
                         }
                     }
                 }
@@ -398,26 +395,26 @@ public class ExcelImportController {
                 boolean emailDuplicate = false;
                 String duplicateMsg = "";
                 if (!companyEmail.isEmpty()) {
-                    if (contactEmailRepository.findByEmail(companyEmail.toLowerCase()).isPresent()) {
+                    if (databaseEmailRepository.findByEmail(companyEmail.toLowerCase()).isPresent()) {
                         emailDuplicate = true;
                         duplicateMsg = "Company email already exists";
                     }
                 }
                 if (!personalEmail.isEmpty()) {
-                    if (contactEmailRepository.findByEmail(personalEmail.toLowerCase()).isPresent()) {
+                    if (databaseEmailRepository.findByEmail(personalEmail.toLowerCase()).isPresent()) {
                         emailDuplicate = true;
                         duplicateMsg = duplicateMsg.isEmpty() ? "Personal email already exists" : "Both emails already exist";
                     }
                 }
 
                 String status = "NEW";
-                String message = "Will be created as a new contact";
+                String message = "Will be created as a new database record";
                 
-                if (existingContact != null) {
+                if (existingDatabase != null) {
                     status = "DUPLICATE";
                     message = matchedByPhone 
-                        ? "Contact already exists (phone matched). Details will be updated."
-                        : "Contact already exists. Details will be updated.";
+                        ? "Database record already exists (phone matched). Details will be updated."
+                        : "Database record already exists. Details will be updated.";
                     duplicateCount++;
                 } else if (emailDuplicate && !emailShared) {
                     status = "DUPLICATE";
@@ -426,9 +423,9 @@ public class ExcelImportController {
                 } else {
                     newCount++;
                     if (phoneShared) {
-                        message = "Will be created. Warning: Phone number is identical to contact '" + sharedContactName + "' (Tikus candidate).";
+                        message = "Will be created. Warning: Phone number is identical to database record '" + sharedDatabaseName + "' (Tikus candidate).";
                     } else if (emailShared) {
-                        message = "Will be created. Warning: Email is identical to contact '" + sharedEmailContactName + "' (Tikus candidate).";
+                        message = "Will be created. Warning: Email is identical to database record '" + sharedEmailDatabaseName + "' (Tikus candidate).";
                     }
                 }
 
@@ -481,7 +478,6 @@ public class ExcelImportController {
                     return cell.getDateCellValue().toString();
                 }
                 double val = cell.getNumericCellValue();
-                // Format large numbers (like phone numbers) as clean integers if they have no decimal part
                 if (val == Math.floor(val) || Math.abs(val - Math.round(val)) < 1e-9) {
                     return String.format(Locale.US, "%.0f", val);
                 } else {
@@ -512,20 +508,11 @@ public class ExcelImportController {
         return name;
     }
 
-    /**
-     * Normalizes a field value: returns empty string if the value is a
-     * placeholder sentinel such as "-", "--", "N/A", "na", "none", "null",
-     * or any string that consists solely of dashes/hyphens.
-     * This prevents placeholder values from being treated as real data,
-     * which would cause false duplicate detection and erroneous tikus flagging.
-     */
     private String normalizeField(String value) {
         if (value == null) return "";
         String trimmed = value.trim();
         if (trimmed.isEmpty()) return "";
-        // Strings that are only dashes/hyphens (e.g. "-", "--", "---")
         if (trimmed.matches("^-+$")) return "";
-        // Common placeholder literals (case-insensitive)
         switch (trimmed.toLowerCase()) {
             case "n/a":
             case "na":
@@ -539,19 +526,10 @@ public class ExcelImportController {
         }
     }
 
-    /**
-     * Cleans and normalizes phone number fields.
-     * Extracts only the digits to check if it's a placeholder (like "+62", "(+62)", "0", etc.).
-     * Returns empty string if no valid subscriber digits are found.
-     */
     private String cleanPhone(String value) {
         String normalized = normalizeField(value);
         if (normalized.isEmpty()) return "";
-        
-        // Strip everything except digits
         String digits = normalized.replaceAll("[^0-9]", "");
-        
-        // If it contains no digits, or just country code/zero placeholders (e.g. "62", "0")
         if (digits.isEmpty() || digits.equals("62") || digits.equals("0")) {
             return "";
         }

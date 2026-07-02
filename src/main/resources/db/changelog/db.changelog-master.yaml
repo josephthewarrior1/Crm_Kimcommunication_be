@@ -11,4 +11,5 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-seed-admin.yml
   - include:
       file: db/changelog/changes/changelog-crm-postal-code.yml
-
+  - include:
+      file: db/changelog/changes/changelog-crm-rename-contact-to-database.yml

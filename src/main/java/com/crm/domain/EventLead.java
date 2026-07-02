@@ -7,7 +7,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "event_leads", 
-       uniqueConstraints = @UniqueConstraint(name = "unique_event_contact", columnNames = {"event_id", "contact_id"}))
+       uniqueConstraints = @UniqueConstraint(name = "unique_event_database", columnNames = {"event_id", "database_id"}))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -23,8 +23,8 @@ public class EventLead {
     private Event event;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "contact_id", nullable = false)
-    private Contact contact;
+    @JoinColumn(name = "database_id", nullable = false)
+    private Database database;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "lead_status")

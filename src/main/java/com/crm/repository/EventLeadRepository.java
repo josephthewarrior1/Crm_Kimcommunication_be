@@ -9,7 +9,9 @@ import java.util.UUID;
 
 @Repository
 public interface EventLeadRepository extends JpaRepository<EventLead, Long> {
-    Optional<EventLead> findByEventIdAndContactId(Long eventId, Long contactId);
+    Optional<EventLead> findByEventIdAndDatabaseId(Long eventId, Long databaseId);
+
     List<EventLead> findByEventId(Long eventId);
-    List<EventLead> findByContactId(Long contactId);
+
+    List<EventLead> findByDatabaseId(Long databaseId);
 }

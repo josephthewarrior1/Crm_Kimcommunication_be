@@ -16,65 +16,67 @@ public class SuspiciousIdentityService {
     private FlaggedIdentityRepository flaggedIdentityRepository;
 
     @Autowired
-    private ContactRepository contactRepository;
+    private DatabaseRepository databaseRepository;
 
     @Autowired
-    private ContactEmailRepository contactEmailRepository;
+    private DatabaseEmailRepository databaseEmailRepository;
 
-    public void checkAndFlagContact(Contact contact) {
-        if (contact == null || contact.getId() == null) {
+    public void checkAndFlagDatabase(Database database) {
+        if (database == null || database.getId() == null) {
             return;
         }
 
         // 1. Auto-flag duplicate phone with different name
-        String phone = cleanPhone(contact.getMobilePhone());
+        String phone = cleanPhone(database.getMobilePhone());
         if (!phone.isEmpty()) {
             String normalized = "+62" + phone.trim().replaceAll("^0", "");
-            List<Contact> matchedContacts = contactRepository.findByNormalizedPhone(normalized);
-            
-            for (Contact other : matchedContacts) {
-                if (other.getId().equals(contact.getId())) {
+            List<Database> matchedDatabases = databaseRepository.findByNormalizedPhone(normalized);
+
+            for (Database other : matchedDatabases) {
+                if (other.getId().equals(database.getId())) {
                     continue;
                 }
-                
+
                 // If names are different
-                if (!other.getFirstName().equalsIgnoreCase(contact.getFirstName()) || 
-                    !other.getLastName().equalsIgnoreCase(contact.getLastName())) {
-                    
-                    // Flag the current contact
-                    boolean contactAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                            .anyMatch(f -> f.getContact() != null && f.getContact().getId().equals(contact.getId()) 
-                                           && f.getFlagReason() == FlagReason.duplicate_phone
-                                           && f.getStatus() != FlagStatus.cleared);
-                    
-                    if (!contactAlreadyFlagged) {
+                if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
+                        !other.getLastName().equalsIgnoreCase(database.getLastName())) {
+
+                    // Flag the current database record
+                    boolean databaseAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
+                            .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(database.getId())
+                                    && f.getFlagReason() == FlagReason.duplicate_phone
+                                    && f.getStatus() != FlagStatus.cleared);
+
+                    if (!databaseAlreadyFlagged) {
                         FlaggedIdentity flag = FlaggedIdentity.builder()
-                                .contact(contact)
-                                .nameUsed(contact.getFirstName() + " " + contact.getLastName())
+                                .database(database)
+                                .nameUsed(database.getFirstName() + " " + database.getLastName())
                                 .phoneUsed(phone)
                                 .flagReason(FlagReason.duplicate_phone)
                                 .status(FlagStatus.suspected)
-                                .evidenceNotes(String.format("Auto-flagged: Phone number %s matches contact %s %s (ID: %s)", 
-                                        phone, other.getFirstName(), other.getLastName(), other.getId()))
+                                .evidenceNotes(
+                                        String.format("Auto-flagged: Phone number %s matches database record %s %s (ID: %s)",
+                                                phone, other.getFirstName(), other.getLastName(), other.getId()))
                                 .build();
                         flaggedIdentityRepository.save(flag);
                     }
 
-                    // Flag the other contact as well
+                    // Flag the other database record as well
                     boolean otherAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                            .anyMatch(f -> f.getContact() != null && f.getContact().getId().equals(other.getId()) 
-                                           && f.getFlagReason() == FlagReason.duplicate_phone
-                                           && f.getStatus() != FlagStatus.cleared);
-                    
+                            .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(other.getId())
+                                    && f.getFlagReason() == FlagReason.duplicate_phone
+                                    && f.getStatus() != FlagStatus.cleared);
+
                     if (!otherAlreadyFlagged) {
                         FlaggedIdentity flag = FlaggedIdentity.builder()
-                                .contact(other)
+                                .database(other)
                                 .nameUsed(other.getFirstName() + " " + other.getLastName())
                                 .phoneUsed(phone)
                                 .flagReason(FlagReason.duplicate_phone)
                                 .status(FlagStatus.suspected)
-                                .evidenceNotes(String.format("Auto-flagged: Phone number %s matches contact %s %s (ID: %s)", 
-                                        phone, contact.getFirstName(), contact.getLastName(), contact.getId()))
+                                .evidenceNotes(
+                                        String.format("Auto-flagged: Phone number %s matches database record %s %s (ID: %s)",
+                                                phone, database.getFirstName(), database.getLastName(), database.getId()))
                                 .build();
                         flaggedIdentityRepository.save(flag);
                     }
@@ -83,58 +85,61 @@ public class SuspiciousIdentityService {
         }
 
         // 2. Auto-flag duplicate email with different name
-        List<ContactEmail> contactEmails = contactEmailRepository.findAll().stream()
-                .filter(e -> e.getContact() != null && e.getContact().getId().equals(contact.getId()))
+        List<DatabaseEmail> databaseEmails = databaseEmailRepository.findAll().stream()
+                .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(database.getId()))
                 .toList();
 
-        for (ContactEmail ce : contactEmails) {
+        for (DatabaseEmail ce : databaseEmails) {
             String emailStr = normalizeField(ce.getEmail());
             if (!emailStr.isEmpty()) {
-                List<ContactEmail> matchedEmails = contactEmailRepository.findAll().stream()
-                        .filter(e -> e.getEmail().equalsIgnoreCase(emailStr) && e.getContact() != null && !e.getContact().getId().equals(contact.getId()))
+                List<DatabaseEmail> matchedEmails = databaseEmailRepository.findAll().stream()
+                        .filter(e -> e.getEmail().equalsIgnoreCase(emailStr) && e.getDatabase() != null
+                                && !e.getDatabase().getId().equals(database.getId()))
                         .toList();
 
-                for (ContactEmail otherEmail : matchedEmails) {
-                    Contact other = otherEmail.getContact();
-                    
+                for (DatabaseEmail otherEmail : matchedEmails) {
+                    Database other = otherEmail.getDatabase();
+
                     // If names are different
-                    if (!other.getFirstName().equalsIgnoreCase(contact.getFirstName()) || 
-                        !other.getLastName().equalsIgnoreCase(contact.getLastName())) {
-                        
-                        // Flag the current contact
-                        boolean contactAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                                .anyMatch(f -> f.getContact() != null && f.getContact().getId().equals(contact.getId()) 
-                                               && f.getFlagReason() == FlagReason.duplicate_email
-                                               && f.getStatus() != FlagStatus.cleared);
-                        
-                        if (!contactAlreadyFlagged) {
+                    if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
+                            !other.getLastName().equalsIgnoreCase(database.getLastName())) {
+
+                        // Flag the current database record
+                        boolean databaseAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
+                                .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(database.getId())
+                                        && f.getFlagReason() == FlagReason.duplicate_email
+                                        && f.getStatus() != FlagStatus.cleared);
+
+                        if (!databaseAlreadyFlagged) {
                             FlaggedIdentity flag = FlaggedIdentity.builder()
-                                    .contact(contact)
-                                    .nameUsed(contact.getFirstName() + " " + contact.getLastName())
+                                    .database(database)
+                                    .nameUsed(database.getFirstName() + " " + database.getLastName())
                                     .emailUsed(emailStr)
                                     .flagReason(FlagReason.duplicate_email)
                                     .status(FlagStatus.suspected)
-                                    .evidenceNotes(String.format("Auto-flagged: Email %s matches contact %s %s (ID: %s)", 
-                                            emailStr, other.getFirstName(), other.getLastName(), other.getId()))
+                                    .evidenceNotes(
+                                            String.format("Auto-flagged: Email %s matches database record %s %s (ID: %s)",
+                                                    emailStr, other.getFirstName(), other.getLastName(), other.getId()))
                                     .build();
                             flaggedIdentityRepository.save(flag);
                         }
 
-                        // Flag the other contact as well
+                        // Flag the other database record as well
                         boolean otherAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                                .anyMatch(f -> f.getContact() != null && f.getContact().getId().equals(other.getId()) 
-                                               && f.getFlagReason() == FlagReason.duplicate_email
-                                               && f.getStatus() != FlagStatus.cleared);
-                        
+                                .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(other.getId())
+                                        && f.getFlagReason() == FlagReason.duplicate_email
+                                        && f.getStatus() != FlagStatus.cleared);
+
                         if (!otherAlreadyFlagged) {
                             FlaggedIdentity flag = FlaggedIdentity.builder()
-                                    .contact(other)
+                                    .database(other)
                                     .nameUsed(other.getFirstName() + " " + other.getLastName())
                                     .emailUsed(emailStr)
                                     .flagReason(FlagReason.duplicate_email)
                                     .status(FlagStatus.suspected)
-                                    .evidenceNotes(String.format("Auto-flagged: Email %s matches contact %s %s (ID: %s)", 
-                                            emailStr, contact.getFirstName(), contact.getLastName(), contact.getId()))
+                                    .evidenceNotes(String.format(
+                                            "Auto-flagged: Email %s matches database record %s %s (ID: %s)",
+                                            emailStr, database.getFirstName(), database.getLastName(), database.getId()))
                                     .build();
                             flaggedIdentityRepository.save(flag);
                         }
@@ -151,11 +156,14 @@ public class SuspiciousIdentityService {
      * and causing false tikus flags.
      */
     private String normalizeField(String value) {
-        if (value == null) return "";
+        if (value == null)
+            return "";
         String trimmed = value.trim();
-        if (trimmed.isEmpty()) return "";
+        if (trimmed.isEmpty())
+            return "";
         // Strings that are only dashes/hyphens (e.g. "-", "--", "---")
-        if (trimmed.matches("^-+$")) return "";
+        if (trimmed.matches("^-+$"))
+            return "";
         // Common placeholder literals (case-insensitive)
         switch (trimmed.toLowerCase()) {
             case "n/a":
@@ -172,17 +180,20 @@ public class SuspiciousIdentityService {
 
     /**
      * Cleans and normalizes phone number fields.
-     * Extracts only the digits to check if it's a placeholder (like "+62", "(+62)", "0", etc.).
+     * Extracts only the digits to check if it's a placeholder (like "+62", "(+62)",
+     * "0", etc.).
      * Returns empty string if no valid subscriber digits are found.
      */
     private String cleanPhone(String value) {
         String normalized = normalizeField(value);
-        if (normalized.isEmpty()) return "";
-        
+        if (normalized.isEmpty())
+            return "";
+
         // Strip everything except digits
         String digits = normalized.replaceAll("[^0-9]", "");
-        
-        // If it contains no digits, or just country code/zero placeholders (e.g. "62", "0")
+
+        // If it contains no digits, or just country code/zero placeholders (e.g. "62",
+        // "0")
         if (digits.isEmpty() || digits.equals("62") || digits.equals("0")) {
             return "";
         }

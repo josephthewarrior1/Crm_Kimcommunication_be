@@ -42,10 +42,8 @@ public class SuspiciousIdentityService {
                         !other.getLastName().equalsIgnoreCase(database.getLastName())) {
 
                     // Flag the current database record
-                    boolean databaseAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                            .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(database.getId())
-                                    && f.getFlagReason() == FlagReason.duplicate_phone
-                                    && f.getStatus() != FlagStatus.cleared);
+                    boolean databaseAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
+                            database.getId(), FlagReason.duplicate_phone, FlagStatus.cleared);
 
                     if (!databaseAlreadyFlagged) {
                         FlaggedIdentity flag = FlaggedIdentity.builder()
@@ -62,10 +60,8 @@ public class SuspiciousIdentityService {
                     }
 
                     // Flag the other database record as well
-                    boolean otherAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                            .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(other.getId())
-                                    && f.getFlagReason() == FlagReason.duplicate_phone
-                                    && f.getStatus() != FlagStatus.cleared);
+                    boolean otherAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
+                            other.getId(), FlagReason.duplicate_phone, FlagStatus.cleared);
 
                     if (!otherAlreadyFlagged) {
                         FlaggedIdentity flag = FlaggedIdentity.builder()
@@ -85,66 +81,60 @@ public class SuspiciousIdentityService {
         }
 
         // 2. Auto-flag duplicate email with different name
-        List<DatabaseEmail> databaseEmails = databaseEmailRepository.findAll().stream()
-                .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(database.getId()))
-                .toList();
+        List<DatabaseEmail> databaseEmails = database.getEmails();
+        if (databaseEmails == null) {
+            return;
+        }
 
         for (DatabaseEmail ce : databaseEmails) {
             String emailStr = normalizeField(ce.getEmail());
             if (!emailStr.isEmpty()) {
-                List<DatabaseEmail> matchedEmails = databaseEmailRepository.findAll().stream()
-                        .filter(e -> e.getEmail().equalsIgnoreCase(emailStr) && e.getDatabase() != null
-                                && !e.getDatabase().getId().equals(database.getId()))
-                        .toList();
+                databaseEmailRepository.findByEmail(emailStr).ifPresent(otherEmail -> {
+                    if (otherEmail.getDatabase() != null && !otherEmail.getDatabase().getId().equals(database.getId())) {
+                        Database other = otherEmail.getDatabase();
 
-                for (DatabaseEmail otherEmail : matchedEmails) {
-                    Database other = otherEmail.getDatabase();
+                        // If names are different
+                        if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
+                                !other.getLastName().equalsIgnoreCase(database.getLastName())) {
 
-                    // If names are different
-                    if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
-                            !other.getLastName().equalsIgnoreCase(database.getLastName())) {
+                            // Flag the current database record
+                            boolean databaseAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
+                                    database.getId(), FlagReason.duplicate_email, FlagStatus.cleared);
 
-                        // Flag the current database record
-                        boolean databaseAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                                .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(database.getId())
-                                        && f.getFlagReason() == FlagReason.duplicate_email
-                                        && f.getStatus() != FlagStatus.cleared);
+                            if (!databaseAlreadyFlagged) {
+                                FlaggedIdentity flag = FlaggedIdentity.builder()
+                                        .database(database)
+                                        .nameUsed(database.getFirstName() + " " + database.getLastName())
+                                        .emailUsed(emailStr)
+                                        .flagReason(FlagReason.duplicate_email)
+                                        .status(FlagStatus.suspected)
+                                        .evidenceNotes(
+                                                String.format("Auto-flagged: Email %s matches database record %s %s (ID: %s)",
+                                                        emailStr, other.getFirstName(), other.getLastName(), other.getId()))
+                                        .build();
+                                flaggedIdentityRepository.save(flag);
+                            }
 
-                        if (!databaseAlreadyFlagged) {
-                            FlaggedIdentity flag = FlaggedIdentity.builder()
-                                    .database(database)
-                                    .nameUsed(database.getFirstName() + " " + database.getLastName())
-                                    .emailUsed(emailStr)
-                                    .flagReason(FlagReason.duplicate_email)
-                                    .status(FlagStatus.suspected)
-                                    .evidenceNotes(
-                                            String.format("Auto-flagged: Email %s matches database record %s %s (ID: %s)",
-                                                    emailStr, other.getFirstName(), other.getLastName(), other.getId()))
-                                    .build();
-                            flaggedIdentityRepository.save(flag);
-                        }
+                            // Flag the other database record as well
+                            boolean otherAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
+                                    other.getId(), FlagReason.duplicate_email, FlagStatus.cleared);
 
-                        // Flag the other database record as well
-                        boolean otherAlreadyFlagged = flaggedIdentityRepository.findAll().stream()
-                                .anyMatch(f -> f.getDatabase() != null && f.getDatabase().getId().equals(other.getId())
-                                        && f.getFlagReason() == FlagReason.duplicate_email
-                                        && f.getStatus() != FlagStatus.cleared);
-
-                        if (!otherAlreadyFlagged) {
-                            FlaggedIdentity flag = FlaggedIdentity.builder()
-                                    .database(other)
-                                    .nameUsed(other.getFirstName() + " " + other.getLastName())
-                                    .emailUsed(emailStr)
-                                    .flagReason(FlagReason.duplicate_email)
-                                    .status(FlagStatus.suspected)
-                                    .evidenceNotes(String.format(
-                                            "Auto-flagged: Email %s matches database record %s %s (ID: %s)",
-                                            emailStr, database.getFirstName(), database.getLastName(), database.getId()))
-                                    .build();
-                            flaggedIdentityRepository.save(flag);
+                            if (!otherAlreadyFlagged) {
+                                FlaggedIdentity flag = FlaggedIdentity.builder()
+                                        .database(other)
+                                        .nameUsed(other.getFirstName() + " " + other.getLastName())
+                                        .emailUsed(emailStr)
+                                        .flagReason(FlagReason.duplicate_email)
+                                        .status(FlagStatus.suspected)
+                                        .evidenceNotes(String.format(
+                                                "Auto-flagged: Email %s matches database record %s %s (ID: %s)",
+                                                emailStr, database.getFirstName(), database.getLastName(), database.getId()))
+                                        .build();
+                                flaggedIdentityRepository.save(flag);
+                            }
                         }
                     }
-                }
+                });
             }
         }
     }

@@ -154,16 +154,15 @@ public class ExcelImportController {
                     
                     boolean emailMatch = false;
                     if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
-                        final Long databaseId = c.getId();
-                        List<DatabaseEmail> cEmails = databaseEmailRepository.findAll().stream()
-                            .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(databaseId))
-                            .toList();
-                        for (DatabaseEmail ce : cEmails) {
-                            if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
-                                emailMatch = true;
-                            }
-                            if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
-                                emailMatch = true;
+                        List<DatabaseEmail> cEmails = c.getEmails();
+                        if (cEmails != null) {
+                            for (DatabaseEmail ce : cEmails) {
+                                if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
+                                    emailMatch = true;
+                                }
+                                if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
+                                    emailMatch = true;
+                                }
                             }
                         }
                     }
@@ -335,16 +334,15 @@ public class ExcelImportController {
                     
                     boolean emailMatch = false;
                     if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
-                        final Long databaseId = c.getId();
-                        List<DatabaseEmail> cEmails = databaseEmailRepository.findAll().stream()
-                            .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(databaseId))
-                            .toList();
-                        for (DatabaseEmail ce : cEmails) {
-                            if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
-                                emailMatch = true;
-                            }
-                            if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
-                                emailMatch = true;
+                        List<DatabaseEmail> cEmails = c.getEmails();
+                        if (cEmails != null) {
+                            for (DatabaseEmail ce : cEmails) {
+                                if (!companyEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(companyEmail)) {
+                                    emailMatch = true;
+                                }
+                                if (!personalEmail.isEmpty() && ce.getEmail().equalsIgnoreCase(personalEmail)) {
+                                    emailMatch = true;
+                                }
                             }
                         }
                     }

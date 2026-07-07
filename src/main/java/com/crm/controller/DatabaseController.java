@@ -140,6 +140,7 @@ public class DatabaseController {
     }
 
     @DeleteMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> deleteDatabase(
             @PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -152,27 +153,10 @@ public class DatabaseController {
         }
 
         if (databaseRepository.existsById(id)) {
-            // Delete associated emails
-            List<DatabaseEmail> emails = databaseEmailRepository.findAll().stream()
-                    .filter(e -> e.getDatabase() != null && e.getDatabase().getId().equals(id))
-                    .toList();
-            databaseEmailRepository.deleteAll(emails);
-
-            // Delete associated event leads
-            List<EventLead> eventLeads = eventLeadRepository.findByDatabaseId(id);
-            eventLeadRepository.deleteAll(eventLeads);
-
-            // Delete associated removal requests
-            List<RemovalRequest> removalRequests = removalRequestRepository.findAll().stream()
-                    .filter(r -> r.getDatabase() != null && r.getDatabase().getId().equals(id))
-                    .toList();
-            removalRequestRepository.deleteAll(removalRequests);
-
-            // Delete associated flagged identities
-            List<FlaggedIdentity> flaggedIdentities = flaggedIdentityRepository.findAll().stream()
-                    .filter(f -> f.getDatabase() != null && f.getDatabase().getId().equals(id))
-                    .toList();
-            flaggedIdentityRepository.deleteAll(flaggedIdentities);
+            // Delete associated entities using query methods (emails are deleted automatically via CascadeType.ALL)
+            eventLeadRepository.deleteByDatabaseId(id);
+            removalRequestRepository.deleteByDatabaseId(id);
+            flaggedIdentityRepository.deleteByDatabaseId(id);
 
             databaseRepository.deleteById(id);
             return ResponseEntity.noContent().build();
@@ -221,10 +205,7 @@ public class DatabaseController {
         }
 
         return databaseRepository.findById(databaseId).map(database -> {
-            List<DatabaseEmail> emails = databaseEmailRepository.findAll().stream()
-                    .filter(e -> e.getDatabase().getId().equals(databaseId))
-                    .toList();
-            return ResponseEntity.ok(emails);
+            return ResponseEntity.ok(database.getEmails());
         }).orElse(ResponseEntity.notFound().build());
     }
 

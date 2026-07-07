@@ -14,4 +14,7 @@ public interface EventLeadRepository extends JpaRepository<EventLead, Long> {
     List<EventLead> findByEventId(Long eventId);
 
     List<EventLead> findByDatabaseId(Long databaseId);
+
+    void deleteByDatabaseId(Long databaseId);
 }
+

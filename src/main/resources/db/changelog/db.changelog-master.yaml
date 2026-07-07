@@ -15,3 +15,6 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-rename-contact-to-database.yml
   - include:
       file: db/changelog/changes/changelog-crm-rename-lead-to-participant.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-event-target-participants.yml
+

@@ -1,0 +1,12 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-event-target-participants
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: events
+            columns:
+              - column:
+                  name: target_participants
+                  type: int
+                  defaultValueNumeric: 0

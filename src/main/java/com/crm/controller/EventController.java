@@ -101,6 +101,7 @@ public class EventController {
             existing.setDateStart(eventDetails.getDateStart());
             existing.setDateEnd(eventDetails.getDateEnd());
             existing.setNotes(eventDetails.getNotes());
+            existing.setTargetParticipants(eventDetails.getTargetParticipants());
 
             return ResponseEntity.ok(eventRepository.save(existing));
         }).orElse(ResponseEntity.notFound().build());

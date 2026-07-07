@@ -38,6 +38,10 @@ public class Event {
 
     private String notes;
 
+    @Column(name = "target_participants")
+    @Builder.Default
+    private Integer targetParticipants = 0;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

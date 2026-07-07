@@ -3,7 +3,7 @@ package com.crm.controller;
 import com.crm.domain.Company;
 import com.crm.domain.Database;
 import com.crm.domain.DatabaseEmail;
-import com.crm.domain.EventLead;
+import com.crm.domain.EventParticipant;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.FlaggedIdentity;
 import com.crm.domain.Role;
@@ -11,7 +11,7 @@ import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.DatabaseEmailRepository;
 import com.crm.repository.DatabaseRepository;
-import com.crm.repository.EventLeadRepository;
+import com.crm.repository.EventParticipantRepository;
 import com.crm.repository.RemovalRequestRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SuspiciousIdentityService;
@@ -36,7 +36,7 @@ public class DatabaseController {
     private DatabaseEmailRepository databaseEmailRepository;
 
     @Autowired
-    private EventLeadRepository eventLeadRepository;
+    private EventParticipantRepository eventParticipantRepository;
 
     @Autowired
     private RemovalRequestRepository removalRequestRepository;
@@ -154,7 +154,7 @@ public class DatabaseController {
 
         if (databaseRepository.existsById(id)) {
             // Delete associated entities using query methods (emails are deleted automatically via CascadeType.ALL)
-            eventLeadRepository.deleteByDatabaseId(id);
+            eventParticipantRepository.deleteByDatabaseId(id);
             removalRequestRepository.deleteByDatabaseId(id);
             flaggedIdentityRepository.deleteByDatabaseId(id);
 
@@ -209,8 +209,8 @@ public class DatabaseController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
-    @GetMapping("/{databaseId}/event-leads")
-    public ResponseEntity<?> getDatabaseEventLeads(
+    @GetMapping("/{databaseId}/event-participants")
+    public ResponseEntity<?> getDatabaseEventParticipants(
             @PathVariable("databaseId") Long databaseId,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -221,8 +221,8 @@ public class DatabaseController {
         if (!databaseRepository.existsById(databaseId)) {
             return ResponseEntity.notFound().build();
         }
-        List<EventLead> leads = eventLeadRepository.findByDatabaseId(databaseId);
-        return ResponseEntity.ok(leads);
+        List<EventParticipant> participants = eventParticipantRepository.findByDatabaseId(databaseId);
+        return ResponseEntity.ok(participants);
     }
 
     @PutMapping("/{databaseId}/emails/{emailId}")

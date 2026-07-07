@@ -4,7 +4,7 @@ import com.crm.domain.Event;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.repository.EventRepository;
-import com.crm.repository.EventLeadRepository;
+import com.crm.repository.EventParticipantRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -19,7 +19,7 @@ public class EventController {
     private EventRepository eventRepository;
 
     @Autowired
-    private EventLeadRepository eventLeadRepository;
+    private EventParticipantRepository eventParticipantRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
@@ -119,9 +119,9 @@ public class EventController {
         }
 
         if (eventRepository.existsById(id)) {
-            // Delete associated event leads
-            List<com.crm.domain.EventLead> leads = eventLeadRepository.findByEventId(id);
-            eventLeadRepository.deleteAll(leads);
+            // Delete associated event participants
+            List<com.crm.domain.EventParticipant> participants = eventParticipantRepository.findByEventId(id);
+            eventParticipantRepository.deleteAll(participants);
 
             eventRepository.deleteById(id);
             return ResponseEntity.noContent().build();

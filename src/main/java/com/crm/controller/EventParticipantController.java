@@ -9,11 +9,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/event-leads")
-public class EventLeadController {
+@RequestMapping("/api/event-participants")
+public class EventParticipantController {
 
     @Autowired
-    private EventLeadRepository eventLeadRepository;
+    private EventParticipantRepository eventParticipantRepository;
 
     @Autowired
     private EventRepository eventRepository;
@@ -22,23 +22,23 @@ public class EventLeadController {
     private DatabaseRepository databaseRepository;
 
     @Autowired
-    private EventLeadActivityRepository eventLeadActivityRepository;
+    private EventParticipantActivityRepository eventParticipantActivityRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
 
     @GetMapping
-    public ResponseEntity<?> getAllEventLeads(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<?> getAllEventParticipants(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        return ResponseEntity.ok(eventLeadRepository.findAll());
+        return ResponseEntity.ok(eventParticipantRepository.findAll());
     }
 
     @PostMapping
-    public ResponseEntity<?> createEventLead(
-            @RequestBody EventLeadRequest request,
+    public ResponseEntity<?> createEventParticipant(
+            @RequestBody EventParticipantRequest request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -61,38 +61,38 @@ public class EventLeadController {
             return ResponseEntity.badRequest().body("No Database IDs provided");
         }
 
-        java.util.List<EventLead> savedLeads = new java.util.ArrayList<>();
+        java.util.List<EventParticipant> savedParticipants = new java.util.ArrayList<>();
         for (Long databaseId : databasesToProcess) {
             Database database = databaseRepository.findById(databaseId).orElse(null);
             if (database == null) {
                 continue;
             }
 
-            if (eventLeadRepository.findByEventIdAndDatabaseId(request.getEventId(), databaseId).isPresent()) {
+            if (eventParticipantRepository.findByEventIdAndDatabaseId(request.getEventId(), databaseId).isPresent()) {
                 continue;
             }
 
-            EventLead eventLead = EventLead.builder()
+            EventParticipant eventParticipant = EventParticipant.builder()
                     .event(event)
                     .database(database)
-                    .leadStatus(request.getLeadStatus() != null ? LeadStatus.valueOf(request.getLeadStatus()) : LeadStatus.white)
+                    .participantStatus(request.getParticipantStatus() != null ? ParticipantStatus.valueOf(request.getParticipantStatus()) : ParticipantStatus.white)
                     .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
                     .notes(request.getNotes())
                     .build();
-            savedLeads.add(eventLeadRepository.save(eventLead));
+            savedParticipants.add(eventParticipantRepository.save(eventParticipant));
         }
 
-        return ResponseEntity.ok(savedLeads);
+        return ResponseEntity.ok(savedParticipants);
     }
 
     @PutMapping("/{id}/status")
     public ResponseEntity<?> updateStatus(
             @PathVariable Long id,
-            @RequestParam(required = false) String leadStatus,
+            @RequestParam(required = false) String participantStatus,
             @RequestParam(required = false) String attendanceStatus,
             @RequestParam(required = false) String notes,
-            @RequestParam(required = false) String leadCategory,
+            @RequestParam(required = false) String participantCategory,
             @RequestParam(required = false) String callStatus,
             @RequestParam(required = false) String emailStatus,
             @RequestParam(required = false) String whatsappStatus,
@@ -111,64 +111,64 @@ public class EventLeadController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        return eventLeadRepository.findById(id).map(lead -> {
-            if (leadStatus != null) {
+        return eventParticipantRepository.findById(id).map(participant -> {
+            if (participantStatus != null) {
                 try {
-                    lead.setLeadStatus(LeadStatus.valueOf(leadStatus));
+                    participant.setParticipantStatus(ParticipantStatus.valueOf(participantStatus));
                 } catch (IllegalArgumentException e) {
-                    return ResponseEntity.badRequest().body("Invalid leadStatus. Must be a valid LeadStatus enum value.");
+                    return ResponseEntity.badRequest().body("Invalid participantStatus. Must be a valid ParticipantStatus enum value.");
                 }
             }
             if (attendanceStatus != null) {
                 try {
-                    lead.setAttendanceStatus(AttendanceStatus.valueOf(attendanceStatus));
+                    participant.setAttendanceStatus(AttendanceStatus.valueOf(attendanceStatus));
                 } catch (IllegalArgumentException e) {
                     return ResponseEntity.badRequest().body("Invalid attendanceStatus. Must be invited, registered, attended, no_show, or cancelled.");
                 }
             }
             if (notes != null) {
-                lead.setNotes(notes);
+                participant.setNotes(notes);
             }
             if (confirmationStatus != null) {
-                lead.setConfirmationStatus(confirmationStatus);
+                participant.setConfirmationStatus(confirmationStatus);
             }
-            if (leadCategory != null) {
-                lead.setLeadCategory(leadCategory);
+            if (participantCategory != null) {
+                participant.setParticipantCategory(participantCategory);
             }
             if (callStatus != null) {
-                lead.setCallStatus(callStatus);
+                participant.setCallStatus(callStatus);
             }
             if (emailStatus != null) {
-                lead.setEmailStatus(emailStatus);
+                participant.setEmailStatus(emailStatus);
             }
             if (whatsappStatus != null) {
-                lead.setWhatsappStatus(whatsappStatus);
+                participant.setWhatsappStatus(whatsappStatus);
             }
             if (meetingStatus != null) {
-                lead.setMeetingStatus(meetingStatus);
+                participant.setMeetingStatus(meetingStatus);
             }
             if (businessChallenges != null) {
-                lead.setBusinessChallenges(businessChallenges);
+                participant.setBusinessChallenges(businessChallenges);
             }
             if (projectInfo != null) {
-                lead.setProjectInfo(projectInfo);
+                participant.setProjectInfo(projectInfo);
             }
             if (timeline != null) {
-                lead.setTimeline(timeline);
+                participant.setTimeline(timeline);
             }
             if (reminderH7 != null) {
-                lead.setReminderH7(reminderH7);
+                participant.setReminderH7(reminderH7);
             }
             if (reminderH3 != null) {
-                lead.setReminderH3(reminderH3);
+                participant.setReminderH3(reminderH3);
             }
             if (reminderH1 != null) {
-                lead.setReminderH1(reminderH1);
+                participant.setReminderH1(reminderH1);
             }
             if (reminderHariH != null) {
-                lead.setReminderHariH(reminderHariH);
+                participant.setReminderHariH(reminderHariH);
             }
-            return ResponseEntity.ok(eventLeadRepository.save(lead));
+            return ResponseEntity.ok(eventParticipantRepository.save(participant));
         }).orElse(ResponseEntity.notFound().build());
     }
 
@@ -182,28 +182,28 @@ public class EventLeadController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        return eventLeadRepository.findById(id).map(lead -> {
-            EventLeadActivity activity = EventLeadActivity.builder()
-                    .eventLead(lead)
+        return eventParticipantRepository.findById(id).map(participant -> {
+            EventParticipantActivity activity = EventParticipantActivity.builder()
+                    .eventParticipant(participant)
                     .activityType(request.getActivityType())
                     .status(request.getStatus())
                     .notes(request.getNotes())
                     .createdBy(currentUser.getUsername())
                     .build();
             
-            EventLeadActivity savedActivity = eventLeadActivityRepository.save(activity);
+            EventParticipantActivity savedActivity = eventParticipantActivityRepository.save(activity);
 
-            // Sync status to the EventLead
+            // Sync status to the EventParticipant
             if ("CALL".equalsIgnoreCase(request.getActivityType())) {
-                lead.setCallStatus(request.getStatus());
+                participant.setCallStatus(request.getStatus());
             } else if ("EMAIL".equalsIgnoreCase(request.getActivityType())) {
-                lead.setEmailStatus(request.getStatus());
+                participant.setEmailStatus(request.getStatus());
             } else if ("WHATSAPP".equalsIgnoreCase(request.getActivityType())) {
-                lead.setWhatsappStatus(request.getStatus());
+                participant.setWhatsappStatus(request.getStatus());
             } else if ("MEETING".equalsIgnoreCase(request.getActivityType())) {
-                lead.setMeetingStatus(request.getStatus());
+                participant.setMeetingStatus(request.getStatus());
             }
-            eventLeadRepository.save(lead);
+            eventParticipantRepository.save(participant);
 
             return ResponseEntity.ok(savedActivity);
         }).orElse(ResponseEntity.notFound().build());
@@ -218,20 +218,20 @@ public class EventLeadController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        return ResponseEntity.ok(eventLeadActivityRepository.findByEventLeadIdOrderByCreatedAtDesc(id));
+        return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(id));
     }
 
     @GetMapping("/emails/track/{activityId}")
     public ResponseEntity<byte[]> trackEmailOpen(@PathVariable Long activityId) {
-        eventLeadActivityRepository.findById(activityId).ifPresent(activity -> {
+        eventParticipantActivityRepository.findById(activityId).ifPresent(activity -> {
             if ("EMAIL".equalsIgnoreCase(activity.getActivityType()) && !"OPENED".equalsIgnoreCase(activity.getStatus())) {
                 activity.setStatus("OPENED");
-                eventLeadActivityRepository.save(activity);
+                eventParticipantActivityRepository.save(activity);
 
-                // Also update the status on the lead itself
-                EventLead lead = activity.getEventLead();
-                lead.setEmailStatus("OPENED");
-                eventLeadRepository.save(lead);
+                // Also update the status on the participant itself
+                EventParticipant participant = activity.getEventParticipant();
+                participant.setEmailStatus("OPENED");
+                eventParticipantRepository.save(participant);
             }
         });
 
@@ -259,8 +259,8 @@ public class EventLeadController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<EventLead> leads = eventLeadRepository.findByEventId(eventId);
-        List<EventLeadActivity> activities = eventLeadActivityRepository.findByEventLeadEventId(eventId);
+        List<EventParticipant> participants = eventParticipantRepository.findByEventId(eventId);
+        List<EventParticipantActivity> activities = eventParticipantActivityRepository.findByEventParticipantEventId(eventId);
 
         long emailSent = activities.stream().filter(a -> "EMAIL".equalsIgnoreCase(a.getActivityType())).count();
         long emailOpened = activities.stream().filter(a -> "EMAIL".equalsIgnoreCase(a.getActivityType()) && "OPENED".equalsIgnoreCase(a.getStatus())).count();
@@ -272,9 +272,9 @@ public class EventLeadController {
         long waSent = activities.stream().filter(a -> "WHATSAPP".equalsIgnoreCase(a.getActivityType())).count();
         long waResponded = activities.stream().filter(a -> "WHATSAPP".equalsIgnoreCase(a.getActivityType()) && "RESPONDED".equalsIgnoreCase(a.getStatus())).count();
 
-        long hotLeads = leads.stream().filter(l -> "HOT".equalsIgnoreCase(l.getLeadCategory())).count();
-        long warmLeads = leads.stream().filter(l -> "WARM".equalsIgnoreCase(l.getLeadCategory())).count();
-        long meetingsSecured = leads.stream().filter(l -> "CONFIRMED".equalsIgnoreCase(l.getMeetingStatus())).count();
+        long hotParticipants = participants.stream().filter(p -> "HOT".equalsIgnoreCase(p.getParticipantCategory())).count();
+        long warmParticipants = participants.stream().filter(p -> "WARM".equalsIgnoreCase(p.getParticipantCategory())).count();
+        long meetingsSecured = participants.stream().filter(p -> "CONFIRMED".equalsIgnoreCase(p.getMeetingStatus())).count();
 
         double emailOpenRate = emailSent > 0 ? ((double) emailOpened / emailSent) * 100 : 0.0;
         double emailResponseRate = emailSent > 0 ? ((double) emailResponded / emailSent) * 100 : 0.0;
@@ -288,8 +288,8 @@ public class EventLeadController {
         report.put("connectedCalls", connectedCalls);
         report.put("whatsappSent", waSent);
         report.put("whatsappResponseRate", waResponseRate);
-        report.put("hotLeads", hotLeads);
-        report.put("warmLeads", warmLeads);
+        report.put("hotParticipants", hotParticipants);
+        report.put("warmParticipants", warmParticipants);
         report.put("meetingsSecured", meetingsSecured);
 
         return ResponseEntity.ok(report);
@@ -303,11 +303,11 @@ public class EventLeadController {
     }
 
     @lombok.Data
-    public static class EventLeadRequest {
+    public static class EventParticipantRequest {
         private Long eventId;
         private Long databaseId;
         private List<Long> databaseIds;
-        private String leadStatus;
+        private String participantStatus;
         private String attendanceStatus;
         private String confirmationStatus;
         private String notes;

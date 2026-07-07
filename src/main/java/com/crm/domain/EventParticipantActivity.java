@@ -7,21 +7,21 @@ import java.time.LocalDateTime;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 @Entity
-@Table(name = "event_lead_activities")
+@Table(name = "event_participant_activities")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class EventLeadActivity {
+public class EventParticipantActivity {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "event_lead_id", nullable = false)
-    private EventLead eventLead;
+    @JoinColumn(name = "event_participant_id", nullable = false)
+    private EventParticipant eventParticipant;
 
     @Column(name = "activity_type", nullable = false)
     private String activityType; // CALL, EMAIL, WHATSAPP, MEETING

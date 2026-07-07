@@ -3,17 +3,16 @@ package com.crm.domain;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Entity
-@Table(name = "event_leads", 
-       uniqueConstraints = @UniqueConstraint(name = "unique_event_database", columnNames = {"event_id", "database_id"}))
+@Table(name = "event_participants", 
+       uniqueConstraints = @UniqueConstraint(name = "unique_event_participant_database", columnNames = {"event_id", "database_id"}))
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class EventLead {
+public class EventParticipant {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -27,8 +26,8 @@ public class EventLead {
     private Database database;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "lead_status")
-    private LeadStatus leadStatus;
+    @Column(name = "participant_status")
+    private ParticipantStatus participantStatus;
 
     @Column(name = "requested_at")
     private LocalDateTime requestedAt;
@@ -40,8 +39,8 @@ public class EventLead {
     @Column(name = "attendance_status")
     private AttendanceStatus attendanceStatus;
 
-    @Column(name = "lead_category")
-    private String leadCategory;
+    @Column(name = "participant_category")
+    private String participantCategory;
 
     @Column(name = "reminder_h7")
     private String reminderH7;
@@ -54,7 +53,6 @@ public class EventLead {
 
     @Column(name = "reminder_h1")
     private String reminderH1;
-
 
     @Column(name = "confirmation_status")
     @Builder.Default

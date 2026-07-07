@@ -1,0 +1,84 @@
+databaseChangeLog:
+  - changeSet:
+      id: rename-lead-to-participant
+      author: antigravity
+      changes:
+        # 1. Drop old foreign keys first
+        - dropForeignKeyConstraint:
+            baseTableName: event_lead_activities
+            constraintName: fk_activities_event_lead_id
+        - dropForeignKeyConstraint:
+            baseTableName: event_leads
+            constraintName: fk_event_leads_event_id
+        - dropForeignKeyConstraint:
+            baseTableName: event_leads
+            constraintName: fk_event_leads_database_id
+
+        # 2. Drop unique constraint
+        - dropUniqueConstraint:
+            tableName: event_leads
+            constraintName: unique_event_database
+
+        # 3. Rename tables
+        - renameTable:
+            oldTableName: event_leads
+            newTableName: event_participants
+        - renameTable:
+            oldTableName: event_lead_activities
+            newTableName: event_participant_activities
+
+        # 4. Rename columns
+        - renameColumn:
+            tableName: event_participants
+            oldColumnName: lead_status
+            newColumnName: participant_status
+            dataType: varchar(255)
+        - renameColumn:
+            tableName: event_participants
+            oldColumnName: lead_category
+            newColumnName: participant_category
+            dataType: varchar(50)
+        - renameColumn:
+            tableName: event_participant_activities
+            oldColumnName: event_lead_id
+            newColumnName: event_participant_id
+            dataType: bigint
+
+        # 5. Create new foreign keys
+        - addForeignKeyConstraint:
+            baseTableName: event_participants
+            baseColumnNames: event_id
+            constraintName: fk_event_participants_event_id
+            referencedTableName: events
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: event_participants
+            baseColumnNames: database_id
+            constraintName: fk_event_participants_database_id
+            referencedTableName: databases
+            referencedColumnNames: id
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: event_participant_activities
+            baseColumnNames: event_participant_id
+            constraintName: fk_activities_event_participant_id
+            referencedTableName: event_participants
+            referencedColumnNames: id
+            onDelete: CASCADE
+
+        # 6. Recreate unique constraint
+        - addUniqueConstraint:
+            tableName: event_participants
+            columnNames: event_id, database_id
+            constraintName: unique_event_participant_database
+
+        # 7. Rename Indexes using SQL
+        - sql:
+            sql: "ALTER INDEX idx_event_leads_event_id RENAME TO idx_event_participants_event_id;"
+        - sql:
+            sql: "ALTER INDEX idx_event_leads_contact_id RENAME TO idx_event_participants_database_id;"
+        - sql:
+            sql: "ALTER INDEX idx_event_leads_lead_status RENAME TO idx_event_participants_participant_status;"
+        - sql:
+            sql: "ALTER INDEX idx_event_leads_attendance_status RENAME TO idx_event_participants_attendance_status;"

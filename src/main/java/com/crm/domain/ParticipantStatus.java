@@ -1,6 +1,6 @@
 package com.crm.domain;
 
-public enum LeadStatus {
+public enum ParticipantStatus {
     white,
     yellow,
     green,

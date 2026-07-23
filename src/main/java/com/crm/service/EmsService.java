@@ -224,16 +224,25 @@ public class EmsService {
                 databaseEmailRepository.save(dbEmail);
             }
 
-            // Determine status based on EMS verified_at, declined_at, and checked_in_at
+            // Determine status based on EMS registration_code, verified_at, declined_at, and checked_in_at
             Object checkedInAt = item.get("checked_in_at");
             Object verifiedAt = item.get("verified_at");
             Object declinedAt = item.get("declined_at");
+            Object regCode = item.get("registration_code");
 
             boolean isCheckedIn = checkedInAt != null && !checkedInAt.toString().isEmpty() && !"null".equalsIgnoreCase(checkedInAt.toString());
             boolean isVerified = verifiedAt != null && !verifiedAt.toString().isEmpty() && !"null".equalsIgnoreCase(verifiedAt.toString());
             boolean isDeclined = declinedAt != null && !declinedAt.toString().isEmpty() && !"null".equalsIgnoreCase(declinedAt.toString());
+            boolean hasRegCode = regCode != null && !regCode.toString().isEmpty() && !"null".equalsIgnoreCase(regCode.toString());
 
-            AttendanceStatus attendanceStatus = isCheckedIn ? AttendanceStatus.attended : AttendanceStatus.registered;
+            AttendanceStatus attendanceStatus;
+            if (isCheckedIn) {
+                attendanceStatus = AttendanceStatus.attended;
+            } else if (hasRegCode) {
+                attendanceStatus = AttendanceStatus.registered;
+            } else {
+                attendanceStatus = AttendanceStatus.registered;
+            }
 
             String confirmationStatus;
             ParticipantStatus participantStatus;
@@ -258,6 +267,12 @@ public class EmsService {
                 EventParticipant ep = existingParticipantOpt.get();
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
+                String currentNotes = ep.getNotes();
+                if (currentNotes == null || currentNotes.isEmpty()) {
+                    ep.setNotes("[Origin: EMS Sync]");
+                } else if (!currentNotes.contains("[Origin: EMS Sync]") && !currentNotes.contains("[EMS]")) {
+                    ep.setNotes("[Origin: EMS Sync] " + currentNotes);
+                }
                 if (isDeclined) {
                     ep.setConfirmationStatus("declined");
                 } else if (isCheckedIn) {
@@ -275,6 +290,7 @@ public class EmsService {
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
                         .confirmationStatus(confirmationStatus)
+                        .notes("[Origin: EMS Sync]")
                         .build();
                 eventParticipantRepository.save(ep);
             }

@@ -76,7 +76,7 @@ public class EventParticipantController {
                     .event(event)
                     .database(database)
                     .participantStatus(request.getParticipantStatus() != null ? ParticipantStatus.valueOf(request.getParticipantStatus()) : ParticipantStatus.white)
-                    .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.invited)
+                    .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.registered)
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
                     .notes(request.getNotes())
                     .build();

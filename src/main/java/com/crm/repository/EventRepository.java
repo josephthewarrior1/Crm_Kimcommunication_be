@@ -9,4 +9,5 @@ import java.util.UUID;
 @Repository
 public interface EventRepository extends JpaRepository<Event, Long> {
     Optional<Event> findByNameIgnoreCase(String name);
+    Optional<Event> findByEmsEventId(Long emsEventId);
 }

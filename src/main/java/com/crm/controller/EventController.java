@@ -153,6 +153,14 @@ public class EventController {
         }
         Event event = eventRepository.findById(id).orElse(null);
         if (event == null) {
+            event = eventRepository.findByEmsEventId(id).orElse(null);
+        }
+        if (event == null) {
+            event = eventRepository.findAll().stream()
+                    .filter(e -> e.getEmsEventId() != null && e.getEmsEventId() > 0)
+                    .findFirst().orElse(null);
+        }
+        if (event == null) {
             return ResponseEntity.notFound().build();
         }
         int count = emsService.syncParticipantsForEvent(event);

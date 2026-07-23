@@ -242,10 +242,10 @@ public class EmsService {
                 confirmationStatus = "declined";
                 participantStatus = ParticipantStatus.unable_to_attend;
             } else if (isCheckedIn) {
-                confirmationStatus = "confirmed";
+                confirmationStatus = "approve";
                 participantStatus = ParticipantStatus.confirm;
             } else if (isVerified) {
-                confirmationStatus = "confirmed";
+                confirmationStatus = "approve";
                 participantStatus = ParticipantStatus.registered;
             } else {
                 confirmationStatus = "pending";
@@ -261,9 +261,9 @@ public class EmsService {
                 if (isDeclined) {
                     ep.setConfirmationStatus("declined");
                 } else if (isCheckedIn) {
-                    ep.setConfirmationStatus("confirmed");
+                    ep.setConfirmationStatus("approve");
                 } else if (isVerified) {
-                    ep.setConfirmationStatus("confirmed");
+                    ep.setConfirmationStatus("approve");
                 } else if (ep.getConfirmationStatus() == null || ep.getConfirmationStatus().isEmpty()) {
                     ep.setConfirmationStatus("pending");
                 }

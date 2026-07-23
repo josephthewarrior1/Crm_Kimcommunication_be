@@ -512,6 +512,7 @@ ALTER TABLE personal_email_domains
 9. Add contact to event
 10. Update lead status: `white` · `yellow` · `green` · `red`
 11. View contact event history
+12. Sort contact database by fields (First Name, Last Name, Company, Group, Job Title, Industry, City) in Ascending & Descending order (`ASC` / `DESC`)
 
 ### Phase 2 — Data Quality
 
@@ -544,29 +545,6 @@ ALTER TABLE personal_email_domains
 5. Manual confirm suspicious identity
 6. Manual clear false-positive flag
 7. Watchlist / blacklist warning
-8. Tikus score
-
----
-
-## 10. Tikus Score
-
-| Condition | Score |
-|-----------|-------|
-| Duplicate phone with different name | +50 |
-| Duplicate email with different name | +40 |
-| Personal email for corporate event | +15 |
-| Fake company suspected | +30 |
-| Joined 3 events within 30 days | +30 |
-| Confirmed suspicious before | +100 |
-
-**Risk level:**
-
-| Score | Status |
-|-------|--------|
-| 0 – 30 | 🟢 Low risk |
-| 31 – 69 | 🟡 Medium risk |
-| 70 – 99 | 🔴 High risk |
-| 100+ | ⛔ Blacklist candidate |
 
 ---
 
@@ -626,7 +604,6 @@ Import harus:
 ### Step 6 — Removal & Suspicious Identity
 - Removal workflow
 - Flagged identities
-- Tikus score
 - Watchlist warning
 
 ---

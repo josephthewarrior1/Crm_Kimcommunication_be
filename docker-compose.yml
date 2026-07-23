@@ -11,7 +11,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crmpostgres2025}
     ports:
-      - "5432:5432"
+      - "4000:5432"
     volumes:
       - crm_kimtele_postgres_data:/var/lib/postgresql/data
     networks:
@@ -44,19 +44,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - crm-kimtele
-
-  onlyoffice:
-    image: onlyoffice/documentserver
-    container_name: crm-kimtele-onlyoffice
-    restart: unless-stopped
-    ports:
-      - "8083:80"
-    environment:
-      JWT_ENABLED: "false"
-      ALLOW_PRIVATE_IP_ADDRESS: "true"
-      ALLOW_META_IP_ADDRESS: "true"
     networks:
       - crm-kimtele
 

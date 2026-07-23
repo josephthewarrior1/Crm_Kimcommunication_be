@@ -115,12 +115,14 @@ public class CompanyController {
             existing.setCompanySizeEmployee(companyDetails.getCompanySizeEmployee());
             existing.setCompanyHardware(companyDetails.getCompanyHardware());
             existing.setCity(companyDetails.getCity());
+            existing.setPostalCode(companyDetails.getPostalCode());
 
             if (groupId != null) {
                 Group group = groupRepository.findById(groupId).orElse(null);
                 existing.setGroup(group);
-            } else if (companyDetails.getGroup() != null) {
-                existing.setGroup(companyDetails.getGroup());
+            } else if (companyDetails.getGroup() != null && companyDetails.getGroup().getId() != null) {
+                Group group = groupRepository.findById(companyDetails.getGroup().getId()).orElse(null);
+                existing.setGroup(group);
             } else {
                 existing.setGroup(null);
             }

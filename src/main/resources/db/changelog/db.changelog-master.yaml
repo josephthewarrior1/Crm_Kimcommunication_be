@@ -17,4 +17,6 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-rename-lead-to-participant.yml
   - include:
       file: db/changelog/changes/changelog-crm-event-target-participants.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-ems-event-id.yml
 

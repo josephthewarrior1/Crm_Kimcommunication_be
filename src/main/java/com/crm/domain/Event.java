@@ -42,6 +42,10 @@ public class Event {
     @Builder.Default
     private Integer targetParticipants = 0;
 
+    // ponytail: mapping link to EMS event ID
+    @Column(name = "ems_event_id")
+    private Long emsEventId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

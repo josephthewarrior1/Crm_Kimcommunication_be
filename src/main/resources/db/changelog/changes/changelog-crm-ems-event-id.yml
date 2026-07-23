@@ -1,0 +1,17 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-ems-event-id-to-events
+      author: antigravity
+      preConditions:
+        - onFail: MARK_RAN
+        - not:
+            - columnExists:
+                tableName: events
+                columnName: ems_event_id
+      changes:
+        - addColumn:
+            tableName: events
+            columns:
+              - column:
+                  name: ems_event_id
+                  type: BIGINT

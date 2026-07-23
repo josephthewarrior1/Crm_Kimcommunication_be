@@ -30,7 +30,10 @@ services:
     restart: unless-stopped
     ports:
       - "8081:8081"
+    env_file:
+      - .env
     environment:
+      - SERVER_PORT=8081
       - SPRING_PROFILES_ACTIVE=postgres
       - JDBC_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-crm_kimtele}
       - POSTGRES_HOST=postgres
@@ -39,6 +42,9 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-crmpostgres2025}
       - APP_CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:8082,http://127.0.0.1:8082,http://localhost:8084,http://127.0.0.1:8084
+      - EMS_API_URL=${EMS_API_URL:-https://api.admin.event.kimcommunication.com}
+      - EMS_ADMIN_EMAIL=${EMS_ADMIN_EMAIL:-admin_staff@kim-marketing.com}
+      - EMS_ADMIN_PASSWORD=${EMS_ADMIN_PASSWORD:-!QAZkim123}
     volumes:
       - ./uploads:/app/uploads
     depends_on:

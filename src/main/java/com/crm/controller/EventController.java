@@ -24,6 +24,29 @@ public class EventController {
     @Autowired
     private SecurityHelper securityHelper;
 
+    @Autowired
+    private com.crm.service.EmsService emsService;
+
+    @GetMapping("/ems-upcoming")
+    public ResponseEntity<?> getEmsUpcomingEvents(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(emsService.getUpcomingEvents());
+    }
+
+    @GetMapping("/ems-participants/{emsEventId}")
+    public ResponseEntity<?> getEmsEventParticipants(
+            @PathVariable Long emsEventId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        return ResponseEntity.ok(emsService.getEventParticipants(emsEventId));
+    }
+
     @GetMapping
     public ResponseEntity<?> getAllEvents(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -85,26 +108,55 @@ public class EventController {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can update events");
         }
 
-        return eventRepository.findById(id).map(existing -> {
-            if (eventDetails.getName() == null || eventDetails.getName().trim().isEmpty()) {
-                return ResponseEntity.badRequest().body("Event name is required");
-            }
-            String cleanName = eventDetails.getName().trim();
+        if (eventDetails.getName() == null || eventDetails.getName().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("Event name is required");
+        }
+        String cleanName = eventDetails.getName().trim();
+
+        Event existing = eventRepository.findById(id).orElseGet(() -> {
             java.util.Optional<Event> duplicate = eventRepository.findByNameIgnoreCase(cleanName);
-            if (duplicate.isPresent() && !duplicate.get().getId().equals(id)) {
-                return ResponseEntity.badRequest().body("Event name already exists");
+            if (duplicate.isPresent()) {
+                return duplicate.get();
             }
+            return new Event();
+        });
 
-            existing.setName(cleanName);
-            existing.setEventType(eventDetails.getEventType());
-            existing.setClientName(eventDetails.getClientName());
-            existing.setDateStart(eventDetails.getDateStart());
-            existing.setDateEnd(eventDetails.getDateEnd());
-            existing.setNotes(eventDetails.getNotes());
-            existing.setTargetParticipants(eventDetails.getTargetParticipants());
+        existing.setName(cleanName);
+        existing.setEventType(eventDetails.getEventType());
+        existing.setClientName(eventDetails.getClientName());
+        existing.setDateStart(eventDetails.getDateStart());
+        existing.setDateEnd(eventDetails.getDateEnd());
+        existing.setNotes(eventDetails.getNotes());
+        existing.setTargetParticipants(eventDetails.getTargetParticipants());
+        existing.setEmsEventId(eventDetails.getEmsEventId());
 
-            return ResponseEntity.ok(eventRepository.save(existing));
-        }).orElse(ResponseEntity.notFound().build());
+        Event saved = eventRepository.save(existing);
+
+        if (saved.getEmsEventId() != null && saved.getEmsEventId() > 0) {
+            try {
+                emsService.syncParticipantsForEvent(saved);
+            } catch (Exception e) {
+                System.err.println("Error auto-syncing EMS participants: " + e.getMessage());
+            }
+        }
+
+        return ResponseEntity.ok(saved);
+    }
+
+    @PostMapping("/{id}/sync-ems")
+    public ResponseEntity<?> syncEmsParticipants(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+        int count = emsService.syncParticipantsForEvent(event);
+        return ResponseEntity.ok(java.util.Map.of("message", "Synced EMS participants", "count", count));
     }
 
     @DeleteMapping("/{id}")

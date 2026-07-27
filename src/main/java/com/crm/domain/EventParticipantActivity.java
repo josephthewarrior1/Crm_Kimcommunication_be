@@ -42,4 +42,31 @@ public class EventParticipantActivity {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
     }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("participantName")
+    public String getParticipantName() {
+        if (eventParticipant != null && eventParticipant.getDatabase() != null) {
+            String f = eventParticipant.getDatabase().getFirstName();
+            String l = eventParticipant.getDatabase().getLastName();
+            String name = ((f != null ? f : "") + " " + (l != null ? l : "")).trim();
+            return name.isEmpty() ? "Unknown Participant" : name;
+        }
+        return null;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("companyName")
+    public String getCompanyName() {
+        if (eventParticipant != null && eventParticipant.getDatabase() != null && eventParticipant.getDatabase().getCompany() != null) {
+            return eventParticipant.getDatabase().getCompany().getName();
+        }
+        return null;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonProperty("mobilePhone")
+    public String getMobilePhone() {
+        if (eventParticipant != null && eventParticipant.getDatabase() != null) {
+            return eventParticipant.getDatabase().getMobilePhone();
+        }
+        return null;
+    }
 }

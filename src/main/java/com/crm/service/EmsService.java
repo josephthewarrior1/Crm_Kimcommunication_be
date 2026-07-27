@@ -146,7 +146,16 @@ public class EmsService {
 
             if (email == null || email.isEmpty()) continue;
 
-            // Extract Names
+            // Extract Salutation & Names
+            String salutation = null;
+            if (profile != null && profile.get("registered_salutation") != null) {
+                salutation = profile.get("registered_salutation").toString().trim();
+            } else if (profile != null && profile.get("salutation") != null) {
+                salutation = profile.get("salutation").toString().trim();
+            } else if (item.get("salutation") != null) {
+                salutation = item.get("salutation").toString().trim();
+            }
+
             String firstName = null;
             String lastName = null;
 
@@ -200,12 +209,21 @@ public class EmsService {
             Database database;
             if (existingEmailOpt.isPresent()) {
                 database = existingEmailOpt.get().getDatabase();
+                boolean updated = false;
                 if (company != null && database.getCompany() == null) {
                     database.setCompany(company);
+                    updated = true;
+                }
+                if (salutation != null && !salutation.isEmpty() && (database.getSalutation() == null || database.getSalutation().isEmpty())) {
+                    database.setSalutation(salutation);
+                    updated = true;
+                }
+                if (updated) {
                     databaseRepository.save(database);
                 }
             } else {
                 database = Database.builder()
+                        .salutation(salutation)
                         .firstName(firstName)
                         .lastName(lastName)
                         .company(company)
@@ -277,6 +295,7 @@ public class EmsService {
                     ep.setConfirmationStatus("declined");
                 } else if (isCheckedIn) {
                     ep.setConfirmationStatus("approve");
+                    ep.setReminderHariH("on_location");
                 } else if (isVerified) {
                     ep.setConfirmationStatus("approve");
                 } else if (ep.getConfirmationStatus() == null || ep.getConfirmationStatus().isEmpty()) {
@@ -290,6 +309,7 @@ public class EmsService {
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
                         .confirmationStatus(confirmationStatus)
+                        .reminderHariH(isCheckedIn ? "on_location" : null)
                         .notes("[Origin: EMS Sync]")
                         .build();
                 eventParticipantRepository.save(ep);

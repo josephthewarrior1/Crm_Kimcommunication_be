@@ -109,17 +109,17 @@ public class DatabaseController {
         }
 
         return databaseRepository.findById(id).map(existing -> {
-            existing.setSalutation(databaseDetails.getSalutation());
-            existing.setFirstName(databaseDetails.getFirstName());
-            existing.setLastName(databaseDetails.getLastName());
-            existing.setPositionLevel(databaseDetails.getPositionLevel());
-            existing.setSpecialityDivision(databaseDetails.getSpecialityDivision());
-            existing.setJobTitle(databaseDetails.getJobTitle());
-            existing.setMobilePhone(databaseDetails.getMobilePhone());
-            existing.setNormalizedPhone(databaseDetails.getNormalizedPhone());
-            existing.setLinkedinUrl(databaseDetails.getLinkedinUrl());
-            existing.setDatabaseType(databaseDetails.getDatabaseType());
-            existing.setSource(databaseDetails.getSource());
+            if (databaseDetails.getSalutation() != null) existing.setSalutation(databaseDetails.getSalutation());
+            if (databaseDetails.getFirstName() != null) existing.setFirstName(databaseDetails.getFirstName());
+            if (databaseDetails.getLastName() != null) existing.setLastName(databaseDetails.getLastName());
+            if (databaseDetails.getPositionLevel() != null) existing.setPositionLevel(databaseDetails.getPositionLevel());
+            if (databaseDetails.getSpecialityDivision() != null) existing.setSpecialityDivision(databaseDetails.getSpecialityDivision());
+            if (databaseDetails.getJobTitle() != null) existing.setJobTitle(databaseDetails.getJobTitle());
+            if (databaseDetails.getMobilePhone() != null) existing.setMobilePhone(databaseDetails.getMobilePhone());
+            if (databaseDetails.getNormalizedPhone() != null) existing.setNormalizedPhone(databaseDetails.getNormalizedPhone());
+            if (databaseDetails.getLinkedinUrl() != null) existing.setLinkedinUrl(databaseDetails.getLinkedinUrl());
+            if (databaseDetails.getDatabaseType() != null) existing.setDatabaseType(databaseDetails.getDatabaseType());
+            if (databaseDetails.getSource() != null) existing.setSource(databaseDetails.getSource());
             if (databaseDetails.getIsActive() != null) {
                 existing.setIsActive(databaseDetails.getIsActive());
             }
@@ -129,8 +129,6 @@ public class DatabaseController {
                 existing.setCompany(company);
             } else if (databaseDetails.getCompany() != null) {
                 existing.setCompany(databaseDetails.getCompany());
-            } else {
-                existing.setCompany(null);
             }
 
             Database saved = databaseRepository.save(existing);

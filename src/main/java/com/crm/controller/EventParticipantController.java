@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/api/event-participants")
@@ -219,6 +220,30 @@ public class EventParticipantController {
         }
 
         return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(id));
+    }
+
+    @GetMapping("/event/{eventId}/activities")
+    public ResponseEntity<?> getEventActivities(
+            @PathVariable Long eventId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        if (startDate != null && !startDate.trim().isEmpty() && endDate != null && !endDate.trim().isEmpty()) {
+            try {
+                LocalDateTime start = LocalDateTime.parse(startDate.trim() + "T00:00:00");
+                LocalDateTime end = LocalDateTime.parse(endDate.trim() + "T23:59:59");
+                return ResponseEntity.ok(eventParticipantActivityRepository.findByEventIdAndDateRange(eventId, start, end));
+            } catch (Exception e) {
+                // Fallback if parsing fails
+            }
+        }
+
+        return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantEventId(eventId));
     }
 
     @GetMapping("/emails/track/{activityId}")

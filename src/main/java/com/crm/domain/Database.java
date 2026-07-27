@@ -60,6 +60,7 @@ public class Database {
     @Enumerated(EnumType.STRING)
     private DatabaseSource source;
 
+    @com.fasterxml.jackson.annotation.JsonProperty("isActive")
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;

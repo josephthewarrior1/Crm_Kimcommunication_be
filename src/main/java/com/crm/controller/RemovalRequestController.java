@@ -67,10 +67,9 @@ public class RemovalRequestController {
 
         RemovalRequest saved = removalRequestRepository.save(removalRequest);
 
-        if (saved.getStatus() == RemovalStatus.done || saved.getStatus() == RemovalStatus.approved) {
-            database.setIsActive(false);
-            databaseRepository.save(database);
-        }
+        // Soft-delete: mark contact as inactive on creation so it immediately hides from active Database list
+        database.setIsActive(false);
+        databaseRepository.save(database);
 
         return ResponseEntity.ok(saved);
     }
@@ -96,8 +95,16 @@ public class RemovalRequestController {
 
                 if (newStatus == RemovalStatus.done || newStatus == RemovalStatus.approved) {
                     Database d = saved.getDatabase();
-                    d.setIsActive(false);
-                    databaseRepository.save(d);
+                    if (d != null) {
+                        d.setIsActive(false);
+                        databaseRepository.save(d);
+                    }
+                } else if (newStatus == RemovalStatus.rejected) {
+                    Database d = saved.getDatabase();
+                    if (d != null) {
+                        d.setIsActive(true);
+                        databaseRepository.save(d);
+                    }
                 }
 
                 return ResponseEntity.ok(saved);

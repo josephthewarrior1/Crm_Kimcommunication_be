@@ -131,15 +131,6 @@ public class EventController {
         existing.setEmsEventId(eventDetails.getEmsEventId());
 
         Event saved = eventRepository.save(existing);
-
-        if (saved.getEmsEventId() != null && saved.getEmsEventId() > 0) {
-            try {
-                emsService.syncParticipantsForEvent(saved);
-            } catch (Exception e) {
-                System.err.println("Error auto-syncing EMS participants: " + e.getMessage());
-            }
-        }
-
         return ResponseEntity.ok(saved);
     }
 

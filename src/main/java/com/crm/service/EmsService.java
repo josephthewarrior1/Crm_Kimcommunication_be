@@ -276,13 +276,24 @@ public class EmsService {
                 participantStatus = ParticipantStatus.registered;
             }
 
+            // Check if database or participant is flagged as declined / inactive
+            boolean isDeclinedOrInactive = (database.getIsActive() != null && !database.getIsActive());
+
             // Link EventParticipant
             Optional<EventParticipant> existingParticipantOpt = eventParticipantRepository.findByEventIdAndDatabaseId(event.getId(), database.getId());
             if (existingParticipantOpt.isPresent()) {
                 EventParticipant ep = existingParticipantOpt.get();
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
-                ep.setConfirmationStatus(confirmationStatus);
+                
+                // Keep declined status if already declined/Tikus
+                String currentConf = ep.getConfirmationStatus();
+                if (currentConf == null || (!currentConf.equalsIgnoreCase("decline") && !currentConf.equalsIgnoreCase("declined") && !isDeclinedOrInactive)) {
+                    ep.setConfirmationStatus(confirmationStatus);
+                } else if (isDeclinedOrInactive) {
+                    ep.setConfirmationStatus("decline");
+                }
+
                 String currentNotes = ep.getNotes();
                 if (currentNotes == null || currentNotes.isEmpty()) {
                     ep.setNotes("[Origin: EMS Sync]");
@@ -299,7 +310,7 @@ public class EmsService {
                         .database(database)
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
-                        .confirmationStatus(confirmationStatus)
+                        .confirmationStatus(isDeclinedOrInactive ? "decline" : confirmationStatus)
                         .reminderHariH(isCheckedIn ? "on_location" : null)
                         .notes("[Origin: EMS Sync]")
                         .build();

@@ -11,6 +11,7 @@ import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/flagged-identities")
@@ -202,6 +203,9 @@ public class FlaggedIdentityController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @Autowired
+    private com.crm.repository.EventParticipantRepository eventParticipantRepository;
+
     /**
      * Updates the active status (isActive) of a database record based on flag status.
      * If the flag is confirmed, record is soft-deleted (isActive = false).
@@ -222,6 +226,15 @@ public class FlaggedIdentityController {
                                        && f.getStatus() == FlagStatus.confirmed);
                 if (!hasOtherConfirmed) {
                     d.setIsActive(true);
+
+                    // Restore event participant confirmation status to approve if previously declined due to flag
+                    List<com.crm.domain.EventParticipant> participants = eventParticipantRepository.findByDatabaseId(d.getId());
+                    for (com.crm.domain.EventParticipant ep : participants) {
+                        if ("decline".equalsIgnoreCase(ep.getConfirmationStatus()) || "declined".equalsIgnoreCase(ep.getConfirmationStatus())) {
+                            ep.setConfirmationStatus("approve");
+                            eventParticipantRepository.save(ep);
+                        }
+                    }
                 }
             }
             databaseRepository.save(d);

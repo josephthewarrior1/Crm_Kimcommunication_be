@@ -275,6 +275,28 @@ public class EventParticipantController {
                 .body(transparentPixel);
     }
 
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteEventParticipant(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can delete event participants");
+        }
+
+        return eventParticipantRepository.findById(id).map(participant -> {
+            List<EventParticipantActivity> activities = eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(id);
+            if (activities != null && !activities.isEmpty()) {
+                eventParticipantActivityRepository.deleteAll(activities);
+            }
+            eventParticipantRepository.delete(participant);
+            return ResponseEntity.ok().build();
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     @GetMapping("/report/{eventId}")
     public ResponseEntity<?> getEventReport(
             @PathVariable Long eventId,

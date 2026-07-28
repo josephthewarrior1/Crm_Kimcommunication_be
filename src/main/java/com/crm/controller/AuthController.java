@@ -155,11 +155,12 @@ public class AuthController {
                 .email(user.getEmail())
                 .fullName(user.getFullName())
                 .roles(user.getRoles().stream().map(Enum::name).collect(java.util.stream.Collectors.toSet()))
+                .allowedEventIds(user.getAllowedEventIds())
                 .build());
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<String> logout(
+    public ResponseEntity<?> logout(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(required = false) String token) {
         
@@ -171,19 +172,19 @@ public class AuthController {
         }
 
         if (tokenStr == null || tokenStr.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Token is required in Authorization header or query param");
+            return ResponseEntity.badRequest().body(java.util.Collections.singletonMap("error", "Token is required in Authorization header or query param"));
         }
 
         try {
             Long tokenLong = Long.parseLong(tokenStr.trim());
             if (sessionTokenRepository.existsById(tokenLong)) {
                 sessionTokenRepository.deleteById(tokenLong);
-                return ResponseEntity.ok("Logged out successfully");
+                return ResponseEntity.ok(java.util.Collections.singletonMap("message", "Logged out successfully"));
             } else {
-                return ResponseEntity.ok("Session not found or already logged out");
+                return ResponseEntity.ok(java.util.Collections.singletonMap("message", "Session not found or already logged out"));
             }
         } catch (NumberFormatException e) {
-            return ResponseEntity.badRequest().body("Invalid token format");
+            return ResponseEntity.badRequest().body(java.util.Collections.singletonMap("error", "Invalid token format"));
         }
     }
 
@@ -212,5 +213,6 @@ public class AuthController {
         private String email;
         private String fullName;
         private java.util.Set<String> roles;
+        private java.util.Set<Long> allowedEventIds;
     }
 }

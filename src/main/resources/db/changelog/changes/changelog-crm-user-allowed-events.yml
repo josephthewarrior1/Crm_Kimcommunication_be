@@ -1,0 +1,25 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-user-allowed-events-table
+      author: antigravity
+      changes:
+        - createTable:
+            tableName: user_allowed_events
+            columns:
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    foreignKeyName: fk_user_allowed_events_user_id
+                    referencedTableName: app_users
+                    referencedColumnNames: id
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: user_allowed_events
+            columnNames: user_id, event_id
+            constraintName: pk_user_allowed_events

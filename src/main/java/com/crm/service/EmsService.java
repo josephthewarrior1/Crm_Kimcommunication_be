@@ -271,11 +271,8 @@ public class EmsService {
             } else if (isCheckedIn) {
                 confirmationStatus = "approve";
                 participantStatus = ParticipantStatus.confirm;
-            } else if (isVerified) {
-                confirmationStatus = "approve";
-                participantStatus = ParticipantStatus.registered;
             } else {
-                confirmationStatus = "pending";
+                confirmationStatus = "approve";
                 participantStatus = ParticipantStatus.registered;
             }
 
@@ -285,21 +282,15 @@ public class EmsService {
                 EventParticipant ep = existingParticipantOpt.get();
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
+                ep.setConfirmationStatus(confirmationStatus);
                 String currentNotes = ep.getNotes();
                 if (currentNotes == null || currentNotes.isEmpty()) {
                     ep.setNotes("[Origin: EMS Sync]");
                 } else if (!currentNotes.contains("[Origin: EMS Sync]") && !currentNotes.contains("[EMS]")) {
                     ep.setNotes("[Origin: EMS Sync] " + currentNotes);
                 }
-                if (isDeclined) {
-                    ep.setConfirmationStatus("declined");
-                } else if (isCheckedIn) {
-                    ep.setConfirmationStatus("approve");
+                if (isCheckedIn) {
                     ep.setReminderHariH("on_location");
-                } else if (isVerified) {
-                    ep.setConfirmationStatus("approve");
-                } else if (ep.getConfirmationStatus() == null || ep.getConfirmationStatus().isEmpty()) {
-                    ep.setConfirmationStatus("pending");
                 }
                 eventParticipantRepository.save(ep);
             } else {

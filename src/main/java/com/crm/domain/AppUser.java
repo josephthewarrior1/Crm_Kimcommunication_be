@@ -39,6 +39,12 @@ public class AppUser {
     @Builder.Default
     private Set<Role> roles = new HashSet<>();
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "user_allowed_events", joinColumns = @JoinColumn(name = "user_id"))
+    @Column(name = "event_id")
+    @Builder.Default
+    private Set<Long> allowedEventIds = new HashSet<>();
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

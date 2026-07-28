@@ -122,6 +122,27 @@ public class UserController {
         return ResponseEntity.notFound().build();
     }
 
+    @PutMapping("/{id}/allowed-events")
+    public ResponseEntity<?> updateUserAllowedEvents(
+            @PathVariable Long id,
+            @RequestBody Set<Long> eventIds,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN users can manage event permissions");
+        }
+
+        return userRepository.findById(id).map(user -> {
+            user.setAllowedEventIds(eventIds != null ? eventIds : new HashSet<>());
+            AppUser saved = userRepository.save(user);
+            saved.setPassword(null);
+            return ResponseEntity.ok(saved);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     @lombok.Data
     public static class UpdatePasswordRequest {
         private String password;

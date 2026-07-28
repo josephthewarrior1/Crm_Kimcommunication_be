@@ -25,13 +25,56 @@ public class FlaggedIdentityController {
     @Autowired
     private SecurityHelper securityHelper;
 
+    @Autowired
+    private com.crm.service.SuspiciousIdentityService suspiciousIdentityService;
+
     @GetMapping
     public ResponseEntity<?> getAllFlaggedIdentities(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        return ResponseEntity.ok(flaggedIdentityRepository.findAll());
+
+        // Auto-link any unlinked FlaggedIdentity rows with existing Database contacts by subscriber phone digits or email
+        List<FlaggedIdentity> allFlags = flaggedIdentityRepository.findAll();
+        List<Database> allDbs = databaseRepository.findAll();
+        boolean updatedAny = false;
+
+        for (FlaggedIdentity flag : allFlags) {
+            if (flag.getDatabase() == null && flag.getStatus() != FlagStatus.cleared) {
+                String flagPhoneDigits = suspiciousIdentityService.extractSubscriberDigits(flag.getPhoneUsed());
+                String flagEmail = flag.getEmailUsed() != null ? flag.getEmailUsed().trim().toLowerCase() : "";
+
+                for (Database db : allDbs) {
+                    boolean phoneMatch = false;
+                    if (!flagPhoneDigits.isEmpty() && db.getMobilePhone() != null) {
+                        String dbDigits = suspiciousIdentityService.extractSubscriberDigits(db.getMobilePhone());
+                        if (!dbDigits.isEmpty() && dbDigits.equals(flagPhoneDigits)) {
+                            phoneMatch = true;
+                        }
+                    }
+
+                    boolean emailMatch = false;
+                    if (!flagEmail.isEmpty() && db.getEmails() != null) {
+                        emailMatch = db.getEmails().stream().anyMatch(e -> e.getEmail() != null && e.getEmail().trim().equalsIgnoreCase(flagEmail));
+                    }
+
+                    if (phoneMatch || emailMatch) {
+                        flag.setDatabase(db);
+                        flaggedIdentityRepository.save(flag);
+                        updateDatabaseActiveStatus(db, flag.getStatus());
+                        updatedAny = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (updatedAny) {
+            allFlags = flaggedIdentityRepository.findAll();
+        }
+
+        return ResponseEntity.ok(allFlags);
     }
 
     @PostMapping
@@ -44,6 +87,32 @@ public class FlaggedIdentityController {
         }
         if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN can manually flag identities");
+        }
+
+        // Auto-match unlinked database record if database is not set
+        if (flaggedIdentity.getDatabase() == null) {
+            String flagPhoneDigits = suspiciousIdentityService.extractSubscriberDigits(flaggedIdentity.getPhoneUsed());
+            String flagEmail = flaggedIdentity.getEmailUsed() != null ? flaggedIdentity.getEmailUsed().trim().toLowerCase() : "";
+
+            for (Database db : databaseRepository.findAll()) {
+                boolean phoneMatch = false;
+                if (!flagPhoneDigits.isEmpty() && db.getMobilePhone() != null) {
+                    String dbDigits = suspiciousIdentityService.extractSubscriberDigits(db.getMobilePhone());
+                    if (!dbDigits.isEmpty() && dbDigits.equals(flagPhoneDigits)) {
+                        phoneMatch = true;
+                    }
+                }
+
+                boolean emailMatch = false;
+                if (!flagEmail.isEmpty() && db.getEmails() != null) {
+                    emailMatch = db.getEmails().stream().anyMatch(e -> e.getEmail() != null && e.getEmail().trim().equalsIgnoreCase(flagEmail));
+                }
+
+                if (phoneMatch || emailMatch) {
+                    flaggedIdentity.setDatabase(db);
+                    break;
+                }
+            }
         }
 
         // Save FlaggedIdentity

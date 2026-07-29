@@ -158,16 +158,16 @@ public class EventParticipantController {
                 participant.setTimeline(timeline);
             }
             if (reminderH7 != null) {
-                participant.setReminderH7(reminderH7);
+                participant.setReminderH7(reminderH7.trim().isEmpty() ? null : reminderH7);
             }
             if (reminderH3 != null) {
-                participant.setReminderH3(reminderH3);
+                participant.setReminderH3(reminderH3.trim().isEmpty() ? null : reminderH3);
             }
             if (reminderH1 != null) {
-                participant.setReminderH1(reminderH1);
+                participant.setReminderH1(reminderH1.trim().isEmpty() ? null : reminderH1);
             }
             if (reminderHariH != null) {
-                participant.setReminderHariH(reminderHariH);
+                participant.setReminderHariH(reminderHariH.trim().isEmpty() ? null : reminderHariH);
             }
             return ResponseEntity.ok(eventParticipantRepository.save(participant));
         }).orElse(ResponseEntity.notFound().build());

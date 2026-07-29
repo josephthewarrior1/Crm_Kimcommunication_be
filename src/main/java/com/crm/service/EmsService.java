@@ -271,8 +271,11 @@ public class EmsService {
             } else if (isCheckedIn) {
                 confirmationStatus = "approve";
                 participantStatus = ParticipantStatus.confirm;
-            } else {
+            } else if (isVerified) {
                 confirmationStatus = "approve";
+                participantStatus = ParticipantStatus.registered;
+            } else {
+                confirmationStatus = "pending";
                 participantStatus = ParticipantStatus.registered;
             }
 

@@ -49,6 +49,55 @@ public class ExcelImportController {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }
 
+        // Pass 1: Validate completeness for all rows before performing any DB insertions
+        try (InputStream isCheck = file.getInputStream();
+             Workbook wbCheck = new XSSFWorkbook(isCheck)) {
+            Sheet sheetCheck = wbCheck.getSheetAt(0);
+            int lastRowNumCheck = sheetCheck.getLastRowNum();
+            List<String> incompleteErrors = new ArrayList<>();
+
+            for (int r = 1; r <= lastRowNumCheck; r++) {
+                Row row = sheetCheck.getRow(r);
+                if (row == null) continue;
+
+                String firstName = normalizeField(getCellValueAsString(row.getCell(5)));
+                String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
+                if (firstName.isEmpty() && lastName.isEmpty()) continue;
+
+                String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
+                String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
+                String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
+                String salutation = normalizeField(getCellValueAsString(row.getCell(4)));
+                String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
+                String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
+                String address = normalizeField(getCellValueAsString(row.getCell(10)));
+                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
+                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
+                String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
+                String industry = normalizeField(getCellValueAsString(row.getCell(15)));
+                String city = normalizeField(getCellValueAsString(row.getCell(20)));
+                String website = normalizeField(getCellValueAsString(row.getCell(22)));
+
+                List<String> missing = getMissingMandatoryFields(
+                        groupName, brandName, companyName, salutation, firstName, lastName,
+                        positionStr, jobTitle, address, officePhone, mobilePhone, companyEmail,
+                        industry, city, website
+                );
+
+                if (!missing.isEmpty()) {
+                    incompleteErrors.add("Baris " + r + " (" + (firstName + " " + lastName).trim() + "): Kolom kosong [" + String.join(", ", missing) + "]");
+                }
+            }
+
+            if (!incompleteErrors.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "message", "Import ditolak karena terdapat data yang belum lengkap. Silakan lengkapi kolom berikut pada file Excel Anda:\n• " + String.join("\n• ", incompleteErrors)
+                ));
+            }
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Failed to validate Excel file: " + e.getMessage()));
+        }
+
         int successCount = 0;
         try (InputStream is = file.getInputStream();
              Workbook workbook = new XSSFWorkbook(is)) {
@@ -62,7 +111,6 @@ public class ExcelImportController {
                     continue;
                 }
 
-                // Get values from row columns
                 String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
                 String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
                 String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
@@ -86,7 +134,6 @@ public class ExcelImportController {
                 String postalCode = normalizeField(getCellValueAsString(row.getCell(21)));
                 String website = normalizeField(getCellValueAsString(row.getCell(22)));
 
-                // Validate minimum requirements: First Name and Last Name
                 if (firstName.isEmpty() && lastName.isEmpty()) {
                     continue; // Skip blank rows
                 }
@@ -122,7 +169,6 @@ public class ExcelImportController {
                                 .build();
                         company = companyRepository.save(company);
                     } else {
-                        // Update details
                         if (!brandName.isEmpty()) company.setBrandName(brandName);
                         if (!address.isEmpty()) company.setAddress(address);
                         if (!officePhone.isEmpty()) company.setOfficePhone(officePhone);
@@ -138,9 +184,11 @@ public class ExcelImportController {
                     }
                 }
 
-                // 3. Resolve Database Record (Must match name to be a duplicate/update target)
-                Database database = null;
+                // 3. Find existing Database record or create new
+                Database targetDb = null;
+                boolean matchedByPhone = false;
                 List<Database> nameMatches = databaseRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName, lastName);
+                
                 for (Database c : nameMatches) {
                     boolean companyMatch = (company == null && c.getCompany() == null) || 
                                            (company != null && c.getCompany() != null && c.getCompany().getId().equals(company.getId()));
@@ -168,95 +216,84 @@ public class ExcelImportController {
                     }
                     
                     if (companyMatch || phoneMatch || emailMatch) {
-                        database = c;
+                        targetDb = c;
+                        if (phoneMatch) matchedByPhone = true;
                         break;
                     }
                 }
 
-                if (database == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
-                    database = nameMatches.get(0);
+                if (targetDb == null && !nameMatches.isEmpty() && mobilePhone.isEmpty() && companyEmail.isEmpty() && personalEmail.isEmpty()) {
+                    targetDb = nameMatches.get(0);
                 }
 
-                if (database == null) {
-                    database = Database.builder()
-                            .salutation(salutation.isEmpty() ? "Mr" : salutation)
+                PositionLevel posLevel = PositionLevel.fromValue(positionStr);
+
+                if (targetDb != null) {
+                    if (!salutation.isEmpty()) targetDb.setSalutation(salutation);
+                    if (!positionStr.isEmpty()) targetDb.setPositionLevel(posLevel);
+                    if (!specialityDivision.isEmpty()) targetDb.setSpecialityDivision(specialityDivision);
+                    if (!jobTitle.isEmpty()) targetDb.setJobTitle(jobTitle);
+                    if (!mobilePhone.isEmpty()) targetDb.setMobilePhone(mobilePhone);
+                    if (!linkedinUrl.isEmpty()) targetDb.setLinkedinUrl(linkedinUrl);
+                    if (company != null) targetDb.setCompany(company);
+                    targetDb = databaseRepository.save(targetDb);
+                } else {
+                    targetDb = Database.builder()
+                            .salutation(salutation.isEmpty() ? null : salutation)
                             .firstName(firstName)
-                            .lastName(lastName)
-                            .positionLevel(PositionLevel.fromValue(positionStr))
+                            .lastName(lastName.isEmpty() ? null : lastName)
+                            .positionLevel(posLevel)
                             .specialityDivision(specialityDivision.isEmpty() ? null : specialityDivision)
                             .jobTitle(jobTitle.isEmpty() ? null : jobTitle)
                             .mobilePhone(mobilePhone.isEmpty() ? null : mobilePhone)
-                            .normalizedPhone(mobilePhone.isEmpty() ? null : "+62" + mobilePhone.replaceAll("^0", ""))
                             .linkedinUrl(linkedinUrl.isEmpty() ? null : linkedinUrl)
-                            .company(company)
-                            .databaseType(DatabaseType.unknown)
-                            .source(DatabaseSource.excel_import)
                             .isActive(true)
+                            .company(company)
                             .build();
-                    database = databaseRepository.save(database);
-                } else {
-                    // Update details
-                    if (!salutation.isEmpty()) database.setSalutation(salutation);
-                    database.setPositionLevel(PositionLevel.fromValue(positionStr));
-                    if (!specialityDivision.isEmpty()) database.setSpecialityDivision(specialityDivision);
-                    if (!jobTitle.isEmpty()) database.setJobTitle(jobTitle);
-                    if (!mobilePhone.isEmpty()) {
-                        database.setMobilePhone(mobilePhone);
-                        database.setNormalizedPhone("+62" + mobilePhone.replaceAll("^0", ""));
-                    }
-                    if (!linkedinUrl.isEmpty()) database.setLinkedinUrl(linkedinUrl);
-                    if (company != null) database.setCompany(company);
-                    database = databaseRepository.save(database);
+                    targetDb = databaseRepository.save(targetDb);
                 }
 
-                // 4. Resolve Emails
-                if (database != null) {
-                    if (!companyEmail.isEmpty()) {
-                        String cleanEmail = companyEmail.toLowerCase();
-                        DatabaseEmail ce = databaseEmailRepository.findByEmail(cleanEmail).orElse(null);
-                        if (ce == null) {
-                            String domain = cleanEmail.substring(cleanEmail.indexOf("@") + 1);
-                            ce = DatabaseEmail.builder()
-                                    .database(database)
-                                    .email(cleanEmail)
-                                    .emailType("company")
-                                    .isPrimary(true)
-                                    .isVerified(true)
-                                    .isCorporate(true)
-                                    .domain(domain)
-                                    .build();
-                            databaseEmailRepository.save(ce);
-                        } else {
-                            ce.setDatabase(database);
-                            databaseEmailRepository.save(ce);
-                        }
-                    }
-
-                    if (!personalEmail.isEmpty()) {
-                        String cleanEmail = personalEmail.toLowerCase();
-                        DatabaseEmail pe = databaseEmailRepository.findByEmail(cleanEmail).orElse(null);
-                        if (pe == null) {
-                            String domain = cleanEmail.substring(cleanEmail.indexOf("@") + 1);
-                            pe = DatabaseEmail.builder()
-                                    .database(database)
-                                    .email(cleanEmail)
-                                    .emailType("personal")
-                                    .isPrimary(false)
-                                    .isVerified(true)
-                                    .isCorporate(false)
-                                    .domain(domain)
-                                    .build();
-                            databaseEmailRepository.save(pe);
-                        } else {
-                            pe.setDatabase(database);
-                            databaseEmailRepository.save(pe);
-                        }
-                    }
-                    suspiciousIdentityService.checkAndFlagDatabase(database);
+                // 4. Save / Sync Emails
+                if (targetDb.getEmails() == null) {
+                    targetDb.setEmails(new ArrayList<>());
                 }
+
+                if (!companyEmail.isEmpty()) {
+                    final String cEmailLower = companyEmail.toLowerCase();
+                    boolean exists = targetDb.getEmails().stream()
+                            .anyMatch(e -> e.getEmail().equalsIgnoreCase(cEmailLower));
+                    if (!exists) {
+                        DatabaseEmail emailObj = DatabaseEmail.builder()
+                                .email(companyEmail)
+                                .emailType("company")
+                                .isCorporate(true)
+                                .database(targetDb)
+                                .build();
+                        databaseEmailRepository.save(emailObj);
+                        targetDb.getEmails().add(emailObj);
+                    }
+                }
+
+                if (!personalEmail.isEmpty()) {
+                    final String pEmailLower = personalEmail.toLowerCase();
+                    boolean exists = targetDb.getEmails().stream()
+                            .anyMatch(e -> e.getEmail().equalsIgnoreCase(pEmailLower));
+                    if (!exists) {
+                        DatabaseEmail emailObj = DatabaseEmail.builder()
+                                .email(personalEmail)
+                                .emailType("personal")
+                                .isCorporate(false)
+                                .database(targetDb)
+                                .build();
+                        databaseEmailRepository.save(emailObj);
+                        targetDb.getEmails().add(emailObj);
+                    }
+                }
+
+                suspiciousIdentityService.checkAndFlagDatabase(targetDb);
                 successCount++;
             }
-            
+
             return ResponseEntity.ok(Map.of(
                 "message", "Excel data imported successfully",
                 "count", successCount
@@ -285,13 +322,12 @@ public class ExcelImportController {
             List<RowPreview> previews = new ArrayList<>();
             int newCount = 0;
             int duplicateCount = 0;
+            int incompleteCount = 0;
             int totalValid = 0;
             
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
-                if (row == null) {
-                    continue;
-                }
+                if (row == null) continue;
 
                 String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
                 String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
@@ -301,18 +337,25 @@ public class ExcelImportController {
                 String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
                 String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
                 String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
+                String address = normalizeField(getCellValueAsString(row.getCell(10)));
+                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
+                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
                 String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
                 String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
-                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
+                String industry = normalizeField(getCellValueAsString(row.getCell(15)));
+                String city = normalizeField(getCellValueAsString(row.getCell(20)));
+                String website = normalizeField(getCellValueAsString(row.getCell(22)));
 
-                // Validate minimum requirements: First Name and Last Name
-                if (firstName.isEmpty() && lastName.isEmpty()) {
-                    continue; // Skip blank rows
-                }
+                if (firstName.isEmpty() && lastName.isEmpty()) continue;
                 
                 totalValid++;
 
-                // Check duplicate database record in DB
+                List<String> missing = getMissingMandatoryFields(
+                        groupName, brandName, companyName, salutation, firstName, lastName,
+                        positionStr, jobTitle, address, officePhone, mobilePhone, companyEmail,
+                        industry, city, website
+                );
+
                 Company company = null;
                 if (!companyName.isEmpty()) {
                     company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
@@ -349,9 +392,7 @@ public class ExcelImportController {
                     
                     if (companyMatch || phoneMatch || emailMatch) {
                         existingDatabase = c;
-                        if (phoneMatch) {
-                            matchedByPhone = true;
-                        }
+                        if (phoneMatch) matchedByPhone = true;
                         break;
                     }
                 }
@@ -360,7 +401,6 @@ public class ExcelImportController {
                     existingDatabase = nameMatches.get(0);
                 }
 
-                // Check if phone or email is shared/used by a DIFFERENT database record name (tikus warning candidate)
                 boolean phoneShared = false;
                 String sharedDatabaseName = "";
                 if (!mobilePhone.isEmpty()) {
@@ -389,7 +429,6 @@ public class ExcelImportController {
                     }
                 }
 
-                // Also check if emails are already used
                 boolean emailDuplicate = false;
                 String duplicateMsg = "";
                 if (!companyEmail.isEmpty()) {
@@ -408,7 +447,11 @@ public class ExcelImportController {
                 String status = "NEW";
                 String message = "Will be created as a new database record";
                 
-                if (existingDatabase != null) {
+                if (!missing.isEmpty()) {
+                    status = "INCOMPLETE";
+                    message = "DITOLAK (Data Belum Lengkap). Kolom kosong: " + String.join(", ", missing);
+                    incompleteCount++;
+                } else if (existingDatabase != null) {
                     status = "DUPLICATE";
                     message = matchedByPhone 
                         ? "Database record already exists (phone matched). Details will be updated."
@@ -444,6 +487,7 @@ public class ExcelImportController {
                     .totalRows(totalValid)
                     .newCount(newCount)
                     .duplicateCount(duplicateCount)
+                    .incompleteCount(incompleteCount)
                     .rows(previews)
                     .build());
             
@@ -453,6 +497,47 @@ public class ExcelImportController {
                 "error", e.getMessage()
             ));
         }
+    }
+
+    private List<String> getMissingMandatoryFields(
+            String groupName, String brandName, String companyName,
+            String salutation, String firstName, String lastName,
+            String positionStr, String jobTitle, String address,
+            String officePhone, String mobilePhone, String companyEmail,
+            String industry, String city, String website) {
+        List<String> missing = new ArrayList<>();
+        if (groupName.isEmpty()) missing.add("Nama Group Holding");
+        if (brandName.isEmpty()) missing.add("Nama Brand");
+        if (companyName.isEmpty()) missing.add("Company Name");
+        if (salutation.isEmpty()) missing.add("Salutation");
+        if (firstName.isEmpty()) missing.add("First Name");
+        if (lastName.isEmpty()) missing.add("Last Name");
+        if (positionStr.isEmpty() || positionStr.equalsIgnoreCase("unknown")) missing.add("Position");
+        if (jobTitle.isEmpty()) missing.add("Job Title");
+        if (address.isEmpty()) missing.add("Address");
+        if (officePhone.isEmpty()) missing.add("Office Phone");
+        if (mobilePhone.isEmpty()) missing.add("Mobile Phone");
+        if (companyEmail.isEmpty()) missing.add("Company Email");
+        if (industry.isEmpty()) missing.add("Industry");
+        if (city.isEmpty()) missing.add("City");
+        if (website.isEmpty()) missing.add("Company Website");
+        return missing;
+    }
+
+    private String cleanCompanyName(String name) {
+        if (name == null || name.isEmpty()) return "";
+        String upper = name.toUpperCase();
+        if (upper.startsWith("PT ") || upper.startsWith("PT. ")) {
+            String base = name.substring(upper.startsWith("PT. ") ? 4 : 3).trim();
+            if (base.endsWith(",")) {
+                base = base.substring(0, base.length() - 1).trim();
+            }
+            return base + " PT";
+        }
+        if (upper.endsWith(" PT.")) {
+            return name.substring(0, name.length() - 4).trim() + " PT";
+        }
+        return name;
     }
 
     private String getCellValueAsString(Cell cell) {
@@ -492,23 +577,6 @@ public class ExcelImportController {
         }
     }
 
-    private String cleanCompanyName(String name) {
-        if (name == null) return "";
-        name = name.trim();
-        String upper = name.toUpperCase();
-        if (upper.startsWith("PT ") || upper.startsWith("PT. ")) {
-            String base = name.substring(upper.startsWith("PT. ") ? 4 : 3).trim();
-            if (base.endsWith(",")) {
-                base = base.substring(0, base.length() - 1).trim();
-            }
-            return base + " PT";
-        }
-        if (upper.endsWith(" PT.")) {
-            return name.substring(0, name.length() - 4).trim() + " PT";
-        }
-        return name;
-    }
-
     private String normalizeField(String value) {
         if (value == null) return "";
         String trimmed = value.trim();
@@ -543,6 +611,7 @@ public class ExcelImportController {
         private int totalRows;
         private int newCount;
         private int duplicateCount;
+        private int incompleteCount;
         private List<RowPreview> rows;
     }
 

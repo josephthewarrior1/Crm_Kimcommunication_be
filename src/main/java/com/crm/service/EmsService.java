@@ -126,6 +126,7 @@ public class EmsService {
         }
 
         List list = (List) raw;
+        List<EventParticipant> currentEventParticipants = eventParticipantRepository.findByEventId(event.getId());
         int syncedCount = 0;
 
         for (Object itemObj : list) {
@@ -209,37 +210,34 @@ public class EmsService {
             Database database;
             if (existingEmailOpt.isPresent()) {
                 database = existingEmailOpt.get().getDatabase();
-                boolean updated = false;
-                if (company != null && database.getCompany() == null) {
-                    database.setCompany(company);
-                    updated = true;
-                }
-                if (salutation != null && !salutation.isEmpty() && (database.getSalutation() == null || database.getSalutation().isEmpty())) {
-                    database.setSalutation(salutation);
-                    updated = true;
-                }
-                if (updated) {
-                    databaseRepository.save(database);
-                }
+                hydrateDatabaseFromEms(database, company, salutation, lastName, phone, jobTitle, profile);
             } else {
-                database = Database.builder()
-                        .salutation(salutation)
-                        .firstName(firstName)
-                        .lastName(lastName)
-                        .company(company)
-                        .jobTitle(jobTitle)
-                        .mobilePhone(phone)
-                        .databaseType(DatabaseType.end_user)
-                        .isActive(true)
-                        .build();
-                database = databaseRepository.save(database);
+                database = findMatchingEventDatabase(currentEventParticipants, firstName, lastName, phone);
+                if (database != null) {
+                    hydrateDatabaseFromEms(database, company, salutation, lastName, phone, jobTitle, profile);
+                } else {
+                    database = Database.builder()
+                            .salutation(salutation)
+                            .firstName(firstName)
+                            .lastName(lastName)
+                            .company(company)
+                            .jobTitle(jobTitle)
+                            .mobilePhone(phone)
+                            .databaseType(DatabaseType.end_user)
+                            .source(DatabaseSource.event_registration)
+                            .isActive(true)
+                            .build();
+                    database = databaseRepository.save(database);
+                }
 
-                DatabaseEmail dbEmail = DatabaseEmail.builder()
-                        .database(database)
-                        .email(email.toLowerCase())
-                        .isPrimary(true)
-                        .build();
-                databaseEmailRepository.save(dbEmail);
+                if (!databaseEmailRepository.findByEmail(email.toLowerCase()).isPresent()) {
+                    DatabaseEmail dbEmail = DatabaseEmail.builder()
+                            .database(database)
+                            .email(email.toLowerCase())
+                            .isPrimary(database.getEmails() == null || database.getEmails().isEmpty())
+                            .build();
+                    databaseEmailRepository.save(dbEmail);
+                }
             }
 
             // Determine status based on EMS registration_code, verified_at, declined_at, and checked_in_at
@@ -247,10 +245,16 @@ public class EmsService {
             Object verifiedAt = item.get("verified_at");
             Object declinedAt = item.get("declined_at");
             Object regCode = item.get("registration_code");
+            Object statusObj = item.get("status");
+            Object paymentStatusObj = item.get("payment_status");
 
             boolean isCheckedIn = checkedInAt != null && !checkedInAt.toString().isEmpty() && !"null".equalsIgnoreCase(checkedInAt.toString());
             boolean isVerified = verifiedAt != null && !verifiedAt.toString().isEmpty() && !"null".equalsIgnoreCase(verifiedAt.toString());
-            boolean isDeclined = declinedAt != null && !declinedAt.toString().isEmpty() && !"null".equalsIgnoreCase(declinedAt.toString());
+            boolean isDeclined = (declinedAt != null && !declinedAt.toString().isEmpty() && !"null".equalsIgnoreCase(declinedAt.toString()))
+                    || "declined".equalsIgnoreCase(String.valueOf(statusObj))
+                    || "decline".equalsIgnoreCase(String.valueOf(statusObj))
+                    || "declined".equalsIgnoreCase(String.valueOf(paymentStatusObj))
+                    || "decline".equalsIgnoreCase(String.valueOf(paymentStatusObj));
             boolean hasRegCode = regCode != null && !regCode.toString().isEmpty() && !"null".equalsIgnoreCase(regCode.toString());
 
             AttendanceStatus attendanceStatus;
@@ -266,7 +270,7 @@ public class EmsService {
             ParticipantStatus participantStatus;
 
             if (isDeclined) {
-                confirmationStatus = "declined";
+                confirmationStatus = "decline";
                 participantStatus = ParticipantStatus.unable_to_attend;
             } else if (isCheckedIn) {
                 confirmationStatus = "approve";
@@ -289,38 +293,139 @@ public class EmsService {
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
                 
-                // Keep declined status if already declined/Tikus
-                String currentConf = ep.getConfirmationStatus();
-                if (currentConf == null || (!currentConf.equalsIgnoreCase("decline") && !currentConf.equalsIgnoreCase("declined") && !isDeclinedOrInactive)) {
-                    ep.setConfirmationStatus(confirmationStatus);
-                } else if (isDeclinedOrInactive) {
+                String targetApproval = (isDeclined || isDeclinedOrInactive) ? "decline" : confirmationStatus;
+
+                if (isDeclined || isDeclinedOrInactive) {
                     ep.setConfirmationStatus("decline");
+                } else {
+                    ep.setConfirmationStatus(confirmationStatus);
                 }
+
+                String approvalTag = "[PreEventApproval: " + targetApproval + "]";
 
                 String currentNotes = ep.getNotes();
                 if (currentNotes == null || currentNotes.isEmpty()) {
-                    ep.setNotes("[Origin: EMS Sync]");
-                } else if (!currentNotes.contains("[Origin: EMS Sync]") && !currentNotes.contains("[EMS]")) {
-                    ep.setNotes("[Origin: EMS Sync] " + currentNotes);
+                    ep.setNotes("[Origin: EMS Sync] " + approvalTag);
+                } else {
+                    String updatedNotes = currentNotes;
+                    if (!updatedNotes.contains("[Origin: EMS Sync]") && !updatedNotes.contains("[EMS]")) {
+                        updatedNotes = "[Origin: EMS Sync] " + updatedNotes;
+                    }
+                    if (updatedNotes.contains("[PreEventApproval:")) {
+                        updatedNotes = updatedNotes.replaceAll("\\[PreEventApproval:\\s*([^\\]]+)\\]", approvalTag);
+                    } else {
+                        updatedNotes = approvalTag + " " + updatedNotes;
+                    }
+                    ep.setNotes(updatedNotes);
                 }
                 if (isCheckedIn) {
                     ep.setReminderHariH("on_location");
                 }
                 eventParticipantRepository.save(ep);
             } else {
+                String targetApproval = isDeclinedOrInactive ? "decline" : confirmationStatus;
+                String approvalTag = "[PreEventApproval: " + targetApproval + "]";
+
                 EventParticipant ep = EventParticipant.builder()
                         .event(event)
                         .database(database)
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
-                        .confirmationStatus(isDeclinedOrInactive ? "decline" : confirmationStatus)
+                        .confirmationStatus(targetApproval)
                         .reminderHariH(isCheckedIn ? "on_location" : null)
-                        .notes("[Origin: EMS Sync]")
+                        .notes("[Origin: EMS Sync] " + approvalTag)
                         .build();
                 eventParticipantRepository.save(ep);
             }
             syncedCount++;
         }
         return syncedCount;
+    }
+
+    private Database findMatchingEventDatabase(List<EventParticipant> participants, String firstName, String lastName, String phone) {
+        String targetName = normalizeText((safe(firstName) + " " + safe(lastName)).trim());
+        String targetPhone = normalizePhone(phone);
+
+        for (EventParticipant participant : participants) {
+            Database db = participant.getDatabase();
+            if (db == null) continue;
+
+            String dbPhone = normalizePhone(db.getMobilePhone());
+            if (!targetPhone.isEmpty() && !dbPhone.isEmpty() && targetPhone.equals(dbPhone)) {
+                return db;
+            }
+
+            String dbName = normalizeText((safe(db.getFirstName()) + " " + safe(db.getLastName())).replace(" -", "").trim());
+            if (!targetName.isEmpty() && targetName.equals(dbName)) {
+                return db;
+            }
+        }
+
+        return null;
+    }
+
+    private void hydrateDatabaseFromEms(Database database, Company company, String salutation, String lastName, String phone, String jobTitle, Map profile) {
+        boolean updated = false;
+
+        if (company != null && database.getCompany() == null) {
+            database.setCompany(company);
+            updated = true;
+        }
+        if (isBlank(database.getSalutation()) && !isBlank(salutation)) {
+            database.setSalutation(salutation);
+            updated = true;
+        }
+        if (isBlankOrDash(database.getLastName()) && !isBlank(lastName)) {
+            database.setLastName(lastName);
+            updated = true;
+        }
+        if (isBlankOrDash(database.getMobilePhone()) && !isBlank(phone)) {
+            database.setMobilePhone(phone);
+            database.setNormalizedPhone(normalizePhone(phone));
+            updated = true;
+        }
+        if (shouldUseEmsValue(database.getJobTitle(), jobTitle)) {
+            database.setJobTitle(jobTitle);
+            updated = true;
+        }
+
+        String jobLevel = null;
+        if (profile != null && profile.get("job_level") != null) {
+            jobLevel = profile.get("job_level").toString();
+        }
+        if ((database.getPositionLevel() == null || database.getPositionLevel() == PositionLevel.UNKNOWN) && !isBlank(jobLevel)) {
+            database.setPositionLevel(PositionLevel.fromValue(jobLevel));
+            updated = true;
+        }
+
+        if (updated) {
+            databaseRepository.save(database);
+        }
+    }
+
+    private boolean shouldUseEmsValue(String current, String emsValue) {
+        if (isBlank(emsValue)) return false;
+        if (isBlankOrDash(current)) return true;
+        return normalizeText(emsValue).contains(normalizeText(current)) && emsValue.trim().length() > current.trim().length();
+    }
+
+    private String normalizeText(String value) {
+        return safe(value).toLowerCase().replaceAll("[^a-z0-9]+", " ").trim();
+    }
+
+    private String normalizePhone(String value) {
+        return safe(value).replaceAll("\\D", "");
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty() || "null".equalsIgnoreCase(value.trim());
+    }
+
+    private boolean isBlankOrDash(String value) {
+        return isBlank(value) || "-".equals(value.trim()) || "unknown".equalsIgnoreCase(value.trim());
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

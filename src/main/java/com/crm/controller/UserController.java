@@ -143,6 +143,38 @@ public class UserController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @PutMapping("/{id}/profile")
+    public ResponseEntity<?> updateUserProfile(
+            @PathVariable Long id,
+            @RequestBody UpdateProfileRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN users can update user profiles");
+        }
+
+        return userRepository.findById(id).map(user -> {
+            if (request.getFullName() != null) {
+                user.setFullName(request.getFullName().trim());
+            }
+            if (request.getEmail() != null && !request.getEmail().trim().isEmpty()) {
+                user.setEmail(request.getEmail().trim());
+            }
+            AppUser saved = userRepository.save(user);
+            saved.setPassword(null);
+            return ResponseEntity.ok(saved);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @lombok.Data
+    public static class UpdateProfileRequest {
+        private String fullName;
+        private String email;
+    }
+
     @lombok.Data
     public static class UpdatePasswordRequest {
         private String password;

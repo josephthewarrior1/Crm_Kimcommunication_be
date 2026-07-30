@@ -512,7 +512,7 @@ public class ExcelImportController {
         if (salutation.isEmpty()) missing.add("Salutation");
         if (firstName.isEmpty()) missing.add("First Name");
         if (lastName.isEmpty()) missing.add("Last Name");
-        if (positionStr.isEmpty() || positionStr.equalsIgnoreCase("unknown")) missing.add("Position");
+        if (positionStr.isEmpty()) missing.add("Position");
         if (jobTitle.isEmpty()) missing.add("Job Title");
         if (address.isEmpty()) missing.add("Address");
         if (officePhone.isEmpty()) missing.add("Office Phone");

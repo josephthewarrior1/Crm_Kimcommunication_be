@@ -138,14 +138,8 @@ public class EmsService {
             if (profile == null) profile = (Map) item.get("profile");
             Map createdBy = (Map) item.get("created_by");
 
-            // Extract Email
-            String email = null;
-            if (createdBy != null && createdBy.get("email") != null) email = createdBy.get("email").toString().trim();
-            else if (user != null && user.get("email") != null) email = user.get("email").toString().trim();
-            else if (profile != null && profile.get("email") != null) email = profile.get("email").toString().trim();
-            else if (item.get("email") != null) email = item.get("email").toString().trim();
-
-            if (email == null || email.isEmpty()) continue;
+            // Extract Email robustly
+            String email = extractEmailFromEmsItem(item, user, profile, createdBy);
 
             // Extract Salutation & Names
             String salutation = null;
@@ -185,13 +179,21 @@ public class EmsService {
             if (profile != null && profile.get("phone") != null) phone = profile.get("phone").toString().trim();
             else if (user != null && user.get("phone") != null) phone = user.get("phone").toString().trim();
 
-            // Extract Company & Job Title
+            // Extract Company, Job Title & Industry
             String companyName = null;
             String jobTitle = null;
+            String industry = null;
             if (profile != null) {
                 if (profile.get("company") != null) companyName = profile.get("company").toString().trim();
                 if (profile.get("position") != null) jobTitle = profile.get("position").toString().trim();
                 else if (profile.get("job_title") != null) jobTitle = profile.get("job_title").toString().trim();
+                if (profile.get("industry") != null) industry = profile.get("industry").toString().trim();
+                else if (profile.get("company_industry") != null) industry = profile.get("company_industry").toString().trim();
+                else if (profile.get("business_sector") != null) industry = profile.get("business_sector").toString().trim();
+            }
+            if (industry == null || industry.isEmpty()) {
+                if (item.get("industry") != null) industry = item.get("industry").toString().trim();
+                else if (item.get("company_industry") != null) industry = item.get("company_industry").toString().trim();
             }
 
             // Find/Create Company
@@ -200,16 +202,30 @@ public class EmsService {
                 Optional<Company> compOpt = companyRepository.findByNameIgnoreCase(companyName);
                 if (compOpt.isPresent()) {
                     company = compOpt.get();
+                    if ((company.getIndustry() == null || company.getIndustry().isEmpty()) && industry != null && !industry.isEmpty()) {
+                        company.setIndustry(industry);
+                        company = companyRepository.save(company);
+                    }
                 } else {
-                    company = companyRepository.save(Company.builder().name(companyName).build());
+                    company = companyRepository.save(Company.builder().name(companyName).industry(industry).build());
                 }
             }
 
             // Find or create Database record
-            Optional<DatabaseEmail> existingEmailOpt = databaseEmailRepository.findByEmail(email.toLowerCase());
             Database database;
+            Optional<DatabaseEmail> existingEmailOpt = (email != null && !email.isEmpty()) 
+                    ? databaseEmailRepository.findByEmail(email.toLowerCase()) 
+                    : Optional.empty();
+
             if (existingEmailOpt.isPresent()) {
-                database = existingEmailOpt.get().getDatabase();
+                DatabaseEmail existingDbEmail = existingEmailOpt.get();
+                database = existingDbEmail.getDatabase();
+                if (existingDbEmail.getEmailType() == null || existingDbEmail.getIsCorporate() == null) {
+                    boolean isPersonal = isPersonalEmail(email);
+                    existingDbEmail.setEmailType(isPersonal ? "personal" : "company");
+                    existingDbEmail.setIsCorporate(!isPersonal);
+                    databaseEmailRepository.save(existingDbEmail);
+                }
                 hydrateDatabaseFromEms(database, company, salutation, lastName, phone, jobTitle, profile);
             } else {
                 database = findMatchingEventDatabase(currentEventParticipants, firstName, lastName, phone);
@@ -230,13 +246,18 @@ public class EmsService {
                     database = databaseRepository.save(database);
                 }
 
-                if (!databaseEmailRepository.findByEmail(email.toLowerCase()).isPresent()) {
+                if (email != null && !email.isEmpty() && !databaseEmailRepository.findByEmail(email.toLowerCase()).isPresent()) {
+                    boolean isPersonal = isPersonalEmail(email);
                     DatabaseEmail dbEmail = DatabaseEmail.builder()
                             .database(database)
                             .email(email.toLowerCase())
+                            .emailType(isPersonal ? "personal" : "company")
+                            .isCorporate(!isPersonal)
                             .isPrimary(database.getEmails() == null || database.getEmails().isEmpty())
                             .build();
                     databaseEmailRepository.save(dbEmail);
+                    if (database.getEmails() == null) database.setEmails(new ArrayList<>());
+                    database.getEmails().add(dbEmail);
                 }
             }
 
@@ -427,5 +448,47 @@ public class EmsService {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private String extractEmailFromEmsItem(Map item, Map user, Map profile, Map createdBy) {
+        List<String> candidates = new ArrayList<>();
+
+        if (profile != null) {
+            if (profile.get("registered_email") != null) candidates.add(profile.get("registered_email").toString().trim());
+            if (profile.get("email") != null) candidates.add(profile.get("email").toString().trim());
+            if (profile.get("work_email") != null) candidates.add(profile.get("work_email").toString().trim());
+            if (profile.get("company_email") != null) candidates.add(profile.get("company_email").toString().trim());
+            if (profile.get("personal_email") != null) candidates.add(profile.get("personal_email").toString().trim());
+        }
+
+        if (item != null) {
+            if (item.get("registered_email") != null) candidates.add(item.get("registered_email").toString().trim());
+            if (item.get("email") != null) candidates.add(item.get("email").toString().trim());
+        }
+
+        if (user != null) {
+            if (user.get("email") != null) candidates.add(user.get("email").toString().trim());
+        }
+
+        if (createdBy != null) {
+            if (createdBy.get("email") != null) candidates.add(createdBy.get("email").toString().trim());
+        }
+
+        for (String c : candidates) {
+            if (c != null && !c.isEmpty() && !"null".equalsIgnoreCase(c) && c.contains("@")) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    private boolean isPersonalEmail(String email) {
+        if (email == null || !email.contains("@")) return false;
+        String domain = email.substring(email.lastIndexOf("@") + 1).toLowerCase().trim();
+        Set<String> publicDomains = new HashSet<>(Arrays.asList(
+            "gmail.com", "yahoo.com", "yahoo.co.id", "hotmail.com", "outlook.com",
+            "icloud.com", "ymail.com", "live.com", "rocketmail.com", "aol.com", "me.com", "msn.com"
+        ));
+        return publicDomains.contains(domain);
     }
 }

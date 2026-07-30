@@ -496,12 +496,15 @@ public class ExcelImportController {
         if (name == null) return "";
         name = name.trim();
         String upper = name.toUpperCase();
-        if (upper.endsWith(" PT") || upper.endsWith(" PT.")) {
-            String base = name.substring(0, name.length() - (upper.endsWith(" PT.") ? 4 : 3)).trim();
+        if (upper.startsWith("PT ") || upper.startsWith("PT. ")) {
+            String base = name.substring(upper.startsWith("PT. ") ? 4 : 3).trim();
             if (base.endsWith(",")) {
                 base = base.substring(0, base.length() - 1).trim();
             }
-            return "PT " + base;
+            return base + " PT";
+        }
+        if (upper.endsWith(" PT.")) {
+            return name.substring(0, name.length() - 4).trim() + " PT";
         }
         return name;
     }

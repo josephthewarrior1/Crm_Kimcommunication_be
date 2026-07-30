@@ -53,6 +53,11 @@ public class EventController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.ok(eventRepository.findAll().stream()
+                    .filter(event -> currentUser.getAllowedEventIds().contains(event.getId()))
+                    .toList());
+        }
         return ResponseEntity.ok(eventRepository.findAll());
     }
 
@@ -142,6 +147,9 @@ public class EventController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can sync EMS participants");
+        }
         Event event = eventRepository.findById(id).orElse(null);
         if (event == null) {
             event = eventRepository.findByEmsEventId(id).orElse(null);
@@ -179,5 +187,9 @@ public class EventController {
             return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
+    }
+
+    private boolean isViewer(AppUser user) {
+        return securityHelper.hasRole(user, Role.USER) && !securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER);
     }
 }

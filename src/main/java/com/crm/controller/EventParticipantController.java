@@ -34,6 +34,12 @@ public class EventParticipantController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.ok(eventParticipantRepository.findAll().stream()
+                    .filter(participant -> participant.getEvent() != null
+                            && currentUser.getAllowedEventIds().contains(participant.getEvent().getId()))
+                    .toList());
+        }
         return ResponseEntity.ok(eventParticipantRepository.findAll());
     }
 
@@ -44,6 +50,9 @@ public class EventParticipantController {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can add event participants");
         }
 
         Event event = eventRepository.findById(request.getEventId()).orElse(null);
@@ -113,6 +122,16 @@ public class EventParticipantController {
         }
 
         return eventParticipantRepository.findById(id).map(participant -> {
+            if (isViewer(currentUser)) {
+                if (!canAccessEvent(currentUser, participant)) {
+                    return ResponseEntity.status(403).body("Forbidden: Viewer cannot update this event");
+                }
+                if (!hasOnlyConfirmationStatus(participantStatus, attendanceStatus, notes, participantCategory,
+                        callStatus, emailStatus, whatsappStatus, meetingStatus, businessChallenges, projectInfo,
+                        timeline, reminderH7, reminderH3, reminderH1, reminderHariH, confirmationStatus)) {
+                    return ResponseEntity.status(403).body("Forbidden: Viewer can only update confirmation status");
+                }
+            }
             if (participantStatus != null) {
                 try {
                     participant.setParticipantStatus(ParticipantStatus.valueOf(participantStatus));
@@ -131,6 +150,9 @@ public class EventParticipantController {
                 participant.setNotes(notes);
             }
             if (confirmationStatus != null) {
+                if (!isValidConfirmationStatus(confirmationStatus)) {
+                    return ResponseEntity.badRequest().body("Invalid confirmationStatus. Must be pending, approve, or decline.");
+                }
                 participant.setConfirmationStatus(confirmationStatus);
             }
             if (participantCategory != null) {
@@ -184,6 +206,9 @@ public class EventParticipantController {
         }
 
         return eventParticipantRepository.findById(id).map(participant -> {
+            if (isViewer(currentUser)) {
+                return ResponseEntity.status(403).body("Forbidden: Viewer can only view activities");
+            }
             EventParticipantActivity activity = EventParticipantActivity.builder()
                     .eventParticipant(participant)
                     .activityType(request.getActivityType())
@@ -218,8 +243,16 @@ public class EventParticipantController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.status(403).body("Forbidden: Viewer cannot view activity logs");
+        }
 
-        return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(id));
+        return eventParticipantRepository.findById(id).map(participant -> {
+            if (!canAccessEvent(currentUser, participant)) {
+                return ResponseEntity.status(403).body("Forbidden: Viewer cannot view this event");
+            }
+            return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(id));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/event/{eventId}/activities")
@@ -231,6 +264,9 @@ public class EventParticipantController {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.status(403).body("Forbidden: Viewer cannot view activity logs");
         }
 
         if (startDate != null && !startDate.trim().isEmpty() && endDate != null && !endDate.trim().isEmpty()) {
@@ -305,6 +341,9 @@ public class EventParticipantController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.status(403).body("Forbidden: Viewer cannot view activity reports");
+        }
 
         List<EventParticipant> participants = eventParticipantRepository.findByEventId(eventId);
         List<EventParticipantActivity> activities = eventParticipantActivityRepository.findByEventParticipantEventId(eventId);
@@ -358,5 +397,54 @@ public class EventParticipantController {
         private String attendanceStatus;
         private String confirmationStatus;
         private String notes;
+    }
+
+    private boolean isViewer(AppUser user) {
+        return securityHelper.hasRole(user, Role.USER) && !securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER);
+    }
+
+    private boolean canAccessEvent(AppUser user, EventParticipant participant) {
+        return !isViewer(user) || (participant.getEvent() != null && user.getAllowedEventIds().contains(participant.getEvent().getId()));
+    }
+
+    private boolean hasOnlyConfirmationStatus(
+            String participantStatus,
+            String attendanceStatus,
+            String notes,
+            String participantCategory,
+            String callStatus,
+            String emailStatus,
+            String whatsappStatus,
+            String meetingStatus,
+            String businessChallenges,
+            String projectInfo,
+            String timeline,
+            String reminderH7,
+            String reminderH3,
+            String reminderH1,
+            String reminderHariH,
+            String confirmationStatus) {
+        return confirmationStatus != null
+                && participantStatus == null
+                && attendanceStatus == null
+                && notes == null
+                && participantCategory == null
+                && callStatus == null
+                && emailStatus == null
+                && whatsappStatus == null
+                && meetingStatus == null
+                && businessChallenges == null
+                && projectInfo == null
+                && timeline == null
+                && reminderH7 == null
+                && reminderH3 == null
+                && reminderH1 == null
+                && reminderHariH == null;
+    }
+
+    private boolean isValidConfirmationStatus(String confirmationStatus) {
+        return "pending".equalsIgnoreCase(confirmationStatus)
+                || "approve".equalsIgnoreCase(confirmationStatus)
+                || "decline".equalsIgnoreCase(confirmationStatus);
     }
 }

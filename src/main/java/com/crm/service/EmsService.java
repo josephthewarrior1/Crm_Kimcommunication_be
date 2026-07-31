@@ -35,6 +35,9 @@ public class EmsService {
     @Autowired
     private CompanyRepository companyRepository;
 
+    @Autowired
+    private EventParticipantActivityRepository eventParticipantActivityRepository;
+
     private final RestTemplate restTemplate = new RestTemplate();
 
     private String getEmsAccessToken() {
@@ -269,6 +272,11 @@ public class EmsService {
             Object statusObj = item.get("status");
             Object paymentStatusObj = item.get("payment_status");
 
+            Object createdAtObj = item.get("created_at");
+            if (createdAtObj == null && profile != null) createdAtObj = profile.get("created_at");
+            if (createdAtObj == null) createdAtObj = verifiedAt;
+            java.time.LocalDateTime emsCreatedAt = parseEmsDateTime(createdAtObj);
+
             boolean isCheckedIn = checkedInAt != null && !checkedInAt.toString().isEmpty() && !"null".equalsIgnoreCase(checkedInAt.toString());
             boolean isVerified = verifiedAt != null && !verifiedAt.toString().isEmpty() && !"null".equalsIgnoreCase(verifiedAt.toString());
             boolean isDeclined = (declinedAt != null && !declinedAt.toString().isEmpty() && !"null".equalsIgnoreCase(declinedAt.toString()))
@@ -314,13 +322,8 @@ public class EmsService {
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
                 
-                String targetApproval = (isDeclined || isDeclinedOrInactive) ? "decline" : confirmationStatus;
-
-                if (isDeclined || isDeclinedOrInactive) {
-                    ep.setConfirmationStatus("decline");
-                } else {
-                    ep.setConfirmationStatus(confirmationStatus);
-                }
+                String targetApproval = isDeclined ? "decline" : confirmationStatus;
+                ep.setConfirmationStatus(targetApproval);
 
                 String approvalTag = "[PreEventApproval: " + targetApproval + "]";
 
@@ -342,9 +345,24 @@ public class EmsService {
                 if (isCheckedIn) {
                     ep.setReminderHariH("on_location");
                 }
+                if (emsCreatedAt != null) {
+                    ep.setCreatedAt(emsCreatedAt);
+                    ep.setRequestedAt(emsCreatedAt);
+                }
                 eventParticipantRepository.save(ep);
+
+                if (eventParticipantActivityRepository.findByEventParticipantIdOrderByCreatedAtDesc(ep.getId()).isEmpty()) {
+                    EventParticipantActivity initAct = EventParticipantActivity.builder()
+                            .eventParticipant(ep)
+                            .activityType("SYSTEM")
+                            .status("REGISTERED")
+                            .notes("Initial sync from EMS")
+                            .createdBy("EMS Sync")
+                            .build();
+                    eventParticipantActivityRepository.save(initAct);
+                }
             } else {
-                String targetApproval = isDeclinedOrInactive ? "decline" : confirmationStatus;
+                String targetApproval = isDeclined ? "decline" : confirmationStatus;
                 String approvalTag = "[PreEventApproval: " + targetApproval + "]";
 
                 EventParticipant ep = EventParticipant.builder()
@@ -355,8 +373,19 @@ public class EmsService {
                         .confirmationStatus(targetApproval)
                         .reminderHariH(isCheckedIn ? "on_location" : null)
                         .notes("[Origin: EMS Sync] " + approvalTag)
+                        .createdAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
+                        .requestedAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
                         .build();
-                eventParticipantRepository.save(ep);
+                EventParticipant epSaved = eventParticipantRepository.save(ep);
+
+                EventParticipantActivity initAct = EventParticipantActivity.builder()
+                        .eventParticipant(epSaved)
+                        .activityType("SYSTEM")
+                        .status("REGISTERED")
+                        .notes("Initial sync from EMS")
+                        .createdBy("EMS Sync")
+                        .build();
+                eventParticipantActivityRepository.save(initAct);
             }
             syncedCount++;
         }
@@ -490,5 +519,24 @@ public class EmsService {
             "icloud.com", "ymail.com", "live.com", "rocketmail.com", "aol.com", "me.com", "msn.com"
         ));
         return publicDomains.contains(domain);
+    }
+
+    private java.time.LocalDateTime parseEmsDateTime(Object dateObj) {
+        if (dateObj == null) return null;
+        String str = dateObj.toString().trim();
+        if (str.isEmpty() || "null".equalsIgnoreCase(str)) return null;
+        try {
+            if (str.contains("T")) {
+                str = str.replace("Z", "");
+                if (str.contains(".")) {
+                    str = str.substring(0, str.indexOf("."));
+                }
+                return java.time.LocalDateTime.parse(str, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+            } else {
+                return java.time.LocalDateTime.parse(str, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            }
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

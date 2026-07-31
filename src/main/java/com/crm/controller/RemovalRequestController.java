@@ -1,12 +1,14 @@
 package com.crm.controller;
 
 import com.crm.domain.Database;
+import com.crm.domain.EventParticipant;
 import com.crm.domain.RemovalReason;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.RemovalStatus;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.repository.DatabaseRepository;
+import com.crm.repository.EventParticipantRepository;
 import com.crm.repository.RemovalRequestRepository;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,9 @@ public class RemovalRequestController {
 
     @Autowired
     private DatabaseRepository databaseRepository;
+
+    @Autowired
+    private EventParticipantRepository eventParticipantRepository;
 
     @Autowired
     private SecurityHelper securityHelper;
@@ -70,6 +75,18 @@ public class RemovalRequestController {
         // Soft-delete: mark contact as inactive on creation so it immediately hides from active Database list
         database.setIsActive(false);
         databaseRepository.save(database);
+
+        // Tag [TAKEOUT] on any linked EventParticipant notes so UI cleanly recognizes Takeout Request
+        List<EventParticipant> participants = eventParticipantRepository.findByDatabaseId(database.getId());
+        if (participants != null) {
+            for (EventParticipant ep : participants) {
+                String currentNotes = ep.getNotes();
+                if (currentNotes == null || !currentNotes.contains("[TAKEOUT]")) {
+                    ep.setNotes("[TAKEOUT] " + (currentNotes != null ? currentNotes : ""));
+                    eventParticipantRepository.save(ep);
+                }
+            }
+        }
 
         return ResponseEntity.ok(saved);
     }

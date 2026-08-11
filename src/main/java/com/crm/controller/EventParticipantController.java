@@ -88,6 +88,7 @@ public class EventParticipantController {
                     .participantStatus(request.getParticipantStatus() != null ? ParticipantStatus.valueOf(request.getParticipantStatus()) : ParticipantStatus.white)
                     .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.registered)
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
+                    .preEventApprovalStatus(request.getPreEventApprovalStatus() != null ? request.getPreEventApprovalStatus() : "pending")
                     .notes(request.getNotes())
                     .build();
             savedParticipants.add(eventParticipantRepository.save(eventParticipant));
@@ -115,6 +116,7 @@ public class EventParticipantController {
             @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String reminderHariH,
             @RequestParam(required = false) String confirmationStatus,
+            @RequestParam(required = false) String preEventApprovalStatus,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -128,7 +130,7 @@ public class EventParticipantController {
                 }
                 if (!hasOnlyConfirmationStatus(participantStatus, attendanceStatus, notes, participantCategory,
                         callStatus, emailStatus, whatsappStatus, meetingStatus, businessChallenges, projectInfo,
-                        timeline, reminderH7, reminderH3, reminderH1, reminderHariH, confirmationStatus)) {
+                        timeline, reminderH7, reminderH3, reminderH1, reminderHariH, confirmationStatus, preEventApprovalStatus)) {
                     return ResponseEntity.status(403).body("Forbidden: Viewer can only update confirmation status");
                 }
             }
@@ -154,6 +156,12 @@ public class EventParticipantController {
                     return ResponseEntity.badRequest().body("Invalid confirmationStatus. Must be pending, approve, or decline.");
                 }
                 participant.setConfirmationStatus(confirmationStatus);
+            }
+            if (preEventApprovalStatus != null) {
+                if (!isValidConfirmationStatus(preEventApprovalStatus)) {
+                    return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus. Must be pending, approve, or decline.");
+                }
+                participant.setPreEventApprovalStatus(preEventApprovalStatus);
             }
             if (participantCategory != null) {
                 participant.setParticipantCategory(participantCategory);
@@ -396,6 +404,7 @@ public class EventParticipantController {
         private String participantStatus;
         private String attendanceStatus;
         private String confirmationStatus;
+        private String preEventApprovalStatus;
         private String notes;
     }
 
@@ -423,7 +432,8 @@ public class EventParticipantController {
             String reminderH3,
             String reminderH1,
             String reminderHariH,
-            String confirmationStatus) {
+            String confirmationStatus,
+            String preEventApprovalStatus) {
         return confirmationStatus != null
                 && participantStatus == null
                 && attendanceStatus == null
@@ -439,7 +449,8 @@ public class EventParticipantController {
                 && reminderH7 == null
                 && reminderH3 == null
                 && reminderH1 == null
-                && reminderHariH == null;
+                && reminderHariH == null
+                && preEventApprovalStatus == null;
     }
 
     private boolean isValidConfirmationStatus(String confirmationStatus) {

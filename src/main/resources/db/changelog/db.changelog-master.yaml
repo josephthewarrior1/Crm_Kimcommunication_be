@@ -21,4 +21,5 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-ems-event-id.yml
   - include:
       file: db/changelog/changes/changelog-crm-user-allowed-events.yml
-
+  - include:
+      file: db/changelog/changes/changelog-crm-pre-event-approval-status.yml

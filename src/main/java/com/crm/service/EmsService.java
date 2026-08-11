@@ -324,6 +324,7 @@ public class EmsService {
                 
                 String targetApproval = isDeclined ? "decline" : confirmationStatus;
                 ep.setConfirmationStatus(targetApproval);
+                ep.setPreEventApprovalStatus(targetApproval);
 
                 String approvalTag = "[PreEventApproval: " + targetApproval + "]";
 
@@ -371,6 +372,7 @@ public class EmsService {
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
                         .confirmationStatus(targetApproval)
+                        .preEventApprovalStatus(targetApproval)
                         .reminderHariH(isCheckedIn ? "on_location" : null)
                         .notes("[Origin: EMS Sync] " + approvalTag)
                         .createdAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())

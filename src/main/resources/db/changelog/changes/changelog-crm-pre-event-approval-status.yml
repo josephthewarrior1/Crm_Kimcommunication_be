@@ -1,0 +1,18 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-pre-event-approval-status-20260811
+      author: codex
+      changes:
+        - addColumn:
+            tableName: event_participants
+            columns:
+              - column:
+                  name: pre_event_approval_status
+                  type: varchar(20)
+                  defaultValue: pending
+        - sql:
+            dbms: postgresql
+            sql: |
+              UPDATE event_participants
+              SET pre_event_approval_status = lower(substring(notes from '\[PreEventApproval:[[:space:]]*([^\]]+)\]'))
+              WHERE notes ~* '\[PreEventApproval:[[:space:]]*(approve|decline|pending)\]';

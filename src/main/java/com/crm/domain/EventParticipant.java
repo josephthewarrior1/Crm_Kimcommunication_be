@@ -58,6 +58,10 @@ public class EventParticipant {
     @Builder.Default
     private String confirmationStatus = "pending";
 
+    @Column(name = "pre_event_approval_status")
+    @Builder.Default
+    private String preEventApprovalStatus = "pending";
+
     @Column(name = "call_status")
     private String callStatus;
 

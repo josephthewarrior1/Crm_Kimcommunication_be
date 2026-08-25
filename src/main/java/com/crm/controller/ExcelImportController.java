@@ -49,12 +49,13 @@ public class ExcelImportController {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }
 
-        // Pass 1: Validate completeness for all rows before performing any DB insertions
+        // Pass 1: Validate completeness and intra-file conflicts for all rows before DB insertions
         try (InputStream isCheck = file.getInputStream();
              Workbook wbCheck = new XSSFWorkbook(isCheck)) {
             Sheet sheetCheck = wbCheck.getSheetAt(0);
             int lastRowNumCheck = sheetCheck.getLastRowNum();
-            List<String> incompleteErrors = new ArrayList<>();
+            List<String> validationErrors = new ArrayList<>();
+            Map<String, List<EmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
 
             for (int r = 1; r <= lastRowNumCheck; r++) {
                 Row row = sheetCheck.getRow(r);
@@ -64,6 +65,8 @@ public class ExcelImportController {
                 String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
                 if (firstName.isEmpty() && lastName.isEmpty()) continue;
 
+                String fullName = (firstName + " " + lastName).trim();
+                String rowLabel = formatRowLabel(row);
                 String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
                 String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
                 String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
@@ -74,6 +77,7 @@ public class ExcelImportController {
                 String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
                 String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
                 String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
+                String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
                 String industry = normalizeField(getCellValueAsString(row.getCell(15)));
                 String city = normalizeField(getCellValueAsString(row.getCell(20)));
                 String website = normalizeField(getCellValueAsString(row.getCell(22)));
@@ -85,13 +89,17 @@ public class ExcelImportController {
                 );
 
                 if (!missing.isEmpty()) {
-                    incompleteErrors.add("Baris " + r + " (" + (firstName + " " + lastName).trim() + "): Kolom kosong [" + String.join(", ", missing) + "]");
+                    validationErrors.add(rowLabel + " (" + fullName + "): Kolom kosong [" + String.join(", ", missing) + "]");
                 }
+
+                registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
             }
 
-            if (!incompleteErrors.isEmpty()) {
+            appendIntraFileConflictErrors(validationErrors, emailOwnersInFile);
+
+            if (!validationErrors.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
-                        "message", "Import ditolak karena terdapat data yang belum lengkap. Silakan lengkapi kolom berikut pada file Excel Anda:\n• " + String.join("\n• ", incompleteErrors)
+                        "message", "Import ditolak karena terdapat " + validationErrors.size() + " data yang bermasalah pada file Excel Anda:\n- " + String.join("\n- ", validationErrors)
                 ));
             }
         } catch (Exception e) {
@@ -253,40 +261,48 @@ public class ExcelImportController {
                     targetDb = databaseRepository.save(targetDb);
                 }
 
-                // 4. Save / Sync Emails
+                // 4. Save / Sync Emails Safely (Protecting unique constraints)
                 if (targetDb.getEmails() == null) {
                     targetDb.setEmails(new ArrayList<>());
                 }
 
                 if (!companyEmail.isEmpty()) {
                     final String cEmailLower = companyEmail.toLowerCase();
-                    boolean exists = targetDb.getEmails().stream()
-                            .anyMatch(e -> e.getEmail().equalsIgnoreCase(cEmailLower));
-                    if (!exists) {
-                        DatabaseEmail emailObj = DatabaseEmail.builder()
-                                .email(companyEmail)
-                                .emailType("company")
-                                .isCorporate(true)
-                                .database(targetDb)
-                                .build();
-                        databaseEmailRepository.save(emailObj);
-                        targetDb.getEmails().add(emailObj);
+                    DatabaseEmail existingDbEmail = databaseEmailRepository.findByEmail(cEmailLower).orElse(null);
+                    
+                    if (existingDbEmail == null) {
+                        boolean alreadyInList = targetDb.getEmails().stream()
+                                .anyMatch(e -> e.getEmail().equalsIgnoreCase(cEmailLower));
+                        if (!alreadyInList) {
+                            DatabaseEmail emailObj = DatabaseEmail.builder()
+                                    .email(companyEmail)
+                                    .emailType("company")
+                                    .isCorporate(true)
+                                    .database(targetDb)
+                                    .build();
+                            databaseEmailRepository.save(emailObj);
+                            targetDb.getEmails().add(emailObj);
+                        }
                     }
                 }
 
                 if (!personalEmail.isEmpty()) {
                     final String pEmailLower = personalEmail.toLowerCase();
-                    boolean exists = targetDb.getEmails().stream()
-                            .anyMatch(e -> e.getEmail().equalsIgnoreCase(pEmailLower));
-                    if (!exists) {
-                        DatabaseEmail emailObj = DatabaseEmail.builder()
-                                .email(personalEmail)
-                                .emailType("personal")
-                                .isCorporate(false)
-                                .database(targetDb)
-                                .build();
-                        databaseEmailRepository.save(emailObj);
-                        targetDb.getEmails().add(emailObj);
+                    DatabaseEmail existingDbEmail = databaseEmailRepository.findByEmail(pEmailLower).orElse(null);
+                    
+                    if (existingDbEmail == null) {
+                        boolean alreadyInList = targetDb.getEmails().stream()
+                                .anyMatch(e -> e.getEmail().equalsIgnoreCase(pEmailLower));
+                        if (!alreadyInList) {
+                            DatabaseEmail emailObj = DatabaseEmail.builder()
+                                    .email(personalEmail)
+                                    .emailType("personal")
+                                    .isCorporate(false)
+                                    .database(targetDb)
+                                    .build();
+                            databaseEmailRepository.save(emailObj);
+                            targetDb.getEmails().add(emailObj);
+                        }
                     }
                 }
 
@@ -301,7 +317,7 @@ public class ExcelImportController {
             
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of(
-                "message", "Failed to parse Excel file",
+                "message", "Failed to import Excel file: " + e.getMessage(),
                 "error", e.getMessage()
             ));
         }
@@ -319,10 +335,8 @@ public class ExcelImportController {
             Sheet sheet = workbook.getSheetAt(0);
             int lastRowNum = sheet.getLastRowNum();
             
-            List<RowPreview> previews = new ArrayList<>();
-            int newCount = 0;
-            int duplicateCount = 0;
-            int incompleteCount = 0;
+            List<PreviewRowState> previewStates = new ArrayList<>();
+            Map<String, List<EmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
             int totalValid = 0;
             
             for (int r = 1; r <= lastRowNum; r++) {
@@ -349,12 +363,16 @@ public class ExcelImportController {
                 if (firstName.isEmpty() && lastName.isEmpty()) continue;
                 
                 totalValid++;
+                String fullName = (firstName + " " + lastName).trim();
+                String rowLabel = formatRowLabel(row);
 
                 List<String> missing = getMissingMandatoryFields(
                         groupName, brandName, companyName, salutation, firstName, lastName,
                         positionStr, jobTitle, address, officePhone, mobilePhone, companyEmail,
                         industry, city, website
                 );
+
+                registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
 
                 Company company = null;
                 if (!companyName.isEmpty()) {
@@ -444,43 +462,91 @@ public class ExcelImportController {
                     }
                 }
 
-                String status = "NEW";
-                String message = "Will be created as a new database record";
-                
-                if (!missing.isEmpty()) {
-                    status = "INCOMPLETE";
-                    message = "DITOLAK (Data Belum Lengkap). Kolom kosong: " + String.join(", ", missing);
-                    incompleteCount++;
-                } else if (existingDatabase != null) {
-                    status = "DUPLICATE";
-                    message = matchedByPhone 
-                        ? "Database record already exists (phone matched). Details will be updated."
-                        : "Database record already exists. Details will be updated.";
-                    duplicateCount++;
-                } else if (emailDuplicate && !emailShared) {
-                    status = "DUPLICATE";
-                    message = "Email duplicate: " + duplicateMsg + ". Details will be updated.";
-                    duplicateCount++;
-                } else {
-                    newCount++;
-                    if (phoneShared) {
-                        message = "Will be created. Warning: Phone number is identical to database record '" + sharedDatabaseName + "' (Tikus candidate).";
-                    } else if (emailShared) {
-                        message = "Will be created. Warning: Email is identical to database record '" + sharedEmailDatabaseName + "' (Tikus candidate).";
-                    }
-                }
-
-                previews.add(RowPreview.builder()
-                        .rowNum(r)
+                previewStates.add(new PreviewRowState(
+                        RowPreview.builder()
+                        .rowNum(row.getRowNum() + 1)
                         .groupName(groupName)
                         .companyName(companyName)
                         .firstName(firstName)
                         .lastName(lastName)
                         .jobTitle(jobTitle)
                         .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
-                        .status(status)
-                        .message(message)
-                        .build());
+                        .status("NEW")
+                        .message("")
+                        .build(),
+                        missing,
+                        existingDatabase != null,
+                        matchedByPhone,
+                        emailDuplicate,
+                        duplicateMsg,
+                        phoneShared,
+                        sharedDatabaseName,
+                        emailShared,
+                        sharedEmailDatabaseName
+                ));
+            }
+
+            Map<Integer, List<String>> intraFileConflictsByRow = buildIntraFileConflictMessages(emailOwnersInFile);
+            List<RowPreview> previews = new ArrayList<>();
+            int newCount = 0;
+            int duplicateCount = 0;
+            int incompleteCount = 0;
+            int conflictCount = 0;
+
+            for (PreviewRowState state : previewStates) {
+                RowPreview preview = state.preview();
+                List<String> messageParts = new ArrayList<>();
+                String status = "NEW";
+
+                if (!state.missing().isEmpty()) {
+                    status = "INCOMPLETE";
+                    messageParts.add("DITOLAK (Data Belum Lengkap). Kolom kosong: " + String.join(", ", state.missing()));
+                    incompleteCount++;
+                }
+
+                List<String> conflictMessages = intraFileConflictsByRow.getOrDefault(preview.getRowNum(), List.of());
+                if (!conflictMessages.isEmpty()) {
+                    if ("NEW".equals(status)) {
+                        status = "CONFLICT";
+                    }
+                    messageParts.addAll(conflictMessages);
+                    conflictCount++;
+                }
+
+                if (state.existingDatabase()) {
+                    if ("NEW".equals(status)) {
+                        status = "DUPLICATE";
+                    }
+                    messageParts.add(state.matchedByPhone()
+                        ? "Database record already exists (phone matched). Details will be updated."
+                        : "Database record already exists. Details will be updated.");
+                    duplicateCount++;
+                }
+
+                if (state.emailDuplicate() && !state.emailShared()) {
+                    if ("NEW".equals(status)) {
+                        status = "DUPLICATE";
+                    }
+                    if (!state.existingDatabase()) {
+                        duplicateCount++;
+                    }
+                    messageParts.add("Email duplicate: " + state.duplicateMsg() + ". Details will be updated.");
+                }
+
+                if ("NEW".equals(status)) {
+                    newCount++;
+                    messageParts.add("Will be created as a new database record");
+                    if (state.phoneShared()) {
+                        messageParts.add("Warning: Phone number is identical to database record '" + state.sharedDatabaseName() + "' (Tikus candidate).");
+                    }
+                    if (state.emailShared()) {
+                        messageParts.add("Warning: Email is identical to database record '" + state.sharedEmailDatabaseName() + "' (Tikus candidate).");
+                    }
+                }
+
+                preview.setStatus(status);
+                preview.setMessage(String.join(" | ", messageParts));
+                previews.add(preview);
             }
             
             return ResponseEntity.ok(ImportPreviewResponse.builder()
@@ -488,6 +554,7 @@ public class ExcelImportController {
                     .newCount(newCount)
                     .duplicateCount(duplicateCount)
                     .incompleteCount(incompleteCount)
+                    .conflictCount(conflictCount)
                     .rows(previews)
                     .build());
             
@@ -605,6 +672,77 @@ public class ExcelImportController {
         return normalized;
     }
 
+    private void registerEmailsForRow(
+            Map<String, List<EmailOwnerInfo>> emailOwnersInFile,
+            String rowLabel,
+            String fullName,
+            String companyEmail,
+            String personalEmail,
+            int excelRowNumber) {
+        Set<String> emailsInRow = new LinkedHashSet<>();
+        if (!companyEmail.isEmpty()) {
+            emailsInRow.add(companyEmail.toLowerCase(Locale.ROOT));
+        }
+        if (!personalEmail.isEmpty()) {
+            emailsInRow.add(personalEmail.toLowerCase(Locale.ROOT));
+        }
+
+        for (String email : emailsInRow) {
+            emailOwnersInFile
+                    .computeIfAbsent(email, key -> new ArrayList<>())
+                    .add(new EmailOwnerInfo(rowLabel, fullName, excelRowNumber, email));
+        }
+    }
+
+    private void appendIntraFileConflictErrors(
+            List<String> validationErrors,
+            Map<String, List<EmailOwnerInfo>> emailOwnersInFile) {
+        Map<Integer, List<String>> conflictsByRow = buildIntraFileConflictMessages(emailOwnersInFile);
+        List<Integer> sortedRows = new ArrayList<>(conflictsByRow.keySet());
+        Collections.sort(sortedRows);
+        for (Integer rowNumber : sortedRows) {
+            validationErrors.addAll(conflictsByRow.get(rowNumber));
+        }
+    }
+
+    private Map<Integer, List<String>> buildIntraFileConflictMessages(
+            Map<String, List<EmailOwnerInfo>> emailOwnersInFile) {
+        Map<Integer, List<String>> conflictsByRow = new LinkedHashMap<>();
+
+        for (List<EmailOwnerInfo> owners : emailOwnersInFile.values()) {
+            if (owners.size() < 2) {
+                continue;
+            }
+
+            for (EmailOwnerInfo owner : owners) {
+                List<String> others = owners.stream()
+                        .filter(other -> other.excelRowNumber() != owner.excelRowNumber())
+                        .map(other -> other.rowLabel() + " (" + other.fullName() + ")")
+                        .toList();
+
+                if (others.isEmpty()) {
+                    continue;
+                }
+
+                String message = "Konflik Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Satu email tidak boleh dipakai 2 nama berbeda di Excel.";
+                conflictsByRow
+                        .computeIfAbsent(owner.excelRowNumber(), key -> new ArrayList<>())
+                        .add(message);
+            }
+        }
+
+        return conflictsByRow;
+    }
+
+    private String formatRowLabel(Row row) {
+        int excelRowNumber = row.getRowNum() + 1;
+        String sequenceNumber = normalizeField(getCellValueAsString(row.getCell(0)));
+        if (!sequenceNumber.isEmpty()) {
+            return "Baris " + sequenceNumber + " (row Excel " + excelRowNumber + ")";
+        }
+        return "Baris Excel " + excelRowNumber;
+    }
+
     @lombok.Data
     @lombok.Builder
     public static class ImportPreviewResponse {
@@ -612,6 +750,7 @@ public class ExcelImportController {
         private int newCount;
         private int duplicateCount;
         private int incompleteCount;
+        private int conflictCount;
         private List<RowPreview> rows;
     }
 
@@ -628,4 +767,18 @@ public class ExcelImportController {
         private String status;
         private String message;
     }
+
+    private record EmailOwnerInfo(String rowLabel, String fullName, int excelRowNumber, String email) {}
+
+    private record PreviewRowState(
+            RowPreview preview,
+            List<String> missing,
+            boolean existingDatabase,
+            boolean matchedByPhone,
+            boolean emailDuplicate,
+            String duplicateMsg,
+            boolean phoneShared,
+            String sharedDatabaseName,
+            boolean emailShared,
+            String sharedEmailDatabaseName) {}
 }

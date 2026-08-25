@@ -1,0 +1,75 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-audit-logs-table
+      author: antigravity
+      changes:
+        - createTable:
+            tableName: audit_logs
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: BIGINT
+              - column:
+                  name: username
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: user_full_name
+                  type: VARCHAR(150)
+              - column:
+                  name: user_role
+                  type: VARCHAR(50)
+              - column:
+                  name: module
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: action_type
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: target_id
+                  type: BIGINT
+              - column:
+                  name: target_name
+                  type: VARCHAR(255)
+              - column:
+                  name: description
+                  type: TEXT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: ip_address
+                  type: VARCHAR(45)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - createIndex:
+            tableName: audit_logs
+            indexName: idx_audit_logs_created_at
+            columns:
+              - column:
+                  name: created_at
+        - createIndex:
+            tableName: audit_logs
+            indexName: idx_audit_logs_username
+            columns:
+              - column:
+                  name: username
+        - createIndex:
+            tableName: audit_logs
+            indexName: idx_audit_logs_module
+            columns:
+              - column:
+                  name: module

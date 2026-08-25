@@ -23,3 +23,7 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-user-allowed-events.yml
   - include:
       file: db/changelog/changes/changelog-crm-pre-event-approval-status.yml
+
+  - include:
+      file: db/changelog/changes/changelog-crm-audit-logs.yml
+

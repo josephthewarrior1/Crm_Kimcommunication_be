@@ -86,8 +86,8 @@ public class FlaggedIdentityController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
-            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can manually flag identities");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can manually flag identities");
         }
 
         // Auto-match unlinked database record if database is not set
@@ -136,8 +136,8 @@ public class FlaggedIdentityController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
-            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can edit flagged identities status");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can edit flagged identities status");
         }
 
         return flaggedIdentityRepository.findById(id).map(existing -> {
@@ -186,8 +186,8 @@ public class FlaggedIdentityController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
-            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can delete flagged records");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can delete flagged records");
         }
 
         return flaggedIdentityRepository.findById(id).map(flag -> {

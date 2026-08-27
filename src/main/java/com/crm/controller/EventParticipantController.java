@@ -2,6 +2,7 @@ package com.crm.controller;
 
 import com.crm.domain.*;
 import com.crm.repository.*;
+import com.crm.service.AuditLogService;
 import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -9,7 +10,10 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 @RestController
@@ -31,6 +35,9 @@ public class EventParticipantController {
 
     @Autowired
     private SecurityHelper securityHelper;
+
+    @Autowired
+    private AuditLogService auditLogService;
 
     @GetMapping
     public ResponseEntity<?> getAllEventParticipants(@RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -98,6 +105,21 @@ public class EventParticipantController {
             savedParticipants.add(eventParticipantRepository.save(eventParticipant));
         }
 
+        if (!savedParticipants.isEmpty()) {
+            String eventName = event.getName() == null ? "Tanpa Nama Event" : event.getName();
+            String description = savedParticipants.size() == 1
+                    ? "Menambahkan 1 peserta ke event '" + eventName + "': " + participantDisplayName(savedParticipants.get(0))
+                    : "Menambahkan " + savedParticipants.size() + " peserta ke event '" + eventName + "'";
+            auditLogService.recordUserAction(
+                    currentUser,
+                    "EVENT_PARTICIPANT",
+                    "CREATE",
+                    event.getId(),
+                    eventName,
+                    description
+            );
+        }
+
         return ResponseEntity.ok(savedParticipants);
     }
 
@@ -128,6 +150,7 @@ public class EventParticipantController {
         }
 
         return eventParticipantRepository.findById(id).map(participant -> {
+            Map<String, String> beforeValues = captureParticipantState(participant);
             if (isViewer(currentUser)) {
                 if (!canAccessEvent(currentUser, participant)) {
                     return ResponseEntity.status(403).body("Forbidden: Viewer cannot update this event");
@@ -203,7 +226,22 @@ public class EventParticipantController {
             if (reminderHariH != null) {
                 participant.setReminderHariH(reminderHariH.trim().isEmpty() ? null : reminderHariH);
             }
-            return ResponseEntity.ok(eventParticipantRepository.save(participant));
+            EventParticipant savedParticipant = eventParticipantRepository.save(participant);
+            List<String> changes = describeParticipantChanges(beforeValues, savedParticipant);
+            if (!changes.isEmpty()) {
+                String eventName = savedParticipant.getEvent() != null && savedParticipant.getEvent().getName() != null
+                        ? savedParticipant.getEvent().getName()
+                        : "Tanpa Nama Event";
+                auditLogService.recordUserAction(
+                        currentUser,
+                        "EVENT_PARTICIPANT",
+                        "UPDATE",
+                        savedParticipant.getId(),
+                        participantDisplayName(savedParticipant),
+                        "Mengubah peserta '" + participantDisplayName(savedParticipant) + "' di event '" + eventName + "'. Perubahan: " + String.join(", ", changes)
+                );
+            }
+            return ResponseEntity.ok(savedParticipant);
         }).orElse(ResponseEntity.notFound().build());
     }
 
@@ -223,6 +261,7 @@ public class EventParticipantController {
         }
 
         List<EventParticipant> updatedParticipants = new ArrayList<>();
+        List<String> updatedNames = new ArrayList<>();
         int skippedCount = 0;
 
         for (Long participantId : request.getParticipantIds()) {
@@ -306,7 +345,25 @@ public class EventParticipantController {
                 participant.setNotes(setPic(participant.getNotes(), request.getPicName()));
             }
 
-            updatedParticipants.add(eventParticipantRepository.save(participant));
+            EventParticipant savedParticipant = eventParticipantRepository.save(participant);
+            updatedParticipants.add(savedParticipant);
+            updatedNames.add(participantDisplayName(savedParticipant));
+        }
+
+        if (!updatedParticipants.isEmpty()) {
+            Event firstEvent = updatedParticipants.get(0).getEvent();
+            String eventName = firstEvent != null && firstEvent.getName() != null ? firstEvent.getName() : "Tanpa Nama Event";
+            auditLogService.recordUserAction(
+                    currentUser,
+                    "EVENT_PARTICIPANT",
+                    "BULK_UPDATE",
+                    firstEvent != null ? firstEvent.getId() : null,
+                    eventName,
+                    "Bulk update peserta pada event '" + eventName + "' sebanyak " + updatedParticipants.size()
+                            + " data, skipped " + skippedCount
+                            + ". Field: " + summarizeBulkUpdatedFields(request)
+                            + ". Peserta: " + summarizeNames(updatedNames)
+            );
         }
 
         return ResponseEntity.ok(java.util.Map.of(
@@ -449,7 +506,19 @@ public class EventParticipantController {
             if (activities != null && !activities.isEmpty()) {
                 eventParticipantActivityRepository.deleteAll(activities);
             }
+            String participantName = participantDisplayName(participant);
+            String eventName = participant.getEvent() != null && participant.getEvent().getName() != null
+                    ? participant.getEvent().getName()
+                    : "Tanpa Nama Event";
             eventParticipantRepository.delete(participant);
+            auditLogService.recordUserAction(
+                    currentUser,
+                    "EVENT_PARTICIPANT",
+                    "DELETE",
+                    id,
+                    participantName,
+                    "Menghapus peserta '" + participantName + "' dari event '" + eventName + "'"
+            );
             return ResponseEntity.ok().build();
         }).orElse(ResponseEntity.notFound().build());
     }
@@ -617,5 +686,116 @@ public class EventParticipantController {
                 .replaceAll("\\s+", " ")
                 .trim();
         return ("[PreEventApproval: " + safeStatus + "] " + cleanNotes).replaceAll("\\s+", " ").trim();
+    }
+
+    private Map<String, String> captureParticipantState(EventParticipant participant) {
+        Map<String, String> state = new LinkedHashMap<>();
+        state.put("participantStatus", enumName(participant.getParticipantStatus()));
+        state.put("attendanceStatus", enumName(participant.getAttendanceStatus()));
+        state.put("confirmationStatus", safe(participant.getConfirmationStatus()));
+        state.put("preEventApprovalStatus", safe(participant.getPreEventApprovalStatus()));
+        state.put("participantCategory", safe(participant.getParticipantCategory()));
+        state.put("callStatus", safe(participant.getCallStatus()));
+        state.put("emailStatus", safe(participant.getEmailStatus()));
+        state.put("whatsappStatus", safe(participant.getWhatsappStatus()));
+        state.put("meetingStatus", safe(participant.getMeetingStatus()));
+        state.put("businessChallenges", safe(participant.getBusinessChallenges()));
+        state.put("projectInfo", safe(participant.getProjectInfo()));
+        state.put("timeline", safe(participant.getTimeline()));
+        state.put("notes", safe(participant.getNotes()));
+        state.put("reminderH7", safe(participant.getReminderH7()));
+        state.put("reminderH3", safe(participant.getReminderH3()));
+        state.put("reminderH1", safe(participant.getReminderH1()));
+        state.put("reminderHariH", safe(participant.getReminderHariH()));
+        return state;
+    }
+
+    private List<String> describeParticipantChanges(Map<String, String> beforeValues, EventParticipant participant) {
+        Map<String, String> afterValues = captureParticipantState(participant);
+        Map<String, String> labels = Map.ofEntries(
+                Map.entry("participantStatus", "participant status"),
+                Map.entry("attendanceStatus", "attendance status"),
+                Map.entry("confirmationStatus", "confirmation status"),
+                Map.entry("preEventApprovalStatus", "pre-event approval"),
+                Map.entry("participantCategory", "participant category"),
+                Map.entry("callStatus", "call status"),
+                Map.entry("emailStatus", "email status"),
+                Map.entry("whatsappStatus", "whatsapp status"),
+                Map.entry("meetingStatus", "meeting status"),
+                Map.entry("businessChallenges", "business challenges"),
+                Map.entry("projectInfo", "project info"),
+                Map.entry("timeline", "timeline"),
+                Map.entry("notes", "notes"),
+                Map.entry("reminderH7", "reminder H-7"),
+                Map.entry("reminderH3", "reminder H-3"),
+                Map.entry("reminderH1", "reminder H-1"),
+                Map.entry("reminderHariH", "reminder Hari-H")
+        );
+
+        List<String> changes = new ArrayList<>();
+        for (Map.Entry<String, String> entry : labels.entrySet()) {
+            String key = entry.getKey();
+            String before = safe(beforeValues.get(key));
+            String after = safe(afterValues.get(key));
+            if (!Objects.equals(before, after)) {
+                changes.add(entry.getValue() + " '" + displayValue(before) + "' -> '" + displayValue(after) + "'");
+            }
+        }
+        return changes;
+    }
+
+    private String summarizeBulkUpdatedFields(BulkUpdateRequest request) {
+        List<String> fields = new ArrayList<>();
+        if (request.getParticipantStatus() != null) fields.add("participant status");
+        if (request.getAttendanceStatus() != null) fields.add("attendance status");
+        if (request.getConfirmationStatus() != null) fields.add("confirmation status");
+        if (request.getPreEventApprovalStatus() != null) fields.add("pre-event approval");
+        if (request.getReminderH7() != null) fields.add("reminder H-7");
+        if (request.getReminderH3() != null) fields.add("reminder H-3");
+        if (request.getReminderH1() != null) fields.add("reminder H-1");
+        if (request.getReminderHariH() != null) fields.add("reminder Hari-H");
+        if (request.getCallStatus() != null) fields.add("call status");
+        if (request.getEmailStatus() != null) fields.add("email status");
+        if (request.getWhatsappStatus() != null) fields.add("whatsapp status");
+        if (request.getMeetingStatus() != null) fields.add("meeting status");
+        if (request.getParticipantCategory() != null) fields.add("participant category");
+        if (request.getBusinessChallenges() != null) fields.add("business challenges");
+        if (request.getProjectInfo() != null) fields.add("project info");
+        if (request.getTimeline() != null) fields.add("timeline");
+        if (request.getNotes() != null) fields.add("notes");
+        if (request.getPicName() != null) fields.add("PIC");
+        return fields.isEmpty() ? "tidak ada field terdeteksi" : String.join(", ", fields);
+    }
+
+    private String participantDisplayName(EventParticipant participant) {
+        if (participant == null || participant.getDatabase() == null) {
+            return "Peserta";
+        }
+        String firstName = safe(participant.getDatabase().getFirstName()).trim();
+        String lastName = safe(participant.getDatabase().getLastName()).trim();
+        String fullName = (firstName + " " + lastName).trim();
+        return fullName.isEmpty() ? "Peserta #" + participant.getId() : fullName;
+    }
+
+    private String summarizeNames(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return "-";
+        }
+        if (names.size() <= 3) {
+            return String.join(", ", names);
+        }
+        return String.join(", ", names.subList(0, 3)) + " +" + (names.size() - 3) + " lainnya";
+    }
+
+    private String enumName(Enum<?> value) {
+        return value == null ? "" : value.name();
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String displayValue(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 }

@@ -1,6 +1,7 @@
 package com.crm.service;
 
 import com.crm.domain.AuditLog;
+import com.crm.domain.AppUser;
 import com.crm.repository.AuditLogRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class AuditLogService {
@@ -46,5 +48,29 @@ public class AuditLogService {
             log.setCreatedAt(Instant.now());
         }
         return auditLogRepository.save(log);
+    }
+
+    public AuditLog recordUserAction(
+            AppUser user,
+            String module,
+            String actionType,
+            Long targetId,
+            String targetName,
+            String description) {
+        AuditLog log = AuditLog.builder()
+                .userId(user != null ? user.getId() : null)
+                .username(user != null ? user.getUsername() : "system")
+                .userFullName(user != null ? user.getFullName() : "System")
+                .userRole(user != null && user.getRoles() != null
+                        ? user.getRoles().stream().map(Enum::name).sorted().collect(Collectors.joining(","))
+                        : "SYSTEM")
+                .module(module)
+                .actionType(actionType)
+                .targetId(targetId)
+                .targetName(targetName)
+                .description(description)
+                .createdAt(Instant.now())
+                .build();
+        return recordLog(log);
     }
 }

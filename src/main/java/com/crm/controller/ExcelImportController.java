@@ -2,6 +2,7 @@ package com.crm.controller;
 
 import com.crm.domain.*;
 import com.crm.repository.*;
+import com.crm.service.AuditLogService;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +33,9 @@ public class ExcelImportController {
 
     @Autowired
     private com.crm.service.SecurityHelper securityHelper;
+
+    @Autowired
+    private AuditLogService auditLogService;
 
     @PostMapping("/import")
     public ResponseEntity<?> importDatabases(
@@ -309,6 +313,15 @@ public class ExcelImportController {
                 suspiciousIdentityService.checkAndFlagDatabase(targetDb);
                 successCount++;
             }
+
+            auditLogService.recordUserAction(
+                    currentUser,
+                    "DATABASE",
+                    "IMPORT",
+                    null,
+                    file.getOriginalFilename(),
+                    "Import Excel '" + safeFileName(file.getOriginalFilename()) + "' berhasil memproses " + successCount + " data database"
+            );
 
             return ResponseEntity.ok(Map.of(
                 "message", "Excel data imported successfully",
@@ -741,6 +754,10 @@ public class ExcelImportController {
             return "Baris " + sequenceNumber + " (row Excel " + excelRowNumber + ")";
         }
         return "Baris Excel " + excelRowNumber;
+    }
+
+    private String safeFileName(String fileName) {
+        return fileName == null || fileName.isBlank() ? "tanpa_nama.xlsx" : fileName.trim();
     }
 
     @lombok.Data

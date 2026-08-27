@@ -260,6 +260,150 @@ public class EventController {
         ));
     }
 
+    @GetMapping("/{id}/statistics")
+    public ResponseEntity<?> getEventStatistics(
+            @PathVariable Long id,
+            @RequestParam(required = false, defaultValue = "request") String tab,
+            @RequestParam(required = false) String pic,
+            @RequestParam(required = false) String company,
+            @RequestParam(required = false) String position,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String confirmationStatus,
+            @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String search,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<EventParticipant> eventParticipants = eventParticipantRepository.findByEventId(id);
+        String normalizedTab = safe(tab).isBlank() ? "request" : tab.trim().toLowerCase(Locale.ROOT);
+
+        List<EventParticipant> allScopeParticipants = filterParticipants(
+                eventParticipants,
+                currentUser,
+                normalizedTab,
+                pic,
+                company,
+                position,
+                industry,
+                confirmationStatus,
+                reminderHariH,
+                search
+        );
+
+        String minePic = resolveMinePic(currentUser, normalizedTab);
+        List<EventParticipant> myScopeParticipants = filterParticipants(
+                eventParticipants,
+                currentUser,
+                normalizedTab,
+                minePic,
+                company,
+                position,
+                industry,
+                confirmationStatus,
+                reminderHariH,
+                search
+        );
+
+        return ResponseEntity.ok(Map.of(
+                "eventId", id,
+                "tab", normalizedTab,
+                "scopes", Map.of(
+                        "all", buildStatisticsForTab(allScopeParticipants, normalizedTab),
+                        "mine", buildStatisticsForTab(myScopeParticipants, normalizedTab)
+                )
+        ));
+    }
+
+    @GetMapping("/{id}/participants/filter-options")
+    public ResponseEntity<?> getEventParticipantFilterOptions(
+            @PathVariable Long id,
+            @RequestParam(required = false, defaultValue = "request") String tab,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String normalizedTab = safe(tab).isBlank() ? "request" : tab.trim().toLowerCase(Locale.ROOT);
+        String scopedPic = resolveMinePic(currentUser, normalizedTab);
+        List<EventParticipant> participants = filterParticipants(
+                eventParticipantRepository.findByEventId(id),
+                currentUser,
+                normalizedTab,
+                scopedPic,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+
+        List<String> companies = participants.stream()
+                .map(participant -> participant.getDatabase() != null && participant.getDatabase().getCompany() != null
+                        ? safe(participant.getDatabase().getCompany().getName()).trim()
+                        : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> positions = participants.stream()
+                .map(participant -> participant.getDatabase() != null && participant.getDatabase().getPositionLevel() != null
+                        ? safe(participant.getDatabase().getPositionLevel().getValue()).trim()
+                        : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> industries = participants.stream()
+                .map(participant -> participant.getDatabase() != null && participant.getDatabase().getCompany() != null
+                        ? safe(participant.getDatabase().getCompany().getIndustry()).trim()
+                        : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> pics = userRepository.findAll().stream()
+                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
+                .map(user -> normalizePicName(user.getFullName(), user.getUsername()))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "eventId", id,
+                "tab", normalizedTab,
+                "companies", companies,
+                "positions", positions,
+                "industries", industries,
+                "pics", pics
+        ));
+    }
+
     @PostMapping("/{id}/assignments/auto-split")
     public ResponseEntity<?> autoSplitAssignments(
             @PathVariable Long id,
@@ -483,6 +627,158 @@ public class EventController {
                 .filter(participant -> matchesSearch(participant, search))
                 .sorted(Comparator.comparing(EventParticipant::getId))
                 .collect(Collectors.toList());
+    }
+
+    private String resolveMinePic(AppUser currentUser, String tab) {
+        if (currentUser == null || securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return null;
+        }
+        if ("request".equalsIgnoreCase(safe(tab))) {
+            return null;
+        }
+        return normalizePicName(currentUser.getFullName(), currentUser.getUsername());
+    }
+
+    private Map<String, Long> buildStatisticsForTab(List<EventParticipant> participants, String tab) {
+        String normalizedTab = safe(tab).isBlank() ? "request" : tab.trim().toLowerCase(Locale.ROOT);
+        LinkedHashMap<String, Long> stats = new LinkedHashMap<>();
+
+        switch (normalizedTab) {
+            case "pre_event" -> {
+                stats.put("totalRegister", countRegistered(participants));
+                stats.put("tentative", countTentative(participants));
+                stats.put("notRespondYet", countParticipantStatus(participants, "not_respond_yet"));
+                stats.put("notInterest", countParticipantStatus(participants, "not_interest"));
+                stats.put("approve", participants.stream().filter(participant -> "approve".equals(getPreEventApprovalStatus(participant))).count());
+                stats.put("pending", participants.stream().filter(participant -> "pending".equals(getPreEventApprovalStatus(participant))).count());
+            }
+            case "declined" -> {
+                stats.put("totalDeclined", participants.stream()
+                        .filter(participant -> "decline".equals(getEffectiveConfirmationStatus(participant))
+                                || "declined".equals(getEffectiveConfirmationStatus(participant))
+                                || "decline".equals(getPreEventApprovalStatus(participant)))
+                        .count());
+                stats.put("declinedFromDbVetting", participants.stream()
+                        .filter(participant -> "decline".equals(getEffectiveConfirmationStatus(participant))
+                                || "declined".equals(getEffectiveConfirmationStatus(participant)))
+                        .count());
+                stats.put("declinedFromPreEvent", participants.stream()
+                        .filter(participant -> "decline".equals(getPreEventApprovalStatus(participant)))
+                        .count());
+            }
+            case "reminder" -> {
+                stats.put("approvedRegisterTotal", participants.stream()
+                        .filter(participant -> {
+                            String conf = getEffectiveConfirmationStatus(participant);
+                            return ("approve".equals(conf) || "confirmed".equals(conf)) && isRegisteredParticipant(participant);
+                        })
+                        .count());
+                stats.put("confirmToAttend", participants.stream().filter(participant -> "confirm".equals(getLatestReminderStatus(participant))).count());
+                stats.put("tentative", participants.stream().filter(participant -> "tentative".equals(getLatestReminderStatus(participant))).count());
+                stats.put("notRespondYet", participants.stream().filter(participant -> "not_respond_yet".equals(getLatestReminderStatus(participant))).count());
+                stats.put("unableToAttend", participants.stream().filter(participant -> "unable_to_attend".equals(getLatestReminderStatus(participant))).count());
+            }
+            case "reminder_dday" -> {
+                stats.put("onLocation", participants.stream().filter(participant -> "on_location".equals(getHariHStatus(participant))).count());
+                stats.put("onTheWay", participants.stream().filter(participant -> "on_the_way".equals(getHariHStatus(participant))).count());
+                stats.put("notRespondYet", participants.stream().filter(participant -> {
+                    String status = getHariHStatus(participant);
+                    return status.isBlank() || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
+                }).count());
+                stats.put("unableToAttend", participants.stream().filter(participant -> "unable_to_attend".equals(getHariHStatus(participant))).count());
+            }
+            case "request" -> {
+                stats.put("totalRequest", participants.stream()
+                        .filter(participant -> {
+                            String conf = safe(participant.getConfirmationStatus()).toLowerCase(Locale.ROOT);
+                            return conf.isBlank() || "pending".equals(conf) || "decline".equals(conf) || "declined".equals(conf);
+                        })
+                        .count());
+                stats.put("pendingApproval", participants.stream()
+                        .filter(participant -> {
+                            String conf = safe(participant.getConfirmationStatus()).toLowerCase(Locale.ROOT);
+                            return conf.isBlank() || "pending".equals(conf);
+                        })
+                        .count());
+                stats.put("takenOut", participants.stream()
+                        .filter(participant -> {
+                            String conf = safe(participant.getConfirmationStatus()).toLowerCase(Locale.ROOT);
+                            return "decline".equals(conf) || "declined".equals(conf);
+                        })
+                        .count());
+            }
+            default -> {
+                stats.put("totalParticipants", (long) participants.size());
+            }
+        }
+
+        return stats;
+    }
+
+    private long countRegistered(List<EventParticipant> participants) {
+        return participants.stream().filter(this::isRegisteredParticipant).count();
+    }
+
+    private long countTentative(List<EventParticipant> participants) {
+        return participants.stream()
+                .filter(participant -> {
+                    String status = participant.getParticipantStatus() != null
+                            ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
+                            : "";
+                    return "tentative".equals(status) || "yellow".equals(status);
+                })
+                .count();
+    }
+
+    private long countParticipantStatus(List<EventParticipant> participants, String targetStatus) {
+        return participants.stream()
+                .filter(participant -> {
+                    String status = participant.getParticipantStatus() != null
+                            ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
+                            : "";
+                    if ("not_respond_yet".equals(targetStatus)) {
+                        return status.isBlank() || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
+                    }
+                    return "not_interest".equals(targetStatus) && ("not_interest".equals(status) || "red".equals(status));
+                })
+                .count();
+    }
+
+    private String getPreEventApprovalStatus(EventParticipant participant) {
+        String status = safe(participant.getPreEventApprovalStatus()).toLowerCase(Locale.ROOT);
+        return status.isBlank() ? "pending" : status;
+    }
+
+    private String getLatestReminderStatus(EventParticipant participant) {
+        List<String> reminderStatuses = List.of(
+                normalizeStatus(participant.getReminderH1()),
+                normalizeStatus(participant.getReminderH3()),
+                normalizeStatus(participant.getReminderH7())
+        );
+
+        String latest = reminderStatuses.stream().filter(value -> !value.isBlank()).findFirst().orElse("");
+        if ("confirm".equals(latest) || "confirmed".equals(latest)) {
+            return "confirm";
+        }
+        if ("tentative".equals(latest)) {
+            return "tentative";
+        }
+        if ("unabletoattend".equals(latest)
+                || "notinterest".equals(latest)
+                || "unableattend".equals(latest)
+                || "decline".equals(latest)
+                || "declined".equals(latest)) {
+            return "unable_to_attend";
+        }
+        return "not_respond_yet";
+    }
+
+    private String normalizeStatus(String value) {
+        String normalized = safe(value).toLowerCase(Locale.ROOT).trim().replaceAll("[\\s_-]+", "");
+        if ("null".equals(normalized) || "undefined".equals(normalized)) {
+            return "";
+        }
+        return normalized;
     }
 
     private boolean matchesTab(EventParticipant participant, String tab) {

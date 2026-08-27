@@ -10,10 +10,12 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 @RestController
@@ -38,6 +40,9 @@ public class EventParticipantController {
 
     @Autowired
     private AuditLogService auditLogService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     @GetMapping
     public ResponseEntity<?> getAllEventParticipants(@RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -460,6 +465,63 @@ public class EventParticipantController {
         return ResponseEntity.ok(eventParticipantActivityRepository.findByEventParticipantEventId(eventId));
     }
 
+    @GetMapping("/event/{eventId}/activity-summary")
+    public ResponseEntity<?> getEventActivitySummary(
+            @PathVariable Long eventId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) String pic,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (isViewer(currentUser)) {
+            return ResponseEntity.status(403).body("Forbidden: Viewer cannot view activity summary");
+        }
+        if (!canAccessEvent(currentUser, eventId)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+
+        String effectivePic = resolveEffectiveActivityPic(currentUser, pic);
+        List<EventParticipantActivity> activities;
+
+        if (startDate != null && !startDate.trim().isEmpty() && endDate != null && !endDate.trim().isEmpty()) {
+            try {
+                LocalDateTime start = LocalDateTime.parse(startDate.trim() + "T00:00:00");
+                LocalDateTime end = LocalDateTime.parse(endDate.trim() + "T23:59:59");
+                activities = eventParticipantActivityRepository.findByEventIdAndDateRange(eventId, start, end);
+            } catch (Exception e) {
+                activities = eventParticipantActivityRepository.findByEventParticipantEventId(eventId);
+            }
+        } else {
+            activities = eventParticipantActivityRepository.findByEventParticipantEventId(eventId);
+        }
+
+        List<EventParticipantActivity> scopedActivities = activities.stream()
+                .filter(activity -> matchesActivityPic(activity, effectivePic))
+                .toList();
+
+        long callCount = scopedActivities.stream().filter(activity -> "CALL".equalsIgnoreCase(activity.getActivityType())).count();
+        long whatsappCount = scopedActivities.stream().filter(activity -> "WHATSAPP".equalsIgnoreCase(activity.getActivityType())).count();
+        long emailCount = scopedActivities.stream().filter(activity -> "EMAIL".equalsIgnoreCase(activity.getActivityType())).count();
+        long meetingCount = scopedActivities.stream().filter(activity -> "MEETING".equalsIgnoreCase(activity.getActivityType())).count();
+
+        return ResponseEntity.ok(Map.of(
+                "eventId", eventId,
+                "pic", effectivePic == null ? "" : effectivePic,
+                "startDate", startDate == null ? "" : startDate,
+                "endDate", endDate == null ? "" : endDate,
+                "totalActivities", scopedActivities.size(),
+                "byType", Map.of(
+                        "call", callCount,
+                        "whatsapp", whatsappCount,
+                        "email", emailCount,
+                        "meeting", meetingCount
+                )
+        ));
+    }
+
     @GetMapping("/emails/track/{activityId}")
     public ResponseEntity<byte[]> trackEmailOpen(@PathVariable Long activityId) {
         eventParticipantActivityRepository.findById(activityId).ifPresent(activity -> {
@@ -617,8 +679,75 @@ public class EventParticipantController {
         return securityHelper.hasRole(user, Role.USER) && !securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER);
     }
 
+    private boolean canAccessEvent(AppUser user, Long eventId) {
+        return securityHelper.hasRole(user, Role.ADMIN)
+                || (user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(eventId));
+    }
+
     private boolean canAccessEvent(AppUser user, EventParticipant participant) {
         return !isViewer(user) || (participant.getEvent() != null && user.getAllowedEventIds().contains(participant.getEvent().getId()));
+    }
+
+    private String resolveEffectiveActivityPic(AppUser currentUser, String requestedPic) {
+        if (currentUser == null) {
+            return "";
+        }
+        if (securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return requestedPic == null ? "" : requestedPic.trim();
+        }
+        return safe(currentUser.getFullName()).isBlank()
+                ? safe(currentUser.getUsername()).trim()
+                : safe(currentUser.getFullName()).trim();
+    }
+
+    private boolean matchesActivityPic(EventParticipantActivity activity, String pic) {
+        if (pic == null || pic.isBlank()) {
+            return true;
+        }
+
+        Set<String> picAliases = resolveActivityPicAliases(pic);
+        if (picAliases.isEmpty()) {
+            return true;
+        }
+
+        String createdBy = safe(activity.getCreatedBy()).trim().toLowerCase(Locale.ROOT);
+        return picAliases.contains(createdBy);
+    }
+
+    private Set<String> resolveActivityPicAliases(String pic) {
+        Set<String> aliases = new HashSet<>();
+        String normalizedPic = safe(pic).trim().toLowerCase(Locale.ROOT);
+        if (normalizedPic.isBlank()) {
+            return aliases;
+        }
+
+        aliases.add(normalizedPic);
+        for (AppUser user : userRepository.findAll()) {
+            String fullName = safe(user.getFullName()).trim().toLowerCase(Locale.ROOT);
+            String username = safe(user.getUsername()).trim().toLowerCase(Locale.ROOT);
+            if (normalizedPic.equals(fullName) || normalizedPic.equals(username)) {
+                if (!fullName.isBlank()) {
+                    aliases.add(fullName);
+                }
+                if (!username.isBlank()) {
+                    aliases.add(username);
+                }
+            }
+        }
+
+        return aliases;
+    }
+
+    private String extractPicName(String notes) {
+        if (notes == null || notes.isBlank()) {
+            return "";
+        }
+        java.util.regex.Matcher matcher = PIC_PATTERN.matcher(notes);
+        if (matcher.find()) {
+            String raw = matcher.group();
+            return raw.replaceAll("(?i)^\\[PIC:\\s*", "").replaceAll("\\]$", "").trim();
+        }
+        return "";
     }
 
     private boolean hasOnlyConfirmationStatus(

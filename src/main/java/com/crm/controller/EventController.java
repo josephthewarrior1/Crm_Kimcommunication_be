@@ -3,10 +3,12 @@ package com.crm.controller;
 import com.crm.domain.Event;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
+import com.crm.domain.Database;
 import com.crm.domain.DatabaseSource;
 import com.crm.domain.EventParticipant;
 import com.crm.domain.ParticipantStatus;
 import com.crm.domain.PositionLevel;
+import com.crm.repository.DatabaseRepository;
 import com.crm.repository.EventRepository;
 import com.crm.repository.EventParticipantRepository;
 import com.crm.repository.UserRepository;
@@ -14,6 +16,7 @@ import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
@@ -35,6 +38,9 @@ public class EventController {
 
     @Autowired
     private EventRepository eventRepository;
+
+    @Autowired
+    private DatabaseRepository databaseRepository;
 
     @Autowired
     private EventParticipantRepository eventParticipantRepository;
@@ -74,12 +80,73 @@ public class EventController {
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        if (isViewer(currentUser)) {
-            return ResponseEntity.ok(eventRepository.findAll().stream()
-                    .filter(event -> currentUser.getAllowedEventIds().contains(event.getId()))
-                    .toList());
+        return ResponseEntity.ok(getVisibleEvents(currentUser));
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> getEventList(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "12") Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
         }
-        return ResponseEntity.ok(eventRepository.findAll());
+
+        int safePage = page == null || page < 1 ? 1 : page;
+        int safeSize = size == null || size < 1 ? 12 : Math.min(size, 100);
+
+        List<Event> visibleEvents = getVisibleEvents(currentUser);
+        List<Event> filteredEvents = visibleEvents.stream()
+                .filter(event -> matchesEventSearch(event, search))
+                .sorted(Comparator
+                        .comparing((Event event) -> event.getDateStart() != null ? event.getDateStart() : LocalDate.MIN)
+                        .reversed()
+                        .thenComparing(Event::getId, Comparator.reverseOrder()))
+                .collect(Collectors.toList());
+
+        Map<Long, List<EventParticipant>> participantsByEventId = eventParticipantRepository.findAll().stream()
+                .filter(participant -> participant.getEvent() != null && participant.getEvent().getId() != null)
+                .collect(Collectors.groupingBy(participant -> participant.getEvent().getId()));
+
+        List<Event> items = filteredEvents.stream()
+                .skip((long) (safePage - 1) * safeSize)
+                .limit(safeSize)
+                .map(event -> {
+                    List<EventParticipant> eventParticipants = participantsByEventId.getOrDefault(event.getId(), List.of());
+                    long registeredCount = eventParticipants.stream().filter(this::isRegisteredParticipant).count();
+                    long onLocationCount = eventParticipants.stream()
+                            .filter(participant -> "on_location".equals(getHariHStatus(participant))
+                                    || (participant.getAttendanceStatus() != null
+                                    && "attended".equalsIgnoreCase(participant.getAttendanceStatus().name())))
+                            .count();
+                    int targetParticipants = event.getTargetParticipants() != null ? event.getTargetParticipants() : 0;
+
+                    event.setRegisteredCount((int) registeredCount);
+                    event.setOnLocationCount((int) onLocationCount);
+                    event.setTargetAchieved(targetParticipants > 0 && onLocationCount >= targetParticipants);
+                    return event;
+                })
+                .toList();
+
+        long upcomingCount = visibleEvents.stream().filter(event -> getEventTimingStatus(event) == EventTimingStatus.UPCOMING).count();
+        long ongoingCount = visibleEvents.stream().filter(event -> getEventTimingStatus(event) == EventTimingStatus.ONGOING).count();
+        long pastCount = visibleEvents.stream().filter(event -> getEventTimingStatus(event) == EventTimingStatus.PAST).count();
+
+        return ResponseEntity.ok(Map.of(
+                "page", safePage,
+                "size", safeSize,
+                "total", filteredEvents.size(),
+                "totalPages", filteredEvents.isEmpty() ? 1 : (int) Math.ceil((double) filteredEvents.size() / safeSize),
+                "items", items,
+                "summary", Map.of(
+                        "total", visibleEvents.size(),
+                        "upcoming", upcomingCount,
+                        "ongoing", ongoingCount,
+                        "past", pastCount
+                )
+        ));
     }
 
     @GetMapping("/{id}/eligible-managers")
@@ -260,6 +327,111 @@ public class EventController {
         ));
     }
 
+    @GetMapping("/{id}/participants/summary-by-pic")
+    public ResponseEntity<?> getEventParticipantsSummaryByPic(
+            @PathVariable Long id,
+            @RequestParam(required = false) String tab,
+            @RequestParam(required = false) String pic,
+            @RequestParam(required = false) String company,
+            @RequestParam(required = false) String position,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String confirmationStatus,
+            @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String search,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN can view PIC summaries");
+        }
+        if (!canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<EventParticipant> participants = filterParticipants(
+                eventParticipantRepository.findByEventId(id),
+                currentUser,
+                tab,
+                pic,
+                company,
+                position,
+                industry,
+                confirmationStatus,
+                reminderHariH,
+                search
+        );
+
+        List<EligibleManagerResponse> eligibleManagers = userRepository.findAll().stream()
+                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
+                .map(user -> EligibleManagerResponse.builder()
+                        .id(user.getId())
+                        .username(user.getUsername())
+                        .fullName(user.getFullName())
+                        .email(user.getEmail())
+                        .roles(user.getRoles() != null ? user.getRoles() : new HashSet<>())
+                        .allowedEventIds(user.getAllowedEventIds() != null ? user.getAllowedEventIds() : new HashSet<>())
+                        .build())
+                .toList();
+
+        List<Map<String, Object>> items = eligibleManagers.stream()
+                .map(manager -> {
+                    String name = normalizePicName(manager.getFullName(), manager.getUsername());
+                    List<EventParticipant> picParticipants = participants.stream()
+                            .filter(participant -> extractPic(participant.getNotes()).equalsIgnoreCase(name))
+                            .toList();
+
+                    return Map.<String, Object>of(
+                            "userId", manager.getId(),
+                            "name", name,
+                            "roleLabel", "MANAGER",
+                            "totalAssigned", picParticipants.size(),
+                            "approveCount", picParticipants.stream().filter(participant -> "approve".equals(getPreEventApprovalStatus(participant))).count(),
+                            "pendingCount", picParticipants.stream().filter(participant -> "pending".equals(getPreEventApprovalStatus(participant))).count(),
+                            "registeredCount", countRegistered(picParticipants),
+                            "tentativeCount", countTentative(picParticipants),
+                            "notRespondCount", countParticipantStatus(picParticipants, "not_respond_yet"),
+                            "notInterestCount", countParticipantStatus(picParticipants, "not_interest")
+                    );
+                })
+                .filter(item -> {
+                    Object totalAssigned = item.get("totalAssigned");
+                    return totalAssigned instanceof Number && ((Number) totalAssigned).longValue() > 0;
+                })
+                .sorted(Comparator
+                        .comparing((Map<String, Object> item) -> ((Number) item.get("totalAssigned")).longValue())
+                        .reversed()
+                        .thenComparing(item -> String.valueOf(item.get("name")), String.CASE_INSENSITIVE_ORDER))
+                .toList();
+
+        long totalAssigned = items.stream()
+                .mapToLong(item -> ((Number) item.get("totalAssigned")).longValue())
+                .sum();
+        long unassignedCount = participants.stream()
+                .filter(participant -> {
+                    String picName = extractPic(participant.getNotes());
+                    return picName.isBlank() || items.stream().noneMatch(item -> String.valueOf(item.get("name")).equalsIgnoreCase(picName));
+                })
+                .count();
+
+        return ResponseEntity.ok(Map.of(
+                "eventId", id,
+                "tab", safe(tab).isBlank() ? "request" : tab.trim().toLowerCase(Locale.ROOT),
+                "totalParticipants", participants.size(),
+                "totalAssigned", totalAssigned,
+                "unassignedCount", unassignedCount,
+                "activePicsCount", items.size(),
+                "items", items
+        ));
+    }
+
     @GetMapping("/{id}/statistics")
     public ResponseEntity<?> getEventStatistics(
             @PathVariable Long id,
@@ -329,6 +501,13 @@ public class EventController {
     public ResponseEntity<?> getEventParticipantFilterOptions(
             @PathVariable Long id,
             @RequestParam(required = false, defaultValue = "request") String tab,
+            @RequestParam(required = false) String pic,
+            @RequestParam(required = false) String company,
+            @RequestParam(required = false) String position,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String confirmationStatus,
+            @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -345,17 +524,18 @@ public class EventController {
 
         String normalizedTab = safe(tab).isBlank() ? "request" : tab.trim().toLowerCase(Locale.ROOT);
         String scopedPic = resolveMinePic(currentUser, normalizedTab);
+        String effectivePicFilter = scopedPic != null ? scopedPic : pic;
         List<EventParticipant> participants = filterParticipants(
                 eventParticipantRepository.findByEventId(id),
                 currentUser,
                 normalizedTab,
-                scopedPic,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
+                effectivePicFilter,
+                company,
+                position,
+                industry,
+                confirmationStatus,
+                reminderHariH,
+                search
         );
 
         List<String> companies = participants.stream()
@@ -401,6 +581,141 @@ public class EventController {
                 "positions", positions,
                 "industries", industries,
                 "pics", pics
+        ));
+    }
+
+    @GetMapping("/{id}/available-databases")
+    public ResponseEntity<?> getAvailableDatabasesForEvent(
+            @PathVariable Long id,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String company,
+            @RequestParam(required = false) String position,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false) Long invitedEventId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<EventParticipant> allParticipants = eventParticipantRepository.findAll();
+        Set<Long> currentEventDatabaseIds = allParticipants.stream()
+                .filter(participant -> participant.getEvent() != null && Objects.equals(participant.getEvent().getId(), id))
+                .map(participant -> participant.getDatabase() != null ? participant.getDatabase().getId() : null)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<Long, List<EventParticipant>> participantsByDatabaseId = allParticipants.stream()
+                .filter(participant -> participant.getDatabase() != null && participant.getDatabase().getId() != null)
+                .collect(Collectors.groupingBy(participant -> participant.getDatabase().getId()));
+
+        List<Event> visibleEvents = getVisibleEvents(currentUser).stream()
+                .filter(visibleEvent -> !Objects.equals(visibleEvent.getId(), id))
+                .sorted(Comparator.comparing(Event::getName, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        Set<Long> visibleEventIds = visibleEvents.stream().map(Event::getId).collect(Collectors.toSet());
+
+        List<Database> availableDatabases = databaseRepository.findAll().stream()
+                .filter(database -> Boolean.TRUE.equals(database.getIsActive()))
+                .filter(database -> !currentEventDatabaseIds.contains(database.getId()))
+                .filter(database -> matchesAvailableDatabaseSearch(database, search))
+                .filter(database -> matchesAvailableDatabaseCompany(database, company))
+                .filter(database -> matchesAvailableDatabasePosition(database, position))
+                .filter(database -> matchesAvailableDatabaseIndustry(database, industry))
+                .filter(database -> matchesAvailableDatabaseCity(database, city))
+                .filter(database -> matchesAvailableDatabaseInvitedEvent(database, invitedEventId, participantsByDatabaseId, visibleEventIds))
+                .sorted(Comparator
+                        .comparing((Database database) -> safe(database.getFirstName()).toLowerCase(Locale.ROOT))
+                        .thenComparing(database -> safe(database.getLastName()).toLowerCase(Locale.ROOT))
+                        .thenComparing(Database::getId))
+                .toList();
+
+        List<Map<String, Object>> items = availableDatabases.stream()
+                .map(database -> {
+                    List<Map<String, Object>> invitedEvents = participantsByDatabaseId
+                            .getOrDefault(database.getId(), List.of())
+                            .stream()
+                            .map(EventParticipant::getEvent)
+                            .filter(Objects::nonNull)
+                            .filter(participantEvent -> !Objects.equals(participantEvent.getId(), id))
+                            .filter(participantEvent -> visibleEventIds.contains(participantEvent.getId()))
+                            .collect(Collectors.toMap(
+                                    Event::getId,
+                                    participantEvent -> participantEvent,
+                                    (left, right) -> left,
+                                    LinkedHashMap::new
+                            ))
+                            .values()
+                            .stream()
+                            .sorted(Comparator.comparing(Event::getName, String.CASE_INSENSITIVE_ORDER))
+                            .map(participantEvent -> Map.<String, Object>of(
+                                    "id", participantEvent.getId(),
+                                    "name", participantEvent.getName()
+                            ))
+                            .toList();
+
+                    return Map.<String, Object>of(
+                            "database", database,
+                            "invitedEvents", invitedEvents
+                    );
+                })
+                .toList();
+
+        List<String> companyOptions = availableDatabases.stream()
+                .map(database -> database.getCompany() != null ? safe(database.getCompany().getName()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> positionOptions = availableDatabases.stream()
+                .map(database -> database.getPositionLevel() != null ? safe(database.getPositionLevel().getValue()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> industryOptions = availableDatabases.stream()
+                .map(database -> database.getCompany() != null ? safe(database.getCompany().getIndustry()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> cityOptions = availableDatabases.stream()
+                .map(database -> database.getCompany() != null ? safe(database.getCompany().getCity()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<Map<String, Object>> invitedEventOptions = visibleEvents.stream()
+                .map(visibleEvent -> Map.<String, Object>of(
+                        "id", visibleEvent.getId(),
+                        "name", visibleEvent.getName()
+                ))
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "eventId", id,
+                "total", items.size(),
+                "items", items,
+                "filterOptions", Map.of(
+                        "companies", companyOptions,
+                        "positions", positionOptions,
+                        "industries", industryOptions,
+                        "cities", cityOptions,
+                        "invitedEvents", invitedEventOptions
+                )
         ));
     }
 
@@ -499,6 +814,9 @@ public class EventController {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
         }
 
         return eventRepository.findById(id)
@@ -627,6 +945,122 @@ public class EventController {
                 .filter(participant -> matchesSearch(participant, search))
                 .sorted(Comparator.comparing(EventParticipant::getId))
                 .collect(Collectors.toList());
+    }
+
+    private List<Event> getVisibleEvents(AppUser currentUser) {
+        List<Event> events = eventRepository.findAll();
+        if (securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return events;
+        }
+        Set<Long> allowedEventIds = currentUser.getAllowedEventIds() != null ? currentUser.getAllowedEventIds() : Set.of();
+        return events.stream()
+                .filter(event -> allowedEventIds.contains(event.getId()))
+                .toList();
+    }
+
+    private boolean matchesEventSearch(Event event, String search) {
+        if (search == null || search.isBlank()) {
+            return true;
+        }
+
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        return safe(event.getName()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(event.getClientName()).toLowerCase(Locale.ROOT).contains(query)
+                || String.valueOf(event.getId()).contains(query)
+                || (event.getEmsEventId() != null && String.valueOf(event.getEmsEventId()).contains(query));
+    }
+
+    private boolean matchesAvailableDatabaseSearch(Database database, String search) {
+        if (search == null || search.isBlank()) {
+            return true;
+        }
+
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        String emailText = database.getEmails() != null
+                ? database.getEmails().stream()
+                .map(email -> safe(email.getEmail()).toLowerCase(Locale.ROOT))
+                .collect(Collectors.joining(" "))
+                : "";
+        String combinedText = String.join(" ",
+                safe(database.getFirstName()),
+                safe(database.getLastName()),
+                safe(database.getCompany() != null ? database.getCompany().getName() : null),
+                safe(database.getJobTitle()),
+                emailText,
+                safe(database.getMobilePhone())
+        ).toLowerCase(Locale.ROOT);
+
+        return List.of(query.split("\\s+")).stream()
+                .filter(word -> !word.isBlank())
+                .allMatch(combinedText::contains);
+    }
+
+    private boolean matchesAvailableDatabaseCompany(Database database, String company) {
+        if (company == null || company.isBlank()) {
+            return true;
+        }
+        return safe(database.getCompany() != null ? database.getCompany().getName() : null)
+                .equalsIgnoreCase(company.trim());
+    }
+
+    private boolean matchesAvailableDatabasePosition(Database database, String position) {
+        if (position == null || position.isBlank()) {
+            return true;
+        }
+        return safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null)
+                .equalsIgnoreCase(position.trim());
+    }
+
+    private boolean matchesAvailableDatabaseIndustry(Database database, String industry) {
+        if (industry == null || industry.isBlank()) {
+            return true;
+        }
+        return safe(database.getCompany() != null ? database.getCompany().getIndustry() : null)
+                .equalsIgnoreCase(industry.trim());
+    }
+
+    private boolean matchesAvailableDatabaseCity(Database database, String city) {
+        if (city == null || city.isBlank()) {
+            return true;
+        }
+        return safe(database.getCompany() != null ? database.getCompany().getCity() : null)
+                .equalsIgnoreCase(city.trim());
+    }
+
+    private boolean matchesAvailableDatabaseInvitedEvent(
+            Database database,
+            Long invitedEventId,
+            Map<Long, List<EventParticipant>> participantsByDatabaseId,
+            Set<Long> visibleEventIds) {
+        if (invitedEventId == null) {
+            return true;
+        }
+        if (!visibleEventIds.contains(invitedEventId)) {
+            return false;
+        }
+
+        return participantsByDatabaseId.getOrDefault(database.getId(), List.of()).stream()
+                .map(EventParticipant::getEvent)
+                .filter(Objects::nonNull)
+                .anyMatch(event -> Objects.equals(event.getId(), invitedEventId));
+    }
+
+    private EventTimingStatus getEventTimingStatus(Event event) {
+        if (event == null || event.getDateStart() == null) {
+            return EventTimingStatus.PAST;
+        }
+
+        LocalDate today = LocalDate.now();
+        LocalDate startDate = event.getDateStart();
+        LocalDate endDate = event.getDateEnd() != null ? event.getDateEnd() : startDate;
+
+        if (today.isBefore(startDate)) {
+            return EventTimingStatus.UPCOMING;
+        }
+        if (!today.isAfter(endDate)) {
+            return EventTimingStatus.ONGOING;
+        }
+        return EventTimingStatus.PAST;
     }
 
     private String resolveMinePic(AppUser currentUser, String tab) {
@@ -997,6 +1431,12 @@ public class EventController {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private enum EventTimingStatus {
+        UPCOMING,
+        ONGOING,
+        PAST
     }
 
     @lombok.Data

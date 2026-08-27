@@ -6,6 +6,7 @@ import com.crm.domain.DatabaseEmail;
 import com.crm.domain.EventParticipant;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.FlaggedIdentity;
+import com.crm.domain.FlagStatus;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
@@ -19,8 +20,14 @@ import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/databases")
@@ -57,6 +64,169 @@ public class DatabaseController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
         return ResponseEntity.ok(databaseRepository.findAll());
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> getDatabasesList(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long groupId,
+            @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) String positionLevel,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false, defaultValue = "all") String tab,
+            @RequestParam(required = false, defaultValue = "id") String sortBy,
+            @RequestParam(required = false, defaultValue = "asc") String sortOrder,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "10") Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        List<Database> allDatabases = databaseRepository.findAll();
+        Set<Long> confirmedFlaggedDatabaseIds = flaggedIdentityRepository.findAll().stream()
+                .filter(flag -> flag.getStatus() == FlagStatus.confirmed)
+                .map(flag -> flag.getDatabase() != null ? flag.getDatabase().getId() : null)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+
+        List<Database> visibleDatabases = allDatabases.stream()
+                .filter(database -> database.getIsActive() == null || database.getIsActive())
+                .filter(database -> !confirmedFlaggedDatabaseIds.contains(database.getId()))
+                .collect(Collectors.toList());
+
+        long totalVisible = visibleDatabases.size();
+        long cleanCount = visibleDatabases.stream().filter(database -> !isIncomplete(database)).count();
+        long dirtyCount = visibleDatabases.stream().filter(this::isIncomplete).count();
+
+        List<Database> filteredDatabases = visibleDatabases.stream()
+                .filter(database -> matchesTab(database, tab))
+                .filter(database -> matchesSearch(database, search))
+                .filter(database -> matchesGroup(database, groupId))
+                .filter(database -> matchesCompany(database, companyId))
+                .filter(database -> matchesPositionLevel(database, positionLevel))
+                .filter(database -> matchesIndustry(database, industry))
+                .filter(database -> matchesCity(database, city))
+                .sorted(buildComparator(sortBy, sortOrder))
+                .collect(Collectors.toList());
+
+        int safeSize = size == null ? 10 : Math.max(1, Math.min(size, 200));
+        int safePage = page == null ? 1 : Math.max(1, page);
+        int total = filteredDatabases.size();
+        int fromIndex = Math.min((safePage - 1) * safeSize, total);
+        int toIndex = Math.min(fromIndex + safeSize, total);
+
+        return ResponseEntity.ok(new LinkedHashMap<String, Object>() {{
+            put("page", safePage);
+            put("size", safeSize);
+            put("total", total);
+            put("totalPages", (int) Math.ceil(total / (double) safeSize));
+            put("items", filteredDatabases.subList(fromIndex, toIndex));
+            put("summary", new LinkedHashMap<String, Long>() {{
+                put("all", totalVisible);
+                put("clean", cleanCount);
+                put("dirty", dirtyCount);
+            }});
+        }});
+    }
+
+    @GetMapping("/filter-options")
+    public ResponseEntity<?> getDatabaseFilterOptions(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long groupId,
+            @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) String positionLevel,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false, defaultValue = "all") String tab,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        List<Database> scopedDatabases = getVisibleDatabases().stream()
+                .filter(database -> matchesTab(database, tab))
+                .filter(database -> matchesSearch(database, search))
+                .filter(database -> matchesGroup(database, groupId))
+                .filter(database -> matchesCompany(database, companyId))
+                .filter(database -> matchesPositionLevel(database, positionLevel))
+                .filter(database -> matchesIndustry(database, industry))
+                .filter(database -> matchesCity(database, city))
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> groups = scopedDatabases.stream()
+                .filter(database -> database.getCompany() != null && database.getCompany().getGroup() != null)
+                .collect(Collectors.toMap(
+                        database -> database.getCompany().getGroup().getId(),
+                        database -> database.getCompany().getGroup(),
+                        (existing, replacement) -> existing,
+                        LinkedHashMap::new
+                ))
+                .values().stream()
+                .sorted(Comparator.comparing(group -> safe(group.getName()).toLowerCase(Locale.ROOT)))
+                .map(group -> Map.<String, Object>of(
+                        "id", group.getId(),
+                        "name", safe(group.getName())
+                ))
+                .toList();
+
+        List<Map<String, Object>> companies = scopedDatabases.stream()
+                .filter(database -> database.getCompany() != null)
+                .collect(Collectors.toMap(
+                        database -> database.getCompany().getId(),
+                        Database::getCompany,
+                        (existing, replacement) -> existing,
+                        LinkedHashMap::new
+                ))
+                .values().stream()
+                .sorted(Comparator.comparing(company -> safe(company.getName()).toLowerCase(Locale.ROOT)))
+                .map(company -> Map.<String, Object>of(
+                        "id", company.getId(),
+                        "name", safe(company.getName())
+                ))
+                .toList();
+
+        List<Map<String, String>> cities = scopedDatabases.stream()
+                .map(database -> database.getCompany() != null ? database.getCompany().getCity() : null)
+                .filter(value -> !isBlank(value))
+                .collect(Collectors.toMap(
+                        this::normalizeCity,
+                        value -> toTitleCase(value.trim()),
+                        (existing, replacement) -> existing,
+                        LinkedHashMap::new
+                ))
+                .entrySet().stream()
+                .sorted(Map.Entry.comparingByValue(String::compareToIgnoreCase))
+                .map(entry -> Map.of(
+                        "value", entry.getKey(),
+                        "label", entry.getValue()
+                ))
+                .toList();
+
+        List<String> industries = scopedDatabases.stream()
+                .map(database -> database.getCompany() != null ? safe(database.getCompany().getIndustry()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        List<String> positionLevels = scopedDatabases.stream()
+                .map(database -> database.getPositionLevel() != null ? safe(database.getPositionLevel().getValue()).trim() : "")
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String::compareToIgnoreCase)
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "cities", cities,
+                "groups", groups,
+                "companies", companies,
+                "industries", industries,
+                "positionLevels", positionLevels
+        ));
     }
 
     @PostMapping
@@ -278,5 +448,182 @@ public class DatabaseController {
             return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
+    }
+
+    private boolean matchesTab(Database database, String tab) {
+        String normalizedTab = tab == null ? "all" : tab.trim().toLowerCase(Locale.ROOT);
+        boolean incomplete = isIncomplete(database);
+        return switch (normalizedTab) {
+            case "clean" -> !incomplete;
+            case "dirty" -> incomplete;
+            default -> true;
+        };
+    }
+
+    private List<Database> getVisibleDatabases() {
+        Set<Long> confirmedFlaggedDatabaseIds = flaggedIdentityRepository.findAll().stream()
+                .filter(flag -> flag.getStatus() == FlagStatus.confirmed)
+                .map(flag -> flag.getDatabase() != null ? flag.getDatabase().getId() : null)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+
+        return databaseRepository.findAll().stream()
+                .filter(database -> database.getIsActive() == null || database.getIsActive())
+                .filter(database -> !confirmedFlaggedDatabaseIds.contains(database.getId()))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesSearch(Database database, String search) {
+        if (search == null || search.isBlank()) return true;
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        String fullName = (safe(database.getFirstName()) + " " + safe(database.getLastName())).toLowerCase(Locale.ROOT);
+        return fullName.contains(query)
+                || safe(database.getJobTitle()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getSpecialityDivision()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getMobilePhone()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getSource() != null ? database.getSource().name() : null).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getCompany() != null ? database.getCompany().getName() : null).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getCompany() != null ? database.getCompany().getBrandName() : null).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null).toLowerCase(Locale.ROOT).contains(query)
+                || safe(database.getCompany() != null ? database.getCompany().getCity() : null).toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private boolean matchesGroup(Database database, Long groupId) {
+        if (groupId == null) return true;
+        return database.getCompany() != null
+                && database.getCompany().getGroup() != null
+                && groupId.equals(database.getCompany().getGroup().getId());
+    }
+
+    private boolean matchesCompany(Database database, Long companyId) {
+        if (companyId == null) return true;
+        return database.getCompany() != null && companyId.equals(database.getCompany().getId());
+    }
+
+    private boolean matchesPositionLevel(Database database, String positionLevel) {
+        if (positionLevel == null || positionLevel.isBlank()) return true;
+        return safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null)
+                .equalsIgnoreCase(positionLevel.trim());
+    }
+
+    private boolean matchesIndustry(Database database, String industry) {
+        if (industry == null || industry.isBlank()) return true;
+        String databaseIndustry = normalizeIndustry(database.getCompany() != null ? database.getCompany().getIndustry() : null);
+        String targetIndustry = normalizeIndustry(industry);
+        return !databaseIndustry.isBlank()
+                && (databaseIndustry.equals(targetIndustry)
+                || databaseIndustry.contains(targetIndustry)
+                || targetIndustry.contains(databaseIndustry));
+    }
+
+    private boolean matchesCity(Database database, String city) {
+        if (city == null || city.isBlank()) return true;
+        return normalizeCity(database.getCompany() != null ? database.getCompany().getCity() : null)
+                .equalsIgnoreCase(normalizeCity(city));
+    }
+
+    private Comparator<Database> buildComparator(String sortBy, String sortOrder) {
+        String field = sortBy == null ? "id" : sortBy.trim();
+        Comparator<Database> comparator;
+        if ("id".equalsIgnoreCase(field)) {
+            comparator = Comparator.comparing(d -> d.getId() == null ? 0L : d.getId());
+        } else {
+            comparator = Comparator.comparing(d -> getSortString(d, field));
+        }
+
+        if ("desc".equalsIgnoreCase(sortOrder)) {
+            comparator = comparator.reversed();
+        }
+        return comparator;
+    }
+
+    private String getSortString(Database database, String field) {
+        return switch (field) {
+            case "firstName" -> safe(database.getFirstName()).toLowerCase(Locale.ROOT);
+            case "lastName" -> safe(database.getLastName()).toLowerCase(Locale.ROOT);
+            case "companyName" -> safe(database.getCompany() != null ? database.getCompany().getName() : null).toLowerCase(Locale.ROOT);
+            case "groupName" -> safe(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null).toLowerCase(Locale.ROOT);
+            case "brandName" -> safe(database.getCompany() != null ? database.getCompany().getBrandName() : null).toLowerCase(Locale.ROOT);
+            case "jobTitle" -> safe(database.getJobTitle()).toLowerCase(Locale.ROOT);
+            case "position" -> safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null).toLowerCase(Locale.ROOT);
+            case "industry" -> safe(database.getCompany() != null ? database.getCompany().getIndustry() : null).toLowerCase(Locale.ROOT);
+            case "city" -> safe(database.getCompany() != null ? database.getCompany().getCity() : null).toLowerCase(Locale.ROOT);
+            default -> String.valueOf(database.getId() == null ? 0L : database.getId());
+        };
+    }
+
+    private boolean isIncomplete(Database database) {
+        if (database == null) return true;
+        if (isBlank(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null)) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getBrandName() : null)) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getName() : null)) return true;
+        if (isBlank(database.getSalutation())) return true;
+        if (isBlank(database.getFirstName())) return true;
+        if (isBlank(database.getLastName())) return true;
+        if (isBlank(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null)) return true;
+        if (isBlank(database.getJobTitle())) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getAddress() : null)) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getOfficePhone() : null)) return true;
+        if (isBlank(database.getMobilePhone())) return true;
+        boolean hasCompanyEmail = database.getEmails() != null && database.getEmails().stream()
+                .anyMatch(email -> Boolean.TRUE.equals(email.getIsCorporate()) || "company".equalsIgnoreCase(safe(email.getEmailType())));
+        if (!hasCompanyEmail) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getIndustry() : null)) return true;
+        if (isBlank(database.getCompany() != null ? database.getCompany().getCity() : null)) return true;
+        return isBlank(database.getCompany() != null ? database.getCompany().getWebsite() : null);
+    }
+
+    private String normalizeIndustry(String value) {
+        return safe(value)
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replace("mm", "m")
+                .replaceAll("s$", "");
+    }
+
+    private String normalizeCity(String value) {
+        return safe(value)
+                .trim()
+                .toUpperCase(Locale.ROOT)
+                .replaceFirst("^(KABUPATEN|KOTA ADMINISTRASI|KOTA)\\s+", "")
+                .replaceAll("[^A-Z0-9]+", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String toTitleCase(String value) {
+        String normalized = safe(value).trim().replaceAll("\\s+", " ");
+        if (normalized.isEmpty()) {
+            return "";
+        }
+
+        String[] parts = normalized.toLowerCase(Locale.ROOT).split(" ");
+        StringBuilder builder = new StringBuilder();
+
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+
+            builder.append(Character.toUpperCase(part.charAt(0)));
+            if (part.length() > 1) {
+                builder.append(part.substring(1));
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

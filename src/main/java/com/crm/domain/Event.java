@@ -52,6 +52,15 @@ public class Event {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Transient
+    private Integer registeredCount;
+
+    @Transient
+    private Integer onLocationCount;
+
+    @Transient
+    private Boolean targetAchieved;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();

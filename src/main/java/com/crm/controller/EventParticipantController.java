@@ -8,10 +8,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/event-participants")
 public class EventParticipantController {
+    private static final Pattern PIC_PATTERN = Pattern.compile("\\[PIC:\\s*[^\\]]+\\]", Pattern.CASE_INSENSITIVE);
 
     @Autowired
     private EventParticipantRepository eventParticipantRepository;
@@ -201,6 +205,115 @@ public class EventParticipantController {
             }
             return ResponseEntity.ok(eventParticipantRepository.save(participant));
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PatchMapping("/bulk")
+    public ResponseEntity<?> bulkUpdateParticipants(
+            @RequestBody BulkUpdateRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can bulk update event participants");
+        }
+        if (request.getParticipantIds() == null || request.getParticipantIds().isEmpty()) {
+            return ResponseEntity.badRequest().body("participantIds is required");
+        }
+
+        List<EventParticipant> updatedParticipants = new ArrayList<>();
+        int skippedCount = 0;
+
+        for (Long participantId : request.getParticipantIds()) {
+            EventParticipant participant = eventParticipantRepository.findById(participantId).orElse(null);
+            if (participant == null) {
+                skippedCount++;
+                continue;
+            }
+            if (!canAccessEvent(currentUser, participant)) {
+                skippedCount++;
+                continue;
+            }
+
+            if (request.getParticipantStatus() != null) {
+                try {
+                    participant.setParticipantStatus(ParticipantStatus.valueOf(request.getParticipantStatus()));
+                } catch (IllegalArgumentException e) {
+                    return ResponseEntity.badRequest().body("Invalid participantStatus");
+                }
+            }
+            if (request.getAttendanceStatus() != null) {
+                try {
+                    participant.setAttendanceStatus(AttendanceStatus.valueOf(request.getAttendanceStatus()));
+                } catch (IllegalArgumentException e) {
+                    return ResponseEntity.badRequest().body("Invalid attendanceStatus");
+                }
+            }
+            if (request.getConfirmationStatus() != null) {
+                if (!isValidConfirmationStatus(request.getConfirmationStatus())) {
+                    return ResponseEntity.badRequest().body("Invalid confirmationStatus");
+                }
+                participant.setConfirmationStatus(request.getConfirmationStatus());
+            }
+            if (request.getPreEventApprovalStatus() != null) {
+                if (!isValidConfirmationStatus(request.getPreEventApprovalStatus())) {
+                    return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus");
+                }
+                participant.setPreEventApprovalStatus(request.getPreEventApprovalStatus());
+                participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), request.getPreEventApprovalStatus()));
+            }
+            if (request.getReminderH7() != null) {
+                participant.setReminderH7(request.getReminderH7().trim().isEmpty() ? null : request.getReminderH7());
+            }
+            if (request.getReminderH3() != null) {
+                participant.setReminderH3(request.getReminderH3().trim().isEmpty() ? null : request.getReminderH3());
+            }
+            if (request.getReminderH1() != null) {
+                participant.setReminderH1(request.getReminderH1().trim().isEmpty() ? null : request.getReminderH1());
+            }
+            if (request.getReminderHariH() != null) {
+                participant.setReminderHariH(request.getReminderHariH().trim().isEmpty() ? null : request.getReminderHariH());
+            }
+            if (request.getCallStatus() != null) {
+                participant.setCallStatus(request.getCallStatus());
+            }
+            if (request.getEmailStatus() != null) {
+                participant.setEmailStatus(request.getEmailStatus());
+            }
+            if (request.getWhatsappStatus() != null) {
+                participant.setWhatsappStatus(request.getWhatsappStatus());
+            }
+            if (request.getMeetingStatus() != null) {
+                participant.setMeetingStatus(request.getMeetingStatus());
+            }
+            if (request.getParticipantCategory() != null) {
+                participant.setParticipantCategory(request.getParticipantCategory());
+            }
+            if (request.getBusinessChallenges() != null) {
+                participant.setBusinessChallenges(request.getBusinessChallenges());
+            }
+            if (request.getProjectInfo() != null) {
+                participant.setProjectInfo(request.getProjectInfo());
+            }
+            if (request.getTimeline() != null) {
+                participant.setTimeline(request.getTimeline());
+            }
+            if (request.getNotes() != null) {
+                participant.setNotes(request.getNotes());
+            }
+            if (request.getPicName() != null) {
+                participant.setNotes(setPic(participant.getNotes(), request.getPicName()));
+            }
+
+            updatedParticipants.add(eventParticipantRepository.save(participant));
+        }
+
+        return ResponseEntity.ok(java.util.Map.of(
+                "updatedCount", updatedParticipants.size(),
+                "skippedCount", skippedCount,
+                "items", updatedParticipants
+        ));
     }
 
     @PostMapping("/{id}/activities")
@@ -408,6 +521,29 @@ public class EventParticipantController {
         private String notes;
     }
 
+    @lombok.Data
+    public static class BulkUpdateRequest {
+        private List<Long> participantIds;
+        private String participantStatus;
+        private String attendanceStatus;
+        private String confirmationStatus;
+        private String preEventApprovalStatus;
+        private String reminderH7;
+        private String reminderH3;
+        private String reminderH1;
+        private String reminderHariH;
+        private String callStatus;
+        private String emailStatus;
+        private String whatsappStatus;
+        private String meetingStatus;
+        private String participantCategory;
+        private String businessChallenges;
+        private String projectInfo;
+        private String timeline;
+        private String notes;
+        private String picName;
+    }
+
     private boolean isViewer(AppUser user) {
         return securityHelper.hasRole(user, Role.USER) && !securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER);
     }
@@ -457,5 +593,29 @@ public class EventParticipantController {
         return "pending".equalsIgnoreCase(confirmationStatus)
                 || "approve".equalsIgnoreCase(confirmationStatus)
                 || "decline".equalsIgnoreCase(confirmationStatus);
+    }
+
+    private String setPic(String notes, String picName) {
+        String safePic = picName == null ? "" : picName.trim();
+        String cleanNotes = notes == null ? "" : notes.trim();
+        if (safePic.isEmpty()) {
+            return cleanNotes;
+        }
+        if (cleanNotes.isEmpty()) {
+            return "[PIC: " + safePic + "]";
+        }
+        if (PIC_PATTERN.matcher(cleanNotes).find()) {
+            return cleanNotes.replaceAll("(?i)\\[PIC:\\s*[^\\]]+\\]", "[PIC: " + safePic + "]");
+        }
+        return "[PIC: " + safePic + "] " + cleanNotes;
+    }
+
+    private String setPreEventApprovalStatus(String notes, String status) {
+        String safeStatus = "approve".equalsIgnoreCase(status) || "decline".equalsIgnoreCase(status) ? status.trim().toLowerCase(Locale.ROOT) : "pending";
+        String cleanNotes = (notes == null ? "" : notes)
+                .replaceAll("(?i)\\[PreEventApproval:\\s*[^\\]]+\\]", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return ("[PreEventApproval: " + safeStatus + "] " + cleanNotes).replaceAll("\\s+", " ").trim();
     }
 }

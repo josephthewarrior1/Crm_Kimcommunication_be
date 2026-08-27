@@ -40,6 +40,24 @@ public class UserController {
         return ResponseEntity.ok(users);
     }
 
+    @GetMapping("/{id}")
+    public ResponseEntity<?> getUserById(
+            @PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN) && !currentUser.getId().equals(id)) {
+            return ResponseEntity.status(403).body("Forbidden: You can only view your own account");
+        }
+
+        return userRepository.findById(id).map(user -> {
+            user.setPassword(null);
+            return ResponseEntity.ok(user);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
     @PutMapping("/{id}/role")
     public ResponseEntity<?> updateUserRole(
             @PathVariable Long id,

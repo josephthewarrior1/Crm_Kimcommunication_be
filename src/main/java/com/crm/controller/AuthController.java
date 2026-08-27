@@ -159,6 +159,18 @@ public class AuthController {
                 .build());
     }
 
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Unauthorized");
+        }
+
+        currentUser.setPassword(null);
+        return ResponseEntity.ok(currentUser);
+    }
+
     @PostMapping("/logout")
     public ResponseEntity<?> logout(
             @RequestHeader(value = "Authorization", required = false) String authHeader,

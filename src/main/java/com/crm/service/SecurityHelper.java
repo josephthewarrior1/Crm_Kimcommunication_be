@@ -4,6 +4,7 @@ import com.crm.domain.AppUser;
 import com.crm.domain.Role;
 import com.crm.domain.SessionToken;
 import com.crm.repository.SessionTokenRepository;
+import com.crm.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
@@ -15,6 +16,9 @@ public class SecurityHelper {
     @Autowired
     private SessionTokenRepository sessionTokenRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
     public AppUser getAuthenticatedUser(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return null;
@@ -25,8 +29,11 @@ public class SecurityHelper {
             Optional<SessionToken> sessionOpt = sessionTokenRepository.findById(tokenId);
             if (sessionOpt.isPresent()) {
                 SessionToken session = sessionOpt.get();
-                if (session.getExpiresAt().isAfter(LocalDateTime.now())) {
-                    return session.getUser();
+                if (session.getExpiresAt().isAfter(LocalDateTime.now()) && session.getUser() != null) {
+                    Long userId = session.getUser().getId();
+                    if (userId != null) {
+                        return userRepository.findById(userId).orElse(null);
+                    }
                 }
             }
         } catch (NumberFormatException e) {

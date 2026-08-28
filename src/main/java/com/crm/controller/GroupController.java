@@ -9,7 +9,13 @@ import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/groups")
@@ -31,6 +37,64 @@ public class GroupController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
         return ResponseEntity.ok(groupRepository.findAll());
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> getGroupsList(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false, defaultValue = "id") String sortBy,
+            @RequestParam(required = false, defaultValue = "asc") String sortOrder,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "10") Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        Map<Long, Long> companyCounts = companyRepository.findAll().stream()
+                .filter(company -> company.getGroup() != null && company.getGroup().getId() != null)
+                .collect(Collectors.groupingBy(company -> company.getGroup().getId(), Collectors.counting()));
+
+        Comparator<Group> comparator = getGroupComparator(sortBy, companyCounts);
+        if ("desc".equalsIgnoreCase(sortOrder)) {
+            comparator = comparator.reversed();
+        }
+
+        List<Map<String, Object>> filtered = groupRepository.findAll().stream()
+                .filter(group -> search == null || search.isBlank() || safe(group.getName()).toLowerCase(Locale.ROOT).contains(search.trim().toLowerCase(Locale.ROOT)))
+                .sorted(comparator.thenComparing(Group::getId))
+                .map(group -> groupRow(group, companyCounts.getOrDefault(group.getId(), 0L)))
+                .toList();
+
+        int safePage = page == null || page < 1 ? 1 : page;
+        int safeSize = size == null || size < 1 ? 10 : Math.min(size, 100);
+        int from = Math.min((safePage - 1) * safeSize, filtered.size());
+        int to = Math.min(from + safeSize, filtered.size());
+
+        return ResponseEntity.ok(Map.of(
+                "items", filtered.subList(from, to),
+                "page", safePage,
+                "size", safeSize,
+                "total", filtered.size(),
+                "totalPages", Math.max(1, (int) Math.ceil(filtered.size() / (double) safeSize))
+        ));
+    }
+
+    @GetMapping("/summary")
+    public ResponseEntity<?> getGroupsSummary(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        long groupedCompanies = companyRepository.findAll().stream().filter(company -> company.getGroup() != null).count();
+        return ResponseEntity.ok(Map.of(
+                "totalGroups", groupRepository.count(),
+                "totalCompanies", companyRepository.count(),
+                "groupedCompanies", groupedCompanies,
+                "ungroupedCompanies", companyRepository.count() - groupedCompanies
+        ));
     }
 
     @PostMapping
@@ -124,5 +188,29 @@ public class GroupController {
             return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
+    }
+
+    private Comparator<Group> getGroupComparator(String sortBy, Map<Long, Long> companyCounts) {
+        return switch (safe(sortBy).toLowerCase(Locale.ROOT)) {
+            case "name" -> Comparator.comparing(group -> safe(group.getName()).toLowerCase(Locale.ROOT));
+            case "companies" -> Comparator.comparing(group -> companyCounts.getOrDefault(group.getId(), 0L));
+            case "created_at" -> Comparator.comparing(group -> group.getCreatedAt() != null ? group.getCreatedAt() : java.time.LocalDateTime.MIN);
+            default -> Comparator.comparing(Group::getId);
+        };
+    }
+
+    private Map<String, Object> groupRow(Group group, Long companyCount) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", group.getId());
+        row.put("name", group.getName());
+        row.put("notes", group.getNotes());
+        row.put("createdAt", group.getCreatedAt());
+        row.put("updatedAt", group.getUpdatedAt());
+        row.put("companyCount", companyCount);
+        return row;
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -506,6 +507,10 @@ public class EventParticipantController {
         long whatsappCount = scopedActivities.stream().filter(activity -> "WHATSAPP".equalsIgnoreCase(activity.getActivityType())).count();
         long emailCount = scopedActivities.stream().filter(activity -> "EMAIL".equalsIgnoreCase(activity.getActivityType())).count();
         long meetingCount = scopedActivities.stream().filter(activity -> "MEETING".equalsIgnoreCase(activity.getActivityType())).count();
+        List<EventParticipant> eventParticipants = eventParticipantRepository.findByEventId(eventId).stream()
+                .filter(participant -> matchesParticipantPic(participant, effectivePic))
+                .toList();
+        List<EventParticipant> scopedParticipants = filterParticipantsByActivityWindow(eventParticipants, scopedActivities, startDate, endDate);
 
         return ResponseEntity.ok(Map.of(
                 "eventId", eventId,
@@ -518,6 +523,14 @@ public class EventParticipantController {
                         "whatsapp", whatsappCount,
                         "email", emailCount,
                         "meeting", meetingCount
+                ),
+                "participantsSummary", Map.of(
+                        "totalParticipants", scopedParticipants.size(),
+                        "totalAssignedParticipants", eventParticipants.size(),
+                        "registered", countRegistered(scopedParticipants),
+                        "tentative", countTentative(scopedParticipants),
+                        "notRespond", countParticipantStatus(scopedParticipants, "not_respond_yet"),
+                        "notInterest", countParticipantStatus(scopedParticipants, "not_interest")
                 )
         ));
     }
@@ -712,6 +725,126 @@ public class EventParticipantController {
 
         String createdBy = safe(activity.getCreatedBy()).trim().toLowerCase(Locale.ROOT);
         return picAliases.contains(createdBy);
+    }
+
+    private boolean matchesParticipantPic(EventParticipant participant, String pic) {
+        if (pic == null || pic.isBlank()) {
+            return true;
+        }
+        Set<String> picAliases = resolveActivityPicAliases(pic);
+        if (picAliases.isEmpty()) {
+            return true;
+        }
+        String participantPic = safe(extractPicName(participant.getNotes())).trim().toLowerCase(Locale.ROOT);
+        return picAliases.contains(participantPic);
+    }
+
+    private List<EventParticipant> filterParticipantsByActivityWindow(
+            List<EventParticipant> participants,
+            List<EventParticipantActivity> scopedActivities,
+            String startDate,
+            String endDate) {
+        if ((startDate == null || startDate.isBlank()) && (endDate == null || endDate.isBlank())) {
+            return participants;
+        }
+
+        return participants.stream()
+                .filter(participant -> isParticipantWithinRange(participant, scopedActivities, startDate, endDate))
+                .toList();
+    }
+
+    private boolean isParticipantWithinRange(
+            EventParticipant participant,
+            List<EventParticipantActivity> scopedActivities,
+            String startDate,
+            String endDate) {
+        return isDateWithinRange(participant.getCreatedAt(), startDate, endDate)
+                || isDateWithinRange(participant.getUpdatedAt(), startDate, endDate)
+                || isDateWithinRange(participant.getRequestedAt(), startDate, endDate)
+                || isDateWithinRange(participant.getRespondedAt(), startDate, endDate)
+                || scopedActivities.stream().anyMatch(activity -> matchesParticipantActivity(participant, activity));
+    }
+
+    private boolean matchesParticipantActivity(EventParticipant participant, EventParticipantActivity activity) {
+        if (activity.getEventParticipant() != null && participant.getId() != null) {
+            return participant.getId().equals(activity.getEventParticipant().getId());
+        }
+
+        String participantName = String.join(" ",
+                safe(participant.getDatabase() != null ? participant.getDatabase().getFirstName() : null),
+                safe(participant.getDatabase() != null ? participant.getDatabase().getLastName() : null)
+        ).trim().toLowerCase(Locale.ROOT);
+        return !participantName.isBlank()
+                && participantName.equals(safe(activity.getParticipantName()).trim().toLowerCase(Locale.ROOT));
+    }
+
+    private boolean isDateWithinRange(LocalDateTime dateTime, String startDate, String endDate) {
+        if (dateTime == null) {
+            return false;
+        }
+
+        LocalDate date = dateTime.toLocalDate();
+        if (startDate != null && !startDate.isBlank()) {
+            try {
+                if (date.isBefore(LocalDate.parse(startDate.trim()))) {
+                    return false;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (endDate != null && !endDate.isBlank()) {
+            try {
+                if (date.isAfter(LocalDate.parse(endDate.trim()))) {
+                    return false;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return true;
+    }
+
+    private long countRegistered(List<EventParticipant> participants) {
+        return participants.stream().filter(this::isRegisteredParticipantForSummary).count();
+    }
+
+    private long countTentative(List<EventParticipant> participants) {
+        return participants.stream()
+                .filter(participant -> {
+                    String status = participant.getParticipantStatus() != null
+                            ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
+                            : "";
+                    return "tentative".equals(status) || "yellow".equals(status);
+                })
+                .count();
+    }
+
+    private long countParticipantStatus(List<EventParticipant> participants, String targetStatus) {
+        return participants.stream()
+                .filter(participant -> {
+                    String status = participant.getParticipantStatus() != null
+                            ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
+                            : "";
+                    if ("not_respond_yet".equals(targetStatus)) {
+                        return status.isBlank() || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
+                    }
+                    return "not_interest".equals(targetStatus) && ("not_interest".equals(status) || "red".equals(status));
+                })
+                .count();
+    }
+
+    private boolean isRegisteredParticipantForSummary(EventParticipant participant) {
+        String participantStatus = participant.getParticipantStatus() != null
+                ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
+                : "";
+        String attendanceStatus = participant.getAttendanceStatus() != null
+                ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT)
+                : "";
+        return Objects.equals(participantStatus, "registered")
+                || Objects.equals(participantStatus, "green")
+                || Objects.equals(participantStatus, "confirm")
+                || Objects.equals(participantStatus, "confirmed")
+                || Objects.equals(attendanceStatus, "registered")
+                || Objects.equals(attendanceStatus, "attended");
     }
 
     private Set<String> resolveActivityPicAliases(String pic) {

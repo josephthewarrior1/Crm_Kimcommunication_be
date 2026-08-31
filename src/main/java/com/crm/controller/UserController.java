@@ -8,7 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+import java.util.Comparator;
+import java.util.Locale;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 
@@ -38,6 +41,48 @@ public class UserController {
         // Hide password hashes
         users.forEach(u -> u.setPassword(null));
         return ResponseEntity.ok(users);
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> getUsersList(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String role,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "10") Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN users can manage accounts");
+        }
+
+        int safePage = page == null || page < 1 ? 1 : page;
+        int safeSize = size == null || size < 1 ? 10 : Math.min(size, 100);
+
+        List<AppUser> filteredUsers = userRepository.findAll().stream()
+                .filter(user -> matchesUserSearch(user, search))
+                .filter(user -> matchesUserRole(user, role))
+                .sorted(Comparator.comparing(AppUser::getId))
+                .toList();
+
+        List<AppUser> items = filteredUsers.stream()
+                .skip((long) (safePage - 1) * safeSize)
+                .limit(safeSize)
+                .map(user -> {
+                    user.setPassword(null);
+                    return user;
+                })
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "items", items,
+                "page", safePage,
+                "size", safeSize,
+                "total", filteredUsers.size(),
+                "totalPages", filteredUsers.isEmpty() ? 1 : (int) Math.ceil((double) filteredUsers.size() / safeSize)
+        ));
     }
 
     @GetMapping("/{id}")
@@ -175,11 +220,32 @@ public class UserController {
         }
 
         return userRepository.findById(id).map(user -> {
+            if (request.getUsername() != null) {
+                String cleanUsername = request.getUsername().trim();
+                if (cleanUsername.isEmpty()) {
+                    return ResponseEntity.badRequest().body("Username cannot be empty");
+                }
+                if (userRepository.findByUsernameIgnoreCase(cleanUsername)
+                        .filter(existing -> !existing.getId().equals(id))
+                        .isPresent()) {
+                    return ResponseEntity.badRequest().body("Username already exists");
+                }
+                user.setUsername(cleanUsername);
+            }
             if (request.getFullName() != null) {
                 user.setFullName(request.getFullName().trim());
             }
-            if (request.getEmail() != null && !request.getEmail().trim().isEmpty()) {
-                user.setEmail(request.getEmail().trim());
+            if (request.getEmail() != null) {
+                String cleanEmail = request.getEmail().trim();
+                if (cleanEmail.isEmpty()) {
+                    return ResponseEntity.badRequest().body("Email cannot be empty");
+                }
+                if (userRepository.findByEmailIgnoreCase(cleanEmail)
+                        .filter(existing -> !existing.getId().equals(id))
+                        .isPresent()) {
+                    return ResponseEntity.badRequest().body("Email already exists");
+                }
+                user.setEmail(cleanEmail);
             }
             AppUser saved = userRepository.save(user);
             saved.setPassword(null);
@@ -189,6 +255,7 @@ public class UserController {
 
     @lombok.Data
     public static class UpdateProfileRequest {
+        private String username;
         private String fullName;
         private String email;
     }
@@ -196,5 +263,27 @@ public class UserController {
     @lombok.Data
     public static class UpdatePasswordRequest {
         private String password;
+    }
+
+    private boolean matchesUserSearch(AppUser user, String search) {
+        if (search == null || search.isBlank()) {
+            return true;
+        }
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        return safe(user.getUsername()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(user.getFullName()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(user.getEmail()).toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private boolean matchesUserRole(AppUser user, String role) {
+        if (role == null || role.isBlank() || "ALL".equalsIgnoreCase(role)) {
+            return true;
+        }
+        return user.getRoles() != null && user.getRoles().stream()
+                .anyMatch(existingRole -> existingRole.name().equalsIgnoreCase(role.trim()));
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

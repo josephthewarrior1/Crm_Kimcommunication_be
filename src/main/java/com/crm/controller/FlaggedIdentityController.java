@@ -1,6 +1,7 @@
 package com.crm.controller;
 
 import com.crm.domain.Database;
+import com.crm.domain.FlagReason;
 import com.crm.domain.FlaggedIdentity;
 import com.crm.domain.FlagStatus;
 import com.crm.domain.Role;
@@ -11,7 +12,11 @@ import com.crm.service.SecurityHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.Comparator;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/flagged-identities")
@@ -76,6 +81,57 @@ public class FlaggedIdentityController {
         }
 
         return ResponseEntity.ok(allFlags);
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> getFlaggedIdentitiesList(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String flagReason,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "10") Integer size,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        int safePage = page == null || page < 1 ? 1 : page;
+        int safeSize = size == null || size < 1 ? 10 : Math.min(size, 100);
+
+        List<FlaggedIdentity> filteredFlags = getNormalizedFlags().stream()
+                .filter(flag -> matchesSearch(flag, search))
+                .filter(flag -> matchesStatus(flag, status))
+                .filter(flag -> matchesFlagReason(flag, flagReason))
+                .sorted(Comparator.comparing(FlaggedIdentity::getId, Comparator.reverseOrder()))
+                .toList();
+
+        List<FlaggedIdentity> items = filteredFlags.stream()
+                .skip((long) (safePage - 1) * safeSize)
+                .limit(safeSize)
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "items", items,
+                "page", safePage,
+                "size", safeSize,
+                "total", filteredFlags.size(),
+                "totalPages", filteredFlags.isEmpty() ? 1 : (int) Math.ceil((double) filteredFlags.size() / safeSize)
+        ));
+    }
+
+    @GetMapping("/filter-options")
+    public ResponseEntity<?> getFlaggedIdentityFilterOptions(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "statuses", Arrays.stream(FlagStatus.values()).map(Enum::name).toList(),
+                "flagReasons", Arrays.stream(FlagReason.values()).map(Enum::name).toList()
+        ));
     }
 
     @PostMapping
@@ -239,5 +295,73 @@ public class FlaggedIdentityController {
             }
             databaseRepository.save(d);
         });
+    }
+
+    private List<FlaggedIdentity> getNormalizedFlags() {
+        List<FlaggedIdentity> allFlags = flaggedIdentityRepository.findAll();
+        List<Database> allDbs = databaseRepository.findAll();
+        boolean updatedAny = false;
+
+        for (FlaggedIdentity flag : allFlags) {
+            if (flag.getDatabase() == null && flag.getStatus() != FlagStatus.cleared) {
+                String flagPhoneDigits = suspiciousIdentityService.extractSubscriberDigits(flag.getPhoneUsed());
+                String flagEmail = safe(flag.getEmailUsed()).trim().toLowerCase(Locale.ROOT);
+
+                for (Database db : allDbs) {
+                    boolean phoneMatch = false;
+                    if (!flagPhoneDigits.isEmpty() && db.getMobilePhone() != null) {
+                        String dbDigits = suspiciousIdentityService.extractSubscriberDigits(db.getMobilePhone());
+                        if (!dbDigits.isEmpty() && dbDigits.equals(flagPhoneDigits)) {
+                            phoneMatch = true;
+                        }
+                    }
+
+                    boolean emailMatch = false;
+                    if (!flagEmail.isEmpty() && db.getEmails() != null) {
+                        emailMatch = db.getEmails().stream().anyMatch(e -> e.getEmail() != null && e.getEmail().trim().equalsIgnoreCase(flagEmail));
+                    }
+
+                    if (phoneMatch || emailMatch) {
+                        flag.setDatabase(db);
+                        flaggedIdentityRepository.save(flag);
+                        updateDatabaseActiveStatus(db, flag.getStatus());
+                        updatedAny = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return updatedAny ? flaggedIdentityRepository.findAll() : allFlags;
+    }
+
+    private boolean matchesSearch(FlaggedIdentity flag, String search) {
+        if (search == null || search.isBlank()) {
+            return true;
+        }
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        return safe(flag.getNameUsed()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(flag.getEmailUsed()).toLowerCase(Locale.ROOT).contains(query)
+                || safe(flag.getPhoneUsed()).contains(query)
+                || (flag.getFlagReason() != null && flag.getFlagReason().name().toLowerCase(Locale.ROOT).contains(query))
+                || safe(flag.getEvidenceNotes()).toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private boolean matchesStatus(FlaggedIdentity flag, String status) {
+        if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status)) {
+            return true;
+        }
+        return flag.getStatus() != null && flag.getStatus().name().equalsIgnoreCase(status.trim());
+    }
+
+    private boolean matchesFlagReason(FlaggedIdentity flag, String flagReason) {
+        if (flagReason == null || flagReason.isBlank() || "ALL".equalsIgnoreCase(flagReason)) {
+            return true;
+        }
+        return flag.getFlagReason() != null && flag.getFlagReason().name().equalsIgnoreCase(flagReason.trim());
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

@@ -147,17 +147,14 @@ public class DatabaseController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<Database> scopedDatabases = getVisibleDatabases().stream()
-                .filter(database -> matchesTab(database, tab))
-                .filter(database -> matchesSearch(database, search))
-                .filter(database -> matchesGroup(database, groupId))
-                .filter(database -> matchesCompany(database, companyId))
-                .filter(database -> matchesPositionLevel(database, positionLevel))
-                .filter(database -> matchesIndustry(database, industry))
-                .filter(database -> matchesCity(database, city))
-                .collect(Collectors.toList());
+        List<Database> scopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, city, tab);
+        List<Database> groupScopedDatabases = filterVisibleDatabases(search, null, companyId, positionLevel, industry, city, tab);
+        List<Database> companyScopedDatabases = filterVisibleDatabases(search, groupId, null, positionLevel, industry, city, tab);
+        List<Database> cityScopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, null, tab);
+        List<Database> industryScopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, null, city, tab);
+        List<Database> positionScopedDatabases = filterVisibleDatabases(search, groupId, companyId, null, industry, city, tab);
 
-        List<Map<String, Object>> groups = scopedDatabases.stream()
+        List<Map<String, Object>> groups = groupScopedDatabases.stream()
                 .filter(database -> database.getCompany() != null && database.getCompany().getGroup() != null)
                 .collect(Collectors.toMap(
                         database -> database.getCompany().getGroup().getId(),
@@ -173,7 +170,7 @@ public class DatabaseController {
                 ))
                 .toList();
 
-        List<Map<String, Object>> companies = scopedDatabases.stream()
+        List<Map<String, Object>> companies = companyScopedDatabases.stream()
                 .filter(database -> database.getCompany() != null)
                 .collect(Collectors.toMap(
                         database -> database.getCompany().getId(),
@@ -189,7 +186,7 @@ public class DatabaseController {
                 ))
                 .toList();
 
-        List<Map<String, String>> cities = scopedDatabases.stream()
+        List<Map<String, String>> cities = cityScopedDatabases.stream()
                 .map(database -> database.getCompany() != null ? database.getCompany().getCity() : null)
                 .filter(value -> !isBlank(value))
                 .collect(Collectors.toMap(
@@ -206,14 +203,14 @@ public class DatabaseController {
                 ))
                 .toList();
 
-        List<String> industries = scopedDatabases.stream()
+        List<String> industries = industryScopedDatabases.stream()
                 .map(database -> database.getCompany() != null ? safe(database.getCompany().getIndustry()).trim() : "")
                 .filter(value -> !value.isBlank())
                 .distinct()
                 .sorted(String::compareToIgnoreCase)
                 .toList();
 
-        List<String> positionLevels = scopedDatabases.stream()
+        List<String> positionLevels = positionScopedDatabases.stream()
                 .map(database -> database.getPositionLevel() != null ? safe(database.getPositionLevel().getValue()).trim() : "")
                 .filter(value -> !value.isBlank())
                 .distinct()
@@ -227,6 +224,25 @@ public class DatabaseController {
                 "industries", industries,
                 "positionLevels", positionLevels
         ));
+    }
+
+    private List<Database> filterVisibleDatabases(
+            String search,
+            Long groupId,
+            Long companyId,
+            String positionLevel,
+            String industry,
+            String city,
+            String tab) {
+        return getVisibleDatabases().stream()
+                .filter(database -> matchesTab(database, tab))
+                .filter(database -> matchesSearch(database, search))
+                .filter(database -> matchesGroup(database, groupId))
+                .filter(database -> matchesCompany(database, companyId))
+                .filter(database -> matchesPositionLevel(database, positionLevel))
+                .filter(database -> matchesIndustry(database, industry))
+                .filter(database -> matchesCity(database, city))
+                .collect(Collectors.toList());
     }
 
     @PostMapping

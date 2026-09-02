@@ -167,6 +167,9 @@ public class EventParticipantController {
                     return ResponseEntity.status(403).body("Forbidden: Viewer can only update confirmation status");
                 }
             }
+            if (!canUpdateParticipant(currentUser, participant)) {
+                return ResponseEntity.status(403).body("Forbidden: You cannot update another PIC's participant");
+            }
             if (participantStatus != null) {
                 try {
                     participant.setParticipantStatus(ParticipantStatus.valueOf(participantStatus));
@@ -277,6 +280,10 @@ public class EventParticipantController {
                 continue;
             }
             if (!canAccessEvent(currentUser, participant)) {
+                skippedCount++;
+                continue;
+            }
+            if (!canUpdateParticipant(currentUser, participant)) {
                 skippedCount++;
                 continue;
             }
@@ -698,7 +705,23 @@ public class EventParticipantController {
     }
 
     private boolean canAccessEvent(AppUser user, EventParticipant participant) {
-        return !isViewer(user) || (participant.getEvent() != null && user.getAllowedEventIds().contains(participant.getEvent().getId()));
+        return participant.getEvent() != null && canAccessEvent(user, participant.getEvent().getId());
+    }
+
+    private boolean canUpdateParticipant(AppUser user, EventParticipant participant) {
+        if (securityHelper.hasRole(user, Role.ADMIN)) {
+            return true;
+        }
+        if (!canAccessEvent(user, participant)) {
+            return false;
+        }
+        String picName = safe(extractPicName(participant.getNotes())).trim().toLowerCase(Locale.ROOT);
+        if (picName.isBlank() || "admin".equals(picName)) {
+            return true;
+        }
+        String fullName = safe(user.getFullName()).trim().toLowerCase(Locale.ROOT);
+        String username = safe(user.getUsername()).trim().toLowerCase(Locale.ROOT);
+        return picName.equals(fullName) || picName.equals(username);
     }
 
     private String resolveEffectiveActivityPic(AppUser currentUser, String requestedPic) {

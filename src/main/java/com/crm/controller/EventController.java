@@ -242,7 +242,7 @@ public class EventController {
         }
 
         List<EligibleManagerResponse> managers = userRepository.findAll().stream()
-                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER))
                 .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
                 .map(user -> EligibleManagerResponse.builder()
                         .id(user.getId())
@@ -353,7 +353,7 @@ public class EventController {
         );
 
         List<EligibleManagerResponse> eligibleManagers = userRepository.findAll().stream()
-                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER))
                 .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
                 .map(user -> EligibleManagerResponse.builder()
                         .id(user.getId())
@@ -899,7 +899,7 @@ public class EventController {
         );
 
         List<EligibleManagerResponse> eligibleManagers = userRepository.findAll().stream()
-                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER))
                 .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
                 .map(user -> EligibleManagerResponse.builder()
                         .id(user.getId())
@@ -921,7 +921,7 @@ public class EventController {
                     return Map.<String, Object>of(
                             "userId", manager.getId(),
                             "name", name,
-                            "roleLabel", "MANAGER",
+                            "roleLabel", manager.getRoles() != null && manager.getRoles().contains(Role.ADMIN) ? "ADMIN" : "MANAGER",
                             "totalAssigned", picParticipants.size(),
                             "approveCount", picParticipants.stream().filter(participant -> "approve".equals(getPreEventApprovalStatus(participant))).count(),
                             "pendingCount", picParticipants.stream().filter(participant -> "pending".equals(getPreEventApprovalStatus(participant))).count(),
@@ -1096,7 +1096,7 @@ public class EventController {
                 .toList();
 
         List<String> pics = userRepository.findAll().stream()
-                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER))
                 .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
                 .map(user -> normalizePicName(user.getFullName(), user.getUsername()))
                 .filter(value -> !value.isBlank())
@@ -1268,7 +1268,7 @@ public class EventController {
         }
 
         List<AppUser> eligibleManagers = userRepository.findAll().stream()
-                .filter(user -> securityHelper.hasRole(user, Role.MANAGER))
+                .filter(user -> securityHelper.hasAnyRole(user, Role.ADMIN, Role.MANAGER))
                 .filter(user -> user.getAllowedEventIds() != null && user.getAllowedEventIds().contains(id))
                 .filter(user -> request.getManagerIds() == null || request.getManagerIds().isEmpty() || request.getManagerIds().contains(user.getId()))
                 .sorted(Comparator.comparing(user -> normalizePicName(user.getFullName(), user.getUsername())))
@@ -1463,6 +1463,8 @@ public class EventController {
             String confirmationStatus,
             String reminderHariH,
             String search) {
+        String scopedPic = resolveMinePic(currentUser, tab);
+        String effectivePic = scopedPic != null ? scopedPic : pic;
         return participants.stream()
                 .filter(participant -> !isViewer(currentUser) || canAccessEvent(currentUser, participant.getEvent().getId()))
                 .filter(participant -> matchesTab(participant, tab))
@@ -1471,7 +1473,7 @@ public class EventController {
                 .filter(participant -> matchesIndustry(participant, industry))
                 .filter(participant -> matchesConfirmationStatus(participant, tab, confirmationStatus))
                 .filter(participant -> matchesReminderHariH(participant, tab, reminderHariH))
-                .filter(participant -> matchesPic(participant, pic))
+                .filter(participant -> matchesPic(participant, effectivePic))
                 .filter(participant -> matchesSearch(participant, search))
                 .sorted(Comparator.comparing(EventParticipant::getId))
                 .collect(Collectors.toList());

@@ -132,6 +132,33 @@ public class DatabaseController {
         }});
     }
 
+    @GetMapping("/export")
+    public ResponseEntity<?> exportDatabases(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long groupId,
+            @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) String positionLevel,
+            @RequestParam(required = false) String industry,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false, defaultValue = "all") String tab,
+            @RequestParam(required = false, defaultValue = "id") String sortBy,
+            @RequestParam(required = false, defaultValue = "asc") String sortOrder,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+
+        List<Database> items = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, city, tab).stream()
+                .sorted(buildComparator(sortBy, sortOrder))
+                .toList();
+
+        return ResponseEntity.ok(Map.of(
+                "total", items.size(),
+                "items", items
+        ));
+    }
+
     @GetMapping("/filter-options")
     public ResponseEntity<?> getDatabaseFilterOptions(
             @RequestParam(required = false) String search,

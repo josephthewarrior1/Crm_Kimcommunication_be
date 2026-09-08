@@ -8,6 +8,7 @@ import java.util.List;
 @Repository
 public interface DatabaseRepository extends JpaRepository<Database, Long> {
     List<Database> findByFirstNameIgnoreCaseAndLastNameIgnoreCase(String firstName, String lastName);
+    List<Database> findByFirstNameIgnoreCase(String firstName);
     List<Database> findByMobilePhone(String mobilePhone);
     List<Database> findByNormalizedPhone(String normalizedPhone);
 }

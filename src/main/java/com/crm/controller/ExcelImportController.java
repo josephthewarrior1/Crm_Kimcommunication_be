@@ -234,102 +234,116 @@ public class ExcelImportController {
                     targetDb = databaseRepository.save(targetDb);
                 }
 
-                // 4. Save / Sync Emails Safely (Properly update primary/corporate emails)
+                // 4. Save / Sync Emails Safely
                 if (targetDb.getEmails() == null) {
                     targetDb.setEmails(new ArrayList<>());
                 }
 
-                if (!companyEmail.isEmpty()) {
-                    final String cEmailLower = companyEmail.toLowerCase();
-                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(cEmailLower);
+                List<String> cTokens = splitEmailTokens(companyEmail);
+                List<String> pTokens = splitEmailTokens(personalEmail);
 
-                    if (existingGlobalEmail.isPresent()) {
-                        DatabaseEmail dEmail = existingGlobalEmail.get();
-                        if (dEmail.getDatabase() != null && dEmail.getDatabase().getId().equals(targetDb.getId())) {
-                            // Demote any other company emails on this database
-                            for (DatabaseEmail otherE : targetDb.getEmails()) {
-                                if (otherE.getId() != null && !otherE.getId().equals(dEmail.getId()) && (otherE.getIsCorporate() || "company".equalsIgnoreCase(otherE.getEmailType()))) {
-                                    otherE.setIsPrimary(false);
-                                    otherE.setIsCorporate(false);
-                                    databaseEmailRepository.save(otherE);
-                                }
-                            }
-                            dEmail.setIsCorporate(true);
-                            dEmail.setIsPrimary(true);
-                            dEmail.setEmailType("company");
-                            databaseEmailRepository.save(dEmail);
-                        }
-                    } else {
-                        // Check if contact already has an existing corporate email to update
-                        DatabaseEmail existingCompEmail = targetDb.getEmails().stream()
-                                .filter(e -> "company".equalsIgnoreCase(e.getEmailType()) || Boolean.TRUE.equals(e.getIsCorporate()))
-                                .findFirst()
-                                .orElse(null);
+                List<String> corporateEmails = new ArrayList<>();
+                List<String> personalEmails = new ArrayList<>();
 
-                        if (existingCompEmail != null) {
-                            existingCompEmail.setEmail(companyEmail);
-                            existingCompEmail.setIsCorporate(true);
-                            existingCompEmail.setIsPrimary(true);
-                            existingCompEmail.setEmailType("company");
-                            existingCompEmail.setDomain(companyEmail.contains("@") ? companyEmail.substring(companyEmail.indexOf("@") + 1) : null);
-                            databaseEmailRepository.save(existingCompEmail);
-                        } else {
-                            DatabaseEmail emailObj = DatabaseEmail.builder()
-                                    .email(companyEmail)
-                                    .emailType("company")
-                                    .isCorporate(true)
-                                    .isPrimary(true)
-                                    .database(targetDb)
-                                    .build();
-                            databaseEmailRepository.save(emailObj);
-                            targetDb.getEmails().add(emailObj);
+                // 1. Ekstrak kolom Personal Email: hanya email domain pribadi (Gmail, Outlook, Yahoo, dll). Email kantor ditolak!
+                for (String token : pTokens) {
+                    if (isPublicPersonalEmail(token)) {
+                        if (!personalEmails.contains(token)) {
+                            personalEmails.add(token);
                         }
                     }
                 }
 
-                if (!personalEmail.isEmpty()) {
-                    final String pEmailLower = personalEmail.toLowerCase();
-                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(pEmailLower);
+                // 2. Ekstrak kolom Company Email:
+                List<String> corpFromComp = new ArrayList<>();
+                List<String> pubFromComp = new ArrayList<>();
 
+                for (String token : cTokens) {
+                    if (isPublicPersonalEmail(token)) {
+                        pubFromComp.add(token);
+                    } else {
+                        corpFromComp.add(token);
+                    }
+                }
+
+                if (!corpFromComp.isEmpty()) {
+                    // Ada email berdomain kantor:
+                    for (String ct : corpFromComp) {
+                        if (!corporateEmails.contains(ct)) {
+                            corporateEmails.add(ct);
+                        }
+                    }
+                    // Jika di kolom company juga tercampur email pribadi (misal Johanes/Eko Kusbiyanto):
+                    // alokasikan email pribadi tersebut ke personalEmails
+                    for (String pt : pubFromComp) {
+                        if (!personalEmails.contains(pt)) {
+                            personalEmails.add(pt);
+                        }
+                    }
+                } else {
+                    // Tidak ada email berdomain kantor sama sekali (misal perusahaan memakai Gmail seperti Edwin Sutedja):
+                    if (!pubFromComp.isEmpty()) {
+                        corporateEmails.add(pubFromComp.get(0));
+                        for (int i = 1; i < pubFromComp.size(); i++) {
+                            if (!personalEmails.contains(pubFromComp.get(i))) {
+                                personalEmails.add(pubFromComp.get(i));
+                            }
+                        }
+                    }
+                }
+
+                personalEmails.removeAll(corporateEmails);
+
+                // Save Corporate Emails
+                boolean firstCorp = true;
+                for (String cEmail : corporateEmails) {
+                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(cEmail);
                     if (existingGlobalEmail.isPresent()) {
                         DatabaseEmail dEmail = existingGlobalEmail.get();
                         if (dEmail.getDatabase() != null && dEmail.getDatabase().getId().equals(targetDb.getId())) {
-                            for (DatabaseEmail otherE : targetDb.getEmails()) {
-                                if (otherE.getId() != null && !otherE.getId().equals(dEmail.getId()) && (!otherE.getIsCorporate() && "personal".equalsIgnoreCase(otherE.getEmailType()))) {
-                                    otherE.setIsPrimary(false);
-                                    databaseEmailRepository.save(otherE);
-                                }
-                            }
+                            dEmail.setIsCorporate(true);
+                            dEmail.setIsPrimary(firstCorp);
+                            dEmail.setEmailType("company");
+                            databaseEmailRepository.save(dEmail);
+                        }
+                    } else {
+                        DatabaseEmail emailObj = DatabaseEmail.builder()
+                                .email(cEmail)
+                                .emailType("company")
+                                .isCorporate(true)
+                                .isPrimary(firstCorp)
+                                .database(targetDb)
+                                .build();
+                        databaseEmailRepository.save(emailObj);
+                        targetDb.getEmails().add(emailObj);
+                    }
+                    firstCorp = false;
+                }
+
+                // Save Personal Emails
+                boolean firstPers = true;
+                for (String pEmail : personalEmails) {
+                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(pEmail);
+                    if (existingGlobalEmail.isPresent()) {
+                        DatabaseEmail dEmail = existingGlobalEmail.get();
+                        if (dEmail.getDatabase() != null && dEmail.getDatabase().getId().equals(targetDb.getId())) {
                             dEmail.setIsCorporate(false);
-                            dEmail.setIsPrimary(true);
+                            dEmail.setIsPrimary(firstPers);
                             dEmail.setEmailType("personal");
                             databaseEmailRepository.save(dEmail);
                         }
                     } else {
-                        DatabaseEmail existingPersEmail = targetDb.getEmails().stream()
-                                .filter(e -> "personal".equalsIgnoreCase(e.getEmailType()) && !Boolean.TRUE.equals(e.getIsCorporate()))
-                                .findFirst()
-                                .orElse(null);
-
-                        if (existingPersEmail != null) {
-                            existingPersEmail.setEmail(personalEmail);
-                            existingPersEmail.setIsCorporate(false);
-                            existingPersEmail.setIsPrimary(true);
-                            existingPersEmail.setEmailType("personal");
-                            existingPersEmail.setDomain(personalEmail.contains("@") ? personalEmail.substring(personalEmail.indexOf("@") + 1) : null);
-                            databaseEmailRepository.save(existingPersEmail);
-                        } else {
-                            DatabaseEmail emailObj = DatabaseEmail.builder()
-                                    .email(personalEmail)
-                                    .emailType("personal")
-                                    .isCorporate(false)
-                                    .isPrimary(true)
-                                    .database(targetDb)
-                                    .build();
-                            databaseEmailRepository.save(emailObj);
-                            targetDb.getEmails().add(emailObj);
-                        }
+                        DatabaseEmail emailObj = DatabaseEmail.builder()
+                                .email(pEmail)
+                                .emailType("personal")
+                                .isCorporate(false)
+                                .isPrimary(firstPers)
+                                .database(targetDb)
+                                .build();
+                        databaseEmailRepository.save(emailObj);
+                        targetDb.getEmails().add(emailObj);
                     }
+                    firstPers = false;
                 }
 
                 suspiciousIdentityService.checkAndFlagDatabase(targetDb);
@@ -429,15 +443,24 @@ public class ExcelImportController {
 
                 boolean emailShared = false;
                 String sharedEmailDatabaseName = "";
-                if (!companyEmail.isEmpty() || !personalEmail.isEmpty()) {
-                    String emailToCheck = companyEmail.isEmpty() ? personalEmail : companyEmail;
-                    DatabaseEmail otherEmailRecord = databaseEmailRepository.findByEmail(emailToCheck.toLowerCase()).orElse(null);
+                List<String> allTokens = new ArrayList<>(splitEmailTokens(companyEmail));
+                allTokens.addAll(splitEmailTokens(personalEmail));
+                for (String token : allTokens) {
+                    DatabaseEmail otherEmailRecord = databaseEmailRepository.findByEmail(token).orElse(null);
                     if (otherEmailRecord != null && otherEmailRecord.getDatabase() != null) {
                         Database other = otherEmailRecord.getDatabase();
                         if (existingDatabase == null || !existingDatabase.getId().equals(other.getId())) {
                             emailShared = true;
                             sharedEmailDatabaseName = other.getFirstName() + " " + other.getLastName();
+                            break;
                         }
+                    }
+                }
+
+                List<String> corpEmailsInPersonal = new ArrayList<>();
+                for (String token : splitEmailTokens(personalEmail)) {
+                    if (!isPublicPersonalEmail(token)) {
+                        corpEmailsInPersonal.add(token);
                     }
                 }
 
@@ -458,7 +481,8 @@ public class ExcelImportController {
                         phoneShared,
                         sharedDatabaseName,
                         emailShared,
-                        sharedEmailDatabaseName
+                        sharedEmailDatabaseName,
+                        corpEmailsInPersonal
                 ));
             }
 
@@ -508,6 +532,10 @@ public class ExcelImportController {
                     }
                 }
 
+                if (state.corpEmailsInPersonal() != null && !state.corpEmailsInPersonal().isEmpty()) {
+                    messageParts.add("⚠️ Email kantor di kolom Personal Email ditolak: (" + String.join(", ", state.corpEmailsInPersonal()) + "). Kolom Personal Email hanya menerima email pribadi (Gmail, Yahoo, Outlook, dll).");
+                }
+
                 preview.setStatus(status);
                 preview.setMessage(String.join(" | ", messageParts));
                 previews.add(preview);
@@ -538,23 +566,17 @@ public class ExcelImportController {
             String companyEmail,
             String personalEmail) {
 
-        // 1. Match by Company Email
-        if (companyEmail != null && !companyEmail.isBlank()) {
-            Optional<DatabaseEmail> de = databaseEmailRepository.findByEmail(companyEmail.trim().toLowerCase());
+        // 1. Match by Email tokens
+        List<String> tokens = new ArrayList<>(splitEmailTokens(companyEmail));
+        tokens.addAll(splitEmailTokens(personalEmail));
+        for (String email : tokens) {
+            Optional<DatabaseEmail> de = databaseEmailRepository.findByEmail(email);
             if (de.isPresent() && de.get().getDatabase() != null) {
                 return de.get().getDatabase();
             }
         }
 
-        // 2. Match by Personal Email
-        if (personalEmail != null && !personalEmail.isBlank()) {
-            Optional<DatabaseEmail> de = databaseEmailRepository.findByEmail(personalEmail.trim().toLowerCase());
-            if (de.isPresent() && de.get().getDatabase() != null) {
-                return de.get().getDatabase();
-            }
-        }
-
-        // 3. Match by Phone Number
+        // 2. Match by Phone Number
         String normPhone = formatNormalizedPhone(mobilePhone);
         if (normPhone != null) {
             Database byNorm = databaseRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null);
@@ -565,7 +587,7 @@ public class ExcelImportController {
             if (byPhone != null) return byPhone;
         }
 
-        // 4. Match by Name
+        // 3. Match by Name
         if (firstName != null && !firstName.isBlank()) {
             List<Database> nameMatches;
             if (lastName != null && !lastName.isBlank()) {
@@ -595,6 +617,33 @@ public class ExcelImportController {
         }
 
         return null;
+    }
+
+    private List<String> splitEmailTokens(String raw) {
+        if (raw == null || raw.isBlank()) return Collections.emptyList();
+        String[] parts = raw.split("[,;/\\s]+");
+        List<String> list = new ArrayList<>();
+        for (String p : parts) {
+            String trimmed = p.trim().toLowerCase(Locale.ROOT);
+            if (!trimmed.isEmpty() && trimmed.contains("@")) {
+                list.add(trimmed);
+            }
+        }
+        return list;
+    }
+
+    private boolean isPublicPersonalEmail(String email) {
+        if (email == null || !email.contains("@")) return false;
+        String domain = email.substring(email.indexOf("@") + 1).toLowerCase(Locale.ROOT).trim();
+        Set<String> publicDomains = Set.of(
+            "gmail.com", "googlemail.com",
+            "yahoo.com", "yahoo.co.id", "yahoo.co.uk", "ymail.com", "rocketmail.com",
+            "hotmail.com", "hotmail.co.id", "outlook.com", "outlook.co.id",
+            "live.com", "live.co.id", "windowslive.com", "msn.com",
+            "icloud.com", "me.com", "mac.com",
+            "aol.com", "mail.com", "zoho.com", "proton.me", "protonmail.com"
+        );
+        return publicDomains.contains(domain);
     }
 
     private String formatNormalizedPhone(String phone) {
@@ -724,12 +773,8 @@ public class ExcelImportController {
             String personalEmail,
             int excelRowNumber) {
         Set<String> emailsInRow = new LinkedHashSet<>();
-        if (!companyEmail.isEmpty()) {
-            emailsInRow.add(companyEmail.toLowerCase(Locale.ROOT));
-        }
-        if (!personalEmail.isEmpty()) {
-            emailsInRow.add(personalEmail.toLowerCase(Locale.ROOT));
-        }
+        emailsInRow.addAll(splitEmailTokens(companyEmail));
+        emailsInRow.addAll(splitEmailTokens(personalEmail));
 
         for (String email : emailsInRow) {
             emailOwnersInFile
@@ -825,5 +870,6 @@ public class ExcelImportController {
             boolean phoneShared,
             String sharedDatabaseName,
             boolean emailShared,
-            String sharedEmailDatabaseName) {}
+            String sharedEmailDatabaseName,
+            List<String> corpEmailsInPersonal) {}
 }

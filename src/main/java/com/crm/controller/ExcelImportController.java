@@ -99,6 +99,12 @@ public class ExcelImportController {
                     validationErrors.add(rowLabel + " (" + fullName + "): Kolom kosong [" + String.join(", ", missing) + "]");
                 }
 
+                List<String> corporateEmailsInPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
+                if (!corporateEmailsInPersonal.isEmpty()) {
+                    validationErrors.add(rowLabel + " (" + fullName + "): Email kantor tidak boleh berada di kolom Personal Email ["
+                            + String.join(", ", corporateEmailsInPersonal) + "]");
+                }
+
                 registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
             }
 
@@ -457,12 +463,7 @@ public class ExcelImportController {
                     }
                 }
 
-                List<String> corpEmailsInPersonal = new ArrayList<>();
-                for (String token : splitEmailTokens(personalEmail)) {
-                    if (!isPublicPersonalEmail(token)) {
-                        corpEmailsInPersonal.add(token);
-                    }
-                }
+                List<String> corpEmailsInPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
 
                 previewStates.add(new PreviewRowState(
                         RowPreview.builder()
@@ -533,7 +534,9 @@ public class ExcelImportController {
                 }
 
                 if (state.corpEmailsInPersonal() != null && !state.corpEmailsInPersonal().isEmpty()) {
-                    messageParts.add("⚠️ Email kantor di kolom Personal Email ditolak: (" + String.join(", ", state.corpEmailsInPersonal()) + "). Kolom Personal Email hanya menerima email pribadi (Gmail, Yahoo, Outlook, dll).");
+                    status = "ERROR";
+                    messageParts.add("DITOLAK: Email kantor tidak boleh berada di kolom Personal Email (" + String.join(", ", state.corpEmailsInPersonal()) + "). Gunakan email pribadi seperti Gmail, Yahoo, atau Outlook.");
+                    conflictCount++;
                 }
 
                 preview.setStatus(status);
@@ -619,7 +622,7 @@ public class ExcelImportController {
         return null;
     }
 
-    private List<String> splitEmailTokens(String raw) {
+    static List<String> splitEmailTokens(String raw) {
         if (raw == null || raw.isBlank()) return Collections.emptyList();
         String[] parts = raw.split("[,;/\\s]+");
         List<String> list = new ArrayList<>();
@@ -632,7 +635,7 @@ public class ExcelImportController {
         return list;
     }
 
-    private boolean isPublicPersonalEmail(String email) {
+    static boolean isPublicPersonalEmail(String email) {
         if (email == null || !email.contains("@")) return false;
         String domain = email.substring(email.indexOf("@") + 1).toLowerCase(Locale.ROOT).trim();
         Set<String> publicDomains = Set.of(
@@ -644,6 +647,13 @@ public class ExcelImportController {
             "aol.com", "mail.com", "zoho.com", "proton.me", "protonmail.com"
         );
         return publicDomains.contains(domain);
+    }
+
+    static List<String> getCorporateEmailsInPersonalColumn(String personalEmail) {
+        return splitEmailTokens(personalEmail).stream()
+                .filter(email -> !isPublicPersonalEmail(email))
+                .distinct()
+                .toList();
     }
 
     private String formatNormalizedPhone(String phone) {

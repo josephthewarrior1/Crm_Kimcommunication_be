@@ -14,6 +14,12 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- POI 5.2.5 needs this API; MinIO otherwise selects the older 1.24.0. -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.25.0</version>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>

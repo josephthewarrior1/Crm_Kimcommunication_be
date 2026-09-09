@@ -4,15 +4,14 @@ import com.crm.domain.*;
 import com.crm.repository.*;
 import com.crm.service.AuditLogService;
 import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.InputStream;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/databases")
@@ -56,81 +55,27 @@ public class ExcelImportController {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }
 
-        // Pass 1: Validate completeness and intra-file conflicts for all rows before DB insertions
-        try (InputStream isCheck = file.getInputStream();
-             Workbook wbCheck = new XSSFWorkbook(isCheck)) {
-            Sheet sheetCheck = wbCheck.getSheetAt(0);
-            int lastRowNumCheck = sheetCheck.getLastRowNum();
-            List<String> validationErrors = new ArrayList<>();
-            Map<String, List<EmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
-
-            for (int r = 1; r <= lastRowNumCheck; r++) {
-                Row row = sheetCheck.getRow(r);
-                if (row == null) continue;
-
-                String firstName = normalizeField(getCellValueAsString(row.getCell(5)));
-                String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
-                if (firstName.isEmpty() && lastName.isEmpty()) continue;
-
-                String fullName = (firstName + " " + lastName).trim();
-                String rowLabel = formatRowLabel(row);
-                String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
-                String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
-                String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
-                String salutation = normalizeField(getCellValueAsString(row.getCell(4)));
-                String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
-                String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
-                String address = normalizeField(getCellValueAsString(row.getCell(10)));
-                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
-                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
-                String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
-                String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
-                String industry = normalizeField(getCellValueAsString(row.getCell(15)));
-                String city = normalizeField(getCellValueAsString(row.getCell(20)));
-                String website = normalizeField(getCellValueAsString(row.getCell(22)));
-
-                List<String> missing = getMissingMandatoryFields(
-                        groupName, brandName, companyName, salutation, firstName, lastName,
-                        positionStr, jobTitle, address, officePhone, mobilePhone, companyEmail,
-                        industry, city, website
-                );
-
-                if (!missing.isEmpty()) {
-                    validationErrors.add(rowLabel + " (" + fullName + "): Kolom kosong [" + String.join(", ", missing) + "]");
-                }
-
-                List<String> corporateEmailsInPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
-                if (!corporateEmailsInPersonal.isEmpty()) {
-                    validationErrors.add(rowLabel + " (" + fullName + "): Email kantor tidak boleh berada di kolom Personal Email ["
-                            + String.join(", ", corporateEmailsInPersonal) + "]");
-                }
-
-                List<String> personalEmailConflicts = getPersonalEmailConflicts(personalEmail, firstName, lastName, companyName);
-                if (!personalEmailConflicts.isEmpty()) {
-                    validationErrors.add(rowLabel + " (" + fullName + "): Personal Email sudah dipakai kontak lain ["
-                            + String.join(", ", personalEmailConflicts) + "]");
-                }
-
-                registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
-            }
-
-            appendIntraFileConflictErrors(validationErrors, emailOwnersInFile);
-
-            if (!validationErrors.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "message", "Import ditolak karena terdapat " + validationErrors.size() + " data yang bermasalah pada file Excel Anda:\n- " + String.join("\n- ", validationErrors)
-                ));
-            }
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Failed to validate Excel file: " + e.getMessage()));
+        // Re-run exactly the preview validation inside the import transaction.
+        ResponseEntity<?> validation = previewImport(file);
+        if (!validation.getStatusCode().is2xxSuccessful()) return validation;
+        ImportPreviewResponse preview = (ImportPreviewResponse) validation.getBody();
+        List<RowPreview> invalidRows = preview.getRows().stream()
+                .filter(row -> !Set.of("NEW", "DUPLICATE").contains(row.getStatus())).toList();
+        if (!invalidRows.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message",
+                    "Import ditolak:\n- " + String.join("\n- ", invalidRows.stream()
+                            .map(row -> "Baris Excel " + row.getRowNum() + ": " + row.getMessage()).toList())));
         }
+        Map<Integer, RowPreview> validatedRows = new LinkedHashMap<>();
+        preview.getRows().forEach(row -> validatedRows.put(row.getRowNum(), row));
 
         int successCount = 0;
         try (InputStream is = file.getInputStream();
-             Workbook workbook = new XSSFWorkbook(is)) {
+             Workbook workbook = WorkbookFactory.create(is)) {
             
             Sheet sheet = workbook.getSheetAt(0);
             int lastRowNum = sheet.getLastRowNum();
+            List<Company> knownCompanies = new ArrayList<>(companyRepository.findAll());
             
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
@@ -161,13 +106,12 @@ public class ExcelImportController {
                 String postalCode = normalizeField(getCellValueAsString(row.getCell(21)));
                 String website = normalizeField(getCellValueAsString(row.getCell(22)));
 
-                if (firstName.isEmpty() && lastName.isEmpty()) {
-                    continue; // Skip blank rows
-                }
+                if (!validatedRows.containsKey(row.getRowNum() + 1)) continue;
 
-                // 1. Resolve Group
-                Group group = null;
-                if (!groupName.isEmpty()) {
+                // Preserve existing company ownership; only create a group when it can be assigned.
+                Company company = findCompany(knownCompanies, companyName);
+                Group group = company == null ? null : company.getGroup();
+                if (group == null && !groupName.isEmpty()) {
                     group = groupRepository.findByNameIgnoreCase(groupName).orElse(null);
                     if (group == null) {
                         group = Group.builder().name(groupName).build();
@@ -176,9 +120,7 @@ public class ExcelImportController {
                 }
 
                 // 2. Resolve Company
-                Company company = null;
                 if (!companyName.isEmpty()) {
-                    company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
                     if (company == null) {
                         company = Company.builder()
                                 .name(companyName)
@@ -195,24 +137,27 @@ public class ExcelImportController {
                                 .group(group)
                                 .build();
                         company = companyRepository.save(company);
+                        knownCompanies.add(company);
                     } else {
-                        if (!brandName.isEmpty()) company.setBrandName(brandName);
-                        if (!address.isEmpty()) company.setAddress(address);
-                        if (!officePhone.isEmpty()) company.setOfficePhone(officePhone);
-                        if (!website.isEmpty()) company.setWebsite(website);
-                        if (!industry.isEmpty()) company.setIndustry(industry);
-                        if (!sizeRevenue.isEmpty()) company.setCompanySizeRevenue(sizeRevenue);
-                        if (!sizeEmployee.isEmpty()) company.setCompanySizeEmployee(sizeEmployee);
-                        if (!hardware.isEmpty()) company.setCompanyHardware(hardware);
-                        if (!city.isEmpty()) company.setCity(city);
-                        if (!postalCode.isEmpty()) company.setPostalCode(postalCode);
-                        if (group != null) company.setGroup(group);
+                        if (!brandName.isEmpty() && normalizeField(company.getBrandName()).isEmpty()) company.setBrandName(brandName);
+                        if (!address.isEmpty() && normalizeField(company.getAddress()).isEmpty()) company.setAddress(address);
+                        if (!officePhone.isEmpty() && normalizeField(company.getOfficePhone()).isEmpty()) company.setOfficePhone(officePhone);
+                        if (!website.isEmpty() && normalizeField(company.getWebsite()).isEmpty()) company.setWebsite(website);
+                        if (!industry.isEmpty() && normalizeField(company.getIndustry()).isEmpty()) company.setIndustry(industry);
+                        if (!sizeRevenue.isEmpty() && normalizeField(company.getCompanySizeRevenue()).isEmpty()) company.setCompanySizeRevenue(sizeRevenue);
+                        if (!sizeEmployee.isEmpty() && normalizeField(company.getCompanySizeEmployee()).isEmpty()) company.setCompanySizeEmployee(sizeEmployee);
+                        if (!hardware.isEmpty() && normalizeField(company.getCompanyHardware()).isEmpty()) company.setCompanyHardware(hardware);
+                        if (!city.isEmpty() && normalizeField(company.getCity()).isEmpty()) company.setCity(city);
+                        if (!postalCode.isEmpty() && normalizeField(company.getPostalCode()).isEmpty()) company.setPostalCode(postalCode);
+                        if (group != null && company.getGroup() == null) company.setGroup(group);
                         company = companyRepository.save(company);
                     }
                 }
 
                 // 3. Find existing Database record or create new
-                Database targetDb = findExistingDatabase(firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
+                Long existingId = validatedRows.get(row.getRowNum() + 1).getExistingDatabaseId();
+                Database targetDb = existingId == null ? null : databaseRepository.findById(existingId)
+                        .orElseThrow(() -> new IllegalStateException("Kontak target sudah tidak tersedia: " + existingId));
                 PositionLevel posLevel = PositionLevel.fromValue(positionStr);
                 String normPhone = formatNormalizedPhone(mobilePhone);
 
@@ -227,7 +172,6 @@ public class ExcelImportController {
                     if (normPhone != null) targetDb.setNormalizedPhone(normPhone);
                     if (!linkedinUrl.isEmpty()) targetDb.setLinkedinUrl(linkedinUrl);
                     if (company != null) targetDb.setCompany(company);
-                    targetDb.setIsActive(true);
                     targetDb = databaseRepository.save(targetDb);
                 } else {
                     targetDb = Database.builder()
@@ -246,120 +190,22 @@ public class ExcelImportController {
                     targetDb = databaseRepository.save(targetDb);
                 }
 
-                // 4. Save / Sync Emails Safely
-                if (targetDb.getEmails() == null) {
-                    targetDb.setEmails(new ArrayList<>());
-                }
-                Long targetDatabaseId = targetDb.getId();
-
-                List<String> cTokens = splitEmailTokens(companyEmail);
-                List<String> pTokens = splitEmailTokens(personalEmail);
-
-                List<String> corporateEmails = new ArrayList<>();
-                List<String> personalEmails = new ArrayList<>();
-
-                // 1. Ekstrak kolom Personal Email: hanya email domain pribadi (Gmail, Outlook, Yahoo, dll). Email kantor ditolak!
-                for (String token : pTokens) {
-                    if (isPublicPersonalEmail(token)) {
-                        if (!personalEmails.contains(token)) {
-                            personalEmails.add(token);
+                // Merge email lists by their Excel column; never infer ownership from the domain.
+                mergeEmails(targetDb, splitEmailTokens(companyEmail), true);
+                mergeEmails(targetDb, splitEmailTokens(personalEmail), false);
+                // Retyping an address can remove a type's old primary; select a retained address if needed.
+                for (boolean corporate : List.of(true, false)) {
+                    List<DatabaseEmail> typedEmails = emails(targetDb).stream()
+                            .filter(email -> isCompanyEmail(email) == corporate).toList();
+                    if (typedEmails.isEmpty()) continue;
+                    DatabaseEmail primary = typedEmails.stream().filter(email -> Boolean.TRUE.equals(email.getIsPrimary()))
+                            .findFirst().orElse(typedEmails.get(0));
+                    for (DatabaseEmail email : typedEmails) {
+                        if (Boolean.TRUE.equals(email.getIsPrimary()) != (email == primary)) {
+                            email.setIsPrimary(email == primary);
+                            databaseEmailRepository.save(email);
                         }
                     }
-                }
-
-                // 2. Ekstrak kolom Company Email:
-                List<String> corpFromComp = new ArrayList<>();
-                List<String> pubFromComp = new ArrayList<>();
-
-                for (String token : cTokens) {
-                    if (isPublicPersonalEmail(token)) {
-                        pubFromComp.add(token);
-                    } else {
-                        corpFromComp.add(token);
-                    }
-                }
-
-                if (!corpFromComp.isEmpty()) {
-                    // Ada email berdomain kantor:
-                    for (String ct : corpFromComp) {
-                        if (!corporateEmails.contains(ct)) {
-                            corporateEmails.add(ct);
-                        }
-                    }
-                    // Jika di kolom company juga tercampur email pribadi (misal Johanes/Eko Kusbiyanto):
-                    // alokasikan email pribadi tersebut ke personalEmails
-                    for (String pt : pubFromComp) {
-                        if (!personalEmails.contains(pt)) {
-                            personalEmails.add(pt);
-                        }
-                    }
-                } else {
-                    // Tidak ada email berdomain kantor sama sekali (misal perusahaan memakai Gmail seperti Edwin Sutedja):
-                    if (!pubFromComp.isEmpty()) {
-                        corporateEmails.add(pubFromComp.get(0));
-                        for (int i = 1; i < pubFromComp.size(); i++) {
-                            if (!personalEmails.contains(pubFromComp.get(i))) {
-                                personalEmails.add(pubFromComp.get(i));
-                            }
-                        }
-                    }
-                }
-
-                personalEmails.removeAll(corporateEmails);
-
-                // Save Corporate Emails
-                boolean firstCorp = true;
-                for (String cEmail : corporateEmails) {
-                    DatabaseEmail existingForContact = databaseEmailRepository.findAllByEmailIgnoreCase(cEmail).stream()
-                            .filter(email -> email.getDatabase() != null && email.getDatabase().getId().equals(targetDatabaseId))
-                            .findFirst()
-                            .orElse(null);
-                    if (existingForContact != null) {
-                        existingForContact.setIsCorporate(true);
-                        existingForContact.setIsPrimary(firstCorp);
-                        existingForContact.setEmailType("company");
-                        databaseEmailRepository.save(existingForContact);
-                    } else {
-                        DatabaseEmail emailObj = DatabaseEmail.builder()
-                                .email(cEmail)
-                                .emailType("company")
-                                .isCorporate(true)
-                                .isPrimary(firstCorp)
-                                .database(targetDb)
-                                .build();
-                        databaseEmailRepository.save(emailObj);
-                        targetDb.getEmails().add(emailObj);
-                    }
-                    firstCorp = false;
-                }
-
-                // Save Personal Emails
-                boolean firstPers = true;
-                for (String pEmail : personalEmails) {
-                    List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(pEmail);
-                    DatabaseEmail existingForContact = existingEmails.stream()
-                            .filter(email -> email.getDatabase() != null && email.getDatabase().getId().equals(targetDatabaseId))
-                            .findFirst()
-                            .orElse(null);
-                    if (existingForContact != null) {
-                        existingForContact.setIsCorporate(false);
-                        existingForContact.setIsPrimary(firstPers);
-                        existingForContact.setEmailType("personal");
-                        databaseEmailRepository.save(existingForContact);
-                    } else if (existingEmails.isEmpty()) {
-                        DatabaseEmail emailObj = DatabaseEmail.builder()
-                                .email(pEmail)
-                                .emailType("personal")
-                                .isCorporate(false)
-                                .isPrimary(firstPers)
-                                .database(targetDb)
-                                .build();
-                        databaseEmailRepository.save(emailObj);
-                        targetDb.getEmails().add(emailObj);
-                    } else {
-                        throw new IllegalStateException("Personal email already belongs to another contact: " + pEmail);
-                    }
-                    firstPers = false;
                 }
 
                 suspiciousIdentityService.checkAndFlagDatabase(targetDb);
@@ -381,9 +227,10 @@ public class ExcelImportController {
             ));
             
         } catch (Exception e) {
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return ResponseEntity.internalServerError().body(Map.of(
-                "message", "Failed to import Excel file: " + e.getMessage(),
-                "error", e.getMessage()
+                "message", "Import dibatalkan; seluruh perubahan di-rollback: " + e.getMessage(),
+                "error", Objects.toString(e.getMessage(), e.getClass().getSimpleName())
             ));
         }
     }
@@ -394,248 +241,280 @@ public class ExcelImportController {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }
 
-        try (InputStream is = file.getInputStream();
-             Workbook workbook = new XSSFWorkbook(is)) {
-            
+        try (InputStream is = file.getInputStream(); Workbook workbook = WorkbookFactory.create(is)) {
             Sheet sheet = workbook.getSheetAt(0);
-            int lastRowNum = sheet.getLastRowNum();
-            
-            List<PreviewRowState> previewStates = new ArrayList<>();
-            Map<String, List<EmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
-            int totalValid = 0;
-            
-            for (int r = 1; r <= lastRowNum; r++) {
-                Row row = sheet.getRow(r);
-                if (row == null) continue;
-
-                String groupName = normalizeField(getCellValueAsString(row.getCell(1)));
-                String brandName = normalizeField(getCellValueAsString(row.getCell(2)));
-                String companyName = cleanCompanyName(normalizeField(getCellValueAsString(row.getCell(3))));
-                String salutation = normalizeField(getCellValueAsString(row.getCell(4)));
-                String firstName = normalizeField(getCellValueAsString(row.getCell(5)));
-                String lastName = normalizeField(getCellValueAsString(row.getCell(6)));
-                String positionStr = normalizeField(getCellValueAsString(row.getCell(7)));
-                String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
-                String address = normalizeField(getCellValueAsString(row.getCell(10)));
-                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
-                String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
-                String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
-                String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
-                String industry = normalizeField(getCellValueAsString(row.getCell(15)));
-                String city = normalizeField(getCellValueAsString(row.getCell(20)));
-                String website = normalizeField(getCellValueAsString(row.getCell(22)));
-
-                if (firstName.isEmpty() && lastName.isEmpty()) continue;
-                
-                totalValid++;
-                String fullName = (firstName + " " + lastName).trim();
-                String rowLabel = formatRowLabel(row);
-
-                List<String> missing = getMissingMandatoryFields(
-                        groupName, brandName, companyName, salutation, firstName, lastName,
-                        positionStr, jobTitle, address, officePhone, mobilePhone, companyEmail,
-                        industry, city, website
-                );
-
-                registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
-
-                Database existingDatabase = findExistingDatabase(firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
-
-                boolean phoneShared = false;
-                boolean phoneSameCompany = false;
-                String sharedDatabaseName = "";
-                if (!mobilePhone.isEmpty()) {
-                    String normPhone = formatNormalizedPhone(mobilePhone);
-                    Database otherPhoneDatabase = normPhone != null
-                            ? databaseRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null)
-                            : null;
-                    if (otherPhoneDatabase == null) {
-                        otherPhoneDatabase = databaseRepository.findByMobilePhone(mobilePhone).stream().findFirst().orElse(null);
-                    }
-                    if (otherPhoneDatabase != null && (existingDatabase == null || !existingDatabase.getId().equals(otherPhoneDatabase.getId()))) {
-                        phoneShared = true;
-                        String otherCompany = otherPhoneDatabase.getCompany() != null ? Objects.toString(otherPhoneDatabase.getCompany().getName(), "") : "";
-                        phoneSameCompany = !companyName.isBlank() && otherCompany.trim().equalsIgnoreCase(companyName.trim());
-                        sharedDatabaseName = otherPhoneDatabase.getFirstName() + " " + otherPhoneDatabase.getLastName()
-                                + (!phoneSameCompany && !otherCompany.isBlank() ? " (" + otherCompany + ")" : "");
-                    }
-                }
-
-                boolean emailShared = false;
-                String sharedEmailDatabaseName = "";
-                List<String> personalEmailConflicts = getPersonalEmailConflicts(personalEmail, firstName, lastName, companyName);
-                if (!personalEmailConflicts.isEmpty()) {
-                    emailShared = true;
-                    sharedEmailDatabaseName = String.join(", ", personalEmailConflicts);
-                }
-
-                List<String> sharedCompanyEmails = getSharedCompanyEmailWarnings(companyEmail, firstName, lastName, companyName);
-
-                List<String> corpEmailsInPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
-
-                previewStates.add(new PreviewRowState(
-                        RowPreview.builder()
-                        .rowNum(row.getRowNum() + 1)
-                        .groupName(groupName)
-                        .companyName(companyName)
-                        .firstName(firstName)
-                        .lastName(lastName)
-                        .jobTitle(jobTitle)
-                        .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
-                        .status("NEW")
-                        .message("")
-                        .build(),
-                        missing,
-                        existingDatabase != null,
-                        phoneShared,
-                        phoneSameCompany,
-                        sharedDatabaseName,
-                        emailShared,
-                        sharedEmailDatabaseName,
-                        sharedCompanyEmails,
-                        corpEmailsInPersonal
-                ));
-            }
-
-            Map<Integer, List<String>> intraFileConflictsByRow = buildIntraFileConflictMessages(emailOwnersInFile);
+            validateHeaders(sheet.getRow(0));
+            // ponytail: one snapshot, O(rows * contacts); index identities if large imports become slow.
+            List<Database> databases = databaseRepository.findAll();
+            List<Company> knownCompanies = companyRepository.findAll();
             List<RowPreview> previews = new ArrayList<>();
-            int newCount = 0;
-            int duplicateCount = 0;
-            int incompleteCount = 0;
-            int conflictCount = 0;
+            Map<String, List<RowPreview>> fileOwners = new LinkedHashMap<>();
+            Map<String, List<RowPreview>> companyRows = new LinkedHashMap<>();
+            Map<String, Map<Integer, String>> companyValues = new LinkedHashMap<>();
 
-            for (PreviewRowState state : previewStates) {
-                RowPreview preview = state.preview();
-                List<String> messageParts = new ArrayList<>();
-                String status = "NEW";
+            for (int r = 1; r <= sheet.getLastRowNum(); r++) {
+                Row row = sheet.getRow(r);
+                if (row == null || isBlankRow(row)) continue;
 
-                if (!state.missing().isEmpty()) {
-                    status = "INCOMPLETE";
-                    messageParts.add("DITOLAK (Data Belum Lengkap). Kolom kosong: " + String.join(", ", state.missing()));
-                    incompleteCount++;
-                }
-
-                List<String> conflictMessages = intraFileConflictsByRow.getOrDefault(preview.getRowNum(), List.of());
-                if (!conflictMessages.isEmpty()) {
-                    if ("NEW".equals(status)) {
-                        status = "CONFLICT";
-                    }
-                    messageParts.addAll(conflictMessages);
-                    conflictCount++;
-                }
-
-                if (state.existingDatabase()) {
-                    if ("NEW".equals(status)) {
-                        status = "DUPLICATE";
-                    }
-                    messageParts.add("Kontak sudah terdaftar di database. Data detail akan diperbarui (sinkron).");
-                    duplicateCount++;
-                }
-
-                if (state.emailShared()) {
-                    if ("NEW".equals(status) || "DUPLICATE".equals(status)) {
-                        status = "CONFLICT";
-                    }
-                    messageParts.add("DITOLAK: Personal Email sudah dipakai kontak lain: " + state.sharedEmailDatabaseName() + ".");
-                    conflictCount++;
-                }
-
-                if ("NEW".equals(status)) {
-                    newCount++;
-                    messageParts.add("Akan disimpan sebagai kontak baru di database.");
-                }
-
-                if (state.phoneShared()) {
-                    if (state.phoneSameCompany()) {
-                        messageParts.add("Peringatan: Nomor telepon sama dengan rekan sekantor '" + state.sharedDatabaseName() + "'.");
-                    } else {
-                        messageParts.add("Peringatan: Nomor telepon sama dengan database perusahaan lain '" + state.sharedDatabaseName() + "' (Kandidat Tikus / Duplikat Lintas Perusahaan).");
-                    }
-                }
-
-                if (!state.sharedCompanyEmails().isEmpty()) {
-                    messageParts.add("Info: Company email digunakan bersama dengan kontak lain: " + String.join(", ", state.sharedCompanyEmails()) + ".");
-                }
-
-                if (state.corpEmailsInPersonal() != null && !state.corpEmailsInPersonal().isEmpty()) {
-                    status = "ERROR";
-                    messageParts.add("DITOLAK: Email kantor tidak boleh berada di kolom Personal Email (" + String.join(", ", state.corpEmailsInPersonal()) + "). Gunakan email pribadi seperti Gmail, Yahoo, atau Outlook.");
-                    conflictCount++;
-                }
-
-                preview.setStatus(status);
-                preview.setMessage(String.join(" | ", messageParts));
+                String groupName = cell(row, 1);
+                String companyName = cleanCompanyName(cell(row, 3));
+                String firstName = cell(row, 5);
+                String lastName = cell(row, 6);
+                String mobilePhone = cleanPhone(cell(row, 12));
+                String companyEmail = cell(row, 13);
+                String personalEmail = cell(row, 14);
+                RowPreview preview = RowPreview.builder()
+                        .rowNum(r + 1).groupName(groupName).companyName(companyName)
+                        .firstName(firstName).lastName(lastName).jobTitle(cell(row, 9))
+                        .companyEmail(companyEmail).personalEmail(personalEmail).mobilePhone(mobilePhone)
+                        .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
+                        .status("NEW").message("").build();
                 previews.add(preview);
+
+                for (String email : emailTokens(companyEmail + ";" + personalEmail)) {
+                    if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+                        conflict(preview, "Format email tidak valid: " + email);
+                    }
+                }
+                List<String> invalidPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
+                if (!invalidPersonal.isEmpty()) {
+                    conflict(preview, "Email kantor tidak boleh berada di kolom Personal Email: " + String.join(", ", invalidPersonal));
+                }
+                Set<String> personal = new LinkedHashSet<>(splitEmailTokens(personalEmail));
+                Set<String> corporate = new LinkedHashSet<>(splitEmailTokens(companyEmail));
+                if (!Collections.disjoint(personal, corporate)) {
+                    conflict(preview, "Email yang sama tidak boleh di kolom Company dan Personal sekaligus.");
+                }
+
+                Database target = null;
+                Company matchedCompany = null;
+                try {
+                    matchedCompany = findCompany(knownCompanies, companyName);
+                    target = findExistingDatabase(databases, firstName, lastName, companyName, personal);
+                    if (target != null) preview.setExistingDatabaseId(target.getId());
+                } catch (IllegalArgumentException e) {
+                    conflict(preview, e.getMessage());
+                }
+
+                List<String> missing = getMissingMandatoryFields(groupName, cell(row, 2), companyName,
+                        cell(row, 4), firstName, lastName, cell(row, 7), cell(row, 9), cell(row, 10),
+                        cleanPhone(cell(row, 11)), mobilePhone, companyEmail, cell(row, 15), cell(row, 20), cell(row, 22));
+                if (target != null) {
+                    // Existing values satisfy a merge update; a new company must still be complete.
+                    Set<String> retainedContactFields = Set.of("Salutation", "Last Name", "Position", "Job Title", "Mobile Phone", "Company Email");
+                    boolean companyExists = matchedCompany != null;
+                    missing.removeIf(field -> !Set.of("First Name", "Company Name").contains(field)
+                            && (companyExists || retainedContactFields.contains(field)));
+                }
+                if (!missing.isEmpty()) {
+                    if ("NEW".equals(preview.getStatus())) preview.setStatus("INCOMPLETE");
+                    addMessage(preview, "Kolom kosong: " + String.join(", ", missing));
+                }
+
+                String normalizedPhone = formatNormalizedPhone(mobilePhone);
+                for (Database other : databases) {
+                    if (target != null && Objects.equals(target.getId(), other.getId())) continue;
+                    if (normalizedPhone != null && (normalizedPhone.equals(formatNormalizedPhone(other.getMobilePhone()))
+                            || normalizedPhone.equals(formatNormalizedPhone(other.getNormalizedPhone())))) {
+                        conflict(preview, "Mobile Phone sudah dipakai " + contactLabel(other));
+                    }
+                    for (DatabaseEmail email : emails(other)) {
+                        String address = normalizeKey(email.getEmail());
+                        if (personal.contains(address) || (corporate.contains(address) && !isCompanyEmail(email))) {
+                            conflict(preview, "Email personal '" + address + "' sudah dipakai " + contactLabel(other));
+                        }
+                    }
+                }
+
+                // One contact is updated at most once per workbook; conflicting row order must not choose a winner.
+                registerOwner(fileOwners, "Kontak: " + normalizeKey(firstName + " " + lastName)
+                        + " / " + normalizeKey(companyName), preview);
+                if (target != null) registerOwner(fileOwners, "Target ID: " + target.getId(), preview);
+                if (normalizedPhone != null) registerOwner(fileOwners, "Mobile Phone: " + normalizedPhone, preview);
+                for (String email : personal) registerOwner(fileOwners, "Personal Email: " + email, preview);
+
+                String companyKey = normalizeKey(companyName);
+                companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
+                Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
+                for (int column : List.of(1, 2, 10, 11, 15, 16, 17, 18, 20, 21, 22)) {
+                    String value = normalizeKey(cell(row, column));
+                    if (value.isEmpty()) continue;
+                    String previous = values.putIfAbsent(column, value);
+                    if (previous != null && !previous.equals(value)) {
+                        for (RowPreview companyRow : companyRows.get(companyKey)) {
+                            conflict(companyRow, "Data company tidak konsisten antarbaris pada kolom " + HEADERS.get(column) + ".");
+                        }
+                    }
+                }
             }
-            
+
+            // Company emails may repeat, except when that address is also claimed as personal in this file.
+            for (RowPreview row : previews) {
+                for (String email : splitEmailTokens(row.getCompanyEmail())) {
+                    if (fileOwners.containsKey("Personal Email: " + email)) {
+                        registerOwner(fileOwners, "Personal Email: " + email, row);
+                    }
+                }
+            }
+            for (Map.Entry<String, List<RowPreview>> entry : fileOwners.entrySet()) {
+                List<RowPreview> owners = entry.getValue().stream().distinct().toList();
+                if (owners.size() < 2) continue;
+                String rows = String.join(", ", owners.stream().map(row -> String.valueOf(row.getRowNum())).toList());
+                owners.forEach(row -> conflict(row, entry.getKey() + " berulang di baris Excel " + rows + "."));
+            }
+            for (RowPreview preview : previews) {
+                if ("NEW".equals(preview.getStatus()) && preview.getExistingDatabaseId() != null) {
+                    preview.setStatus("DUPLICATE");
+                    addMessage(preview, "Update kontak ID " + preview.getExistingDatabaseId()
+                            + ". Nilai kosong dan email lama dipertahankan; company hanya dilengkapi jika kosong.");
+                } else if ("NEW".equals(preview.getStatus())) {
+                    addMessage(preview, "Akan disimpan sebagai kontak baru. Company yang sudah ada hanya dilengkapi jika kosong.");
+                }
+            }
+            if (previews.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("message", "File Excel tidak memiliki baris data."));
+            }
             return ResponseEntity.ok(ImportPreviewResponse.builder()
-                    .totalRows(totalValid)
-                    .newCount(newCount)
-                    .duplicateCount(duplicateCount)
-                    .incompleteCount(incompleteCount)
-                    .conflictCount(conflictCount)
-                    .rows(previews)
-                    .build());
-            
+                    .totalRows(previews.size())
+                    .newCount(countStatus(previews, "NEW"))
+                    .duplicateCount(countStatus(previews, "DUPLICATE"))
+                    .incompleteCount(countStatus(previews, "INCOMPLETE"))
+                    .conflictCount(countStatus(previews, "CONFLICT"))
+                    .rows(previews).build());
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                "message", "Failed to parse Excel file",
-                "error", e.getMessage()
-            ));
+            return ResponseEntity.badRequest().body(Map.of("message", "Gagal memvalidasi Excel: " + e.getMessage()));
         }
     }
 
-    private Database findExistingDatabase(
-            String firstName,
-            String lastName,
-            String companyName,
-            String mobilePhone,
-            String companyEmail,
-            String personalEmail) {
+    private Company findCompany(List<Company> companies, String companyName) {
+        List<Company> matches = companies.stream()
+                .filter(company -> normalizeKey(cleanCompanyName(company.getName())).equals(normalizeKey(companyName))).toList();
+        if (matches.size() > 1) {
+            throw new IllegalArgumentException("Company ambigu: " + companyName + " (ID "
+                    + String.join(", ", matches.stream().map(company -> String.valueOf(company.getId())).toList()) + ").");
+        }
+        return matches.isEmpty() ? null : matches.get(0);
+    }
 
-        // Personal email uniquely identifies a person; company email and phone may be shared.
-        for (String email : splitEmailTokens(personalEmail)) {
-            for (DatabaseEmail match : databaseEmailRepository.findAllByEmailIgnoreCase(email)) {
-                if (match.getDatabase() != null && sameIdentity(match.getDatabase(), firstName, lastName, companyName)) {
-                    return match.getDatabase();
-                }
+    private Database findExistingDatabase(List<Database> databases, String firstName, String lastName,
+                                          String companyName, Set<String> personalEmails) {
+        String name = normalizeKey(firstName + " " + lastName);
+        List<Database> candidates = databases.stream().filter(database -> {
+            if (!name.equals(normalizeKey(Objects.toString(database.getFirstName(), "") + " "
+                    + Objects.toString(database.getLastName(), "")))) return false;
+            String company = database.getCompany() == null ? "" : cleanCompanyName(database.getCompany().getName());
+            return normalizeKey(companyName).equals(normalizeKey(company))
+                    || emails(database).stream().anyMatch(email -> !isCompanyEmail(email)
+                    && personalEmails.contains(normalizeKey(email.getEmail())));
+        }).toList();
+        if (candidates.size() > 1) {
+            throw new IllegalArgumentException("Target update ambigu: " + String.join(", ",
+                    candidates.stream().map(this::contactLabel).toList()) + ". Rapikan duplikat sebelum import.");
+        }
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    private void mergeEmails(Database target, List<String> incoming, boolean corporate) {
+        if (incoming.isEmpty()) return;
+        if (target.getEmails() == null) target.setEmails(new ArrayList<>());
+        // Clear primaries for this type only; the first incoming address becomes the primary.
+        for (DatabaseEmail email : target.getEmails()) {
+            if (isCompanyEmail(email) == corporate) {
+                email.setIsPrimary(false);
+                databaseEmailRepository.save(email);
             }
         }
-
-        // Same name within the same company is an update; shared phone/company email is not.
-        if (firstName != null && !firstName.isBlank()) {
-            List<Database> nameMatches;
-            if (lastName != null && !lastName.isBlank()) {
-                nameMatches = databaseRepository.findByFirstNameIgnoreCaseAndLastNameIgnoreCase(firstName.trim(), lastName.trim());
-            } else {
-                nameMatches = databaseRepository.findByFirstNameIgnoreCase(firstName.trim()).stream()
-                        .filter(d -> d.getLastName() == null || d.getLastName().isBlank())
-                        .collect(Collectors.toList());
-                if (nameMatches.isEmpty()) {
-                    nameMatches = databaseRepository.findByFirstNameIgnoreCase(firstName.trim());
-                }
+        for (int i = 0; i < incoming.size(); i++) {
+            String address = incoming.get(i);
+            List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(address);
+            boolean conflict = owners.stream().anyMatch(email -> email.getDatabase() != null
+                    && !Objects.equals(target.getId(), email.getDatabase().getId())
+                    && (!corporate || !isCompanyEmail(email)));
+            if (conflict) throw new IllegalStateException("Email personal sudah dipakai kontak lain: " + address);
+            DatabaseEmail email = target.getEmails().stream()
+                    .filter(existing -> address.equalsIgnoreCase(existing.getEmail())).findFirst().orElse(null);
+            if (email == null) {
+                email = DatabaseEmail.builder().email(address).database(target).build();
+                target.getEmails().add(email);
             }
-
-            return nameMatches.stream()
-                    .filter(database -> sameIdentity(database, firstName, lastName, companyName))
-                    .findFirst()
-                    .orElse(null);
+            email.setEmailType(corporate ? "company" : "personal");
+            email.setIsCorporate(corporate);
+            email.setIsPrimary(i == 0);
+            databaseEmailRepository.save(email);
         }
+    }
 
-        return null;
+    private static boolean isCompanyEmail(DatabaseEmail email) {
+        return "company".equalsIgnoreCase(email.getEmailType())
+                || (!"personal".equalsIgnoreCase(email.getEmailType()) && Boolean.TRUE.equals(email.getIsCorporate()));
+    }
+
+    private static List<DatabaseEmail> emails(Database database) {
+        return database.getEmails() == null ? List.of() : database.getEmails();
+    }
+
+    private String contactLabel(Database database) {
+        return Objects.toString(database.getFirstName(), "") + " " + Objects.toString(database.getLastName(), "")
+                + " (ID " + database.getId() + ", "
+                + (database.getCompany() == null ? "tanpa company" : database.getCompany().getName()) + ")";
+    }
+
+    private static void registerOwner(Map<String, List<RowPreview>> owners, String key, RowPreview row) {
+        owners.computeIfAbsent(key, ignored -> new ArrayList<>()).add(row);
+    }
+
+    private static void addMessage(RowPreview row, String message) {
+        row.setMessage(row.getMessage().isEmpty() ? message : row.getMessage() + " | " + message);
+    }
+
+    private static void conflict(RowPreview row, String message) {
+        row.setStatus("CONFLICT");
+        addMessage(row, message);
+    }
+
+    private static int countStatus(List<RowPreview> rows, String status) {
+        return (int) rows.stream().filter(row -> status.equals(row.getStatus())).count();
+    }
+
+    private static String normalizeKey(String value) {
+        return Objects.toString(value, "").trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private String cell(Row row, int index) {
+        return normalizeField(getCellValueAsString(row.getCell(index)));
+    }
+
+    private boolean isBlankRow(Row row) {
+        for (int column = 1; column < HEADERS.size(); column++) {
+            if (!cell(row, column).isEmpty()) return false;
+        }
+        return true;
+    }
+
+    private static final List<String> HEADERS = List.of(
+            "No", "Nama Group/Holding Company", "Nama Brand", "Company Name", "Salutation",
+            "First Name", "Last Name", "Position", "Division", "Jobtitle", "Address", "Office Phone",
+            "Mobile Phone", "Company Email Address", "Personal Email Address", "Industry",
+            "Company Size (Revenue)", "Company Size (Employee)", "Company Hardware", "Linkedin Link",
+            "City", "Postal Code", "Company Website");
+
+    private void validateHeaders(Row row) {
+        if (row == null) throw new IllegalArgumentException("Header Excel kosong.");
+        for (int column = 0; column < HEADERS.size(); column++) {
+            if (!normalizeKey(HEADERS.get(column)).equals(normalizeKey(cell(row, column)))) {
+                throw new IllegalArgumentException("Kolom " + (column + 1) + " harus '" + HEADERS.get(column) + "'.");
+            }
+        }
+    }
+
+    private static List<String> emailTokens(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        return Arrays.stream(raw.toLowerCase(Locale.ROOT).split("[,;/\\s]+"))
+                .filter(token -> !token.isBlank()).distinct().toList();
     }
 
     static List<String> splitEmailTokens(String raw) {
-        if (raw == null || raw.isBlank()) return Collections.emptyList();
-        String[] parts = raw.split("[,;/\\s]+");
-        List<String> list = new ArrayList<>();
-        for (String p : parts) {
-            String trimmed = p.trim().toLowerCase(Locale.ROOT);
-            if (!trimmed.isEmpty() && trimmed.contains("@")) {
-                list.add(trimmed);
-            }
-        }
-        return list;
+        return emailTokens(raw);
     }
 
     static boolean isPublicPersonalEmail(String email) {
@@ -657,41 +536,6 @@ public class ExcelImportController {
                 .filter(email -> !isPublicPersonalEmail(email))
                 .distinct()
                 .toList();
-    }
-
-    private List<String> getSharedCompanyEmailWarnings(String companyEmail, String firstName, String lastName, String companyName) {
-        return splitEmailTokens(companyEmail).stream()
-                .flatMap(email -> databaseEmailRepository.findAllByEmailIgnoreCase(email).stream())
-                .map(DatabaseEmail::getDatabase)
-                .filter(Objects::nonNull)
-                .filter(database -> !sameIdentity(database, firstName, lastName, companyName))
-                .map(database -> {
-                    String cName = database.getCompany() != null ? Objects.toString(database.getCompany().getName(), "") : "";
-                    return Objects.toString(database.getFirstName(), "") + " "
-                            + Objects.toString(database.getLastName(), "")
-                            + (cName.isBlank() ? "" : " (" + cName + ")");
-                })
-                .distinct()
-                .toList();
-    }
-
-    private List<String> getPersonalEmailConflicts(String personalEmail, String firstName, String lastName, String companyName) {
-        return splitEmailTokens(personalEmail).stream()
-                .flatMap(email -> databaseEmailRepository.findAllByEmailIgnoreCase(email).stream())
-                .map(DatabaseEmail::getDatabase)
-                .filter(Objects::nonNull)
-                .filter(database -> !sameIdentity(database, firstName, lastName, companyName))
-                .map(database -> Objects.toString(database.getFirstName(), "") + " "
-                        + Objects.toString(database.getLastName(), "") + " (ID " + database.getId() + ")")
-                .distinct()
-                .toList();
-    }
-
-    private boolean sameIdentity(Database database, String firstName, String lastName, String companyName) {
-        String databaseCompany = database.getCompany() != null ? Objects.toString(database.getCompany().getName(), "") : "";
-        return Objects.toString(database.getFirstName(), "").trim().equalsIgnoreCase(Objects.toString(firstName, "").trim())
-                && Objects.toString(database.getLastName(), "").trim().equalsIgnoreCase(Objects.toString(lastName, "").trim())
-                && databaseCompany.trim().equalsIgnoreCase(Objects.toString(companyName, "").trim());
     }
 
     private String formatNormalizedPhone(String phone) {
@@ -813,72 +657,6 @@ public class ExcelImportController {
         return normalized;
     }
 
-    private void registerEmailsForRow(
-            Map<String, List<EmailOwnerInfo>> emailOwnersInFile,
-            String rowLabel,
-            String fullName,
-            String companyEmail,
-            String personalEmail,
-            int excelRowNumber) {
-        Set<String> emailsInRow = new LinkedHashSet<>();
-        emailsInRow.addAll(splitEmailTokens(personalEmail));
-
-        for (String email : emailsInRow) {
-            emailOwnersInFile
-                    .computeIfAbsent(email, key -> new ArrayList<>())
-                    .add(new EmailOwnerInfo(rowLabel, fullName, excelRowNumber, email));
-        }
-    }
-
-    private void appendIntraFileConflictErrors(
-            List<String> validationErrors,
-            Map<String, List<EmailOwnerInfo>> emailOwnersInFile) {
-        Map<Integer, List<String>> conflictsByRow = buildIntraFileConflictMessages(emailOwnersInFile);
-        List<Integer> sortedRows = new ArrayList<>(conflictsByRow.keySet());
-        Collections.sort(sortedRows);
-        for (Integer rowNumber : sortedRows) {
-            validationErrors.addAll(conflictsByRow.get(rowNumber));
-        }
-    }
-
-    private Map<Integer, List<String>> buildIntraFileConflictMessages(
-            Map<String, List<EmailOwnerInfo>> emailOwnersInFile) {
-        Map<Integer, List<String>> conflictsByRow = new LinkedHashMap<>();
-
-        for (List<EmailOwnerInfo> owners : emailOwnersInFile.values()) {
-            if (owners.size() < 2) {
-                continue;
-            }
-
-            for (EmailOwnerInfo owner : owners) {
-                List<String> others = owners.stream()
-                        .filter(other -> other.excelRowNumber() != owner.excelRowNumber())
-                        .map(other -> other.rowLabel() + " (" + other.fullName() + ")")
-                        .toList();
-
-                if (others.isEmpty()) {
-                    continue;
-                }
-
-                String message = "Konflik Personal Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Personal email tidak boleh dipakai 2 nama berbeda di Excel.";
-                conflictsByRow
-                        .computeIfAbsent(owner.excelRowNumber(), key -> new ArrayList<>())
-                        .add(message);
-            }
-        }
-
-        return conflictsByRow;
-    }
-
-    private String formatRowLabel(Row row) {
-        int excelRowNumber = row.getRowNum() + 1;
-        String sequenceNumber = normalizeField(getCellValueAsString(row.getCell(0)));
-        if (!sequenceNumber.isEmpty()) {
-            return "Baris " + sequenceNumber + " (row Excel " + excelRowNumber + ")";
-        }
-        return "Baris Excel " + excelRowNumber;
-    }
-
     private String safeFileName(String fileName) {
         return fileName == null || fileName.isBlank() ? "tanpa_nama.xlsx" : fileName.trim();
     }
@@ -904,21 +682,12 @@ public class ExcelImportController {
         private String lastName;
         private String jobTitle;
         private String email;
+        private String companyEmail;
+        private String personalEmail;
+        private String mobilePhone;
+        private Long existingDatabaseId;
         private String status;
         private String message;
     }
 
-    private record EmailOwnerInfo(String rowLabel, String fullName, int excelRowNumber, String email) {}
-
-    private record PreviewRowState(
-            RowPreview preview,
-            List<String> missing,
-            boolean existingDatabase,
-            boolean phoneShared,
-            boolean phoneSameCompany,
-            String sharedDatabaseName,
-            boolean emailShared,
-            String sharedEmailDatabaseName,
-            List<String> sharedCompanyEmails,
-            List<String> corpEmailsInPersonal) {}
 }

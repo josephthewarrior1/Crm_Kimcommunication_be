@@ -93,7 +93,7 @@ public class ExcelImportController {
                 String specialityDivision = normalizeField(getCellValueAsString(row.getCell(8)));
                 String jobTitle = normalizeField(getCellValueAsString(row.getCell(9)));
                 String address = normalizeField(getCellValueAsString(row.getCell(10)));
-                String officePhone = cleanPhone(getCellValueAsString(row.getCell(11)));
+                String officePhone = normalizeOfficePhone(getCellValueAsString(row.getCell(11)));
                 String mobilePhone = cleanPhone(getCellValueAsString(row.getCell(12)));
                 String companyEmail = normalizeField(getCellValueAsString(row.getCell(13)));
                 String personalEmail = normalizeField(getCellValueAsString(row.getCell(14)));
@@ -141,7 +141,10 @@ public class ExcelImportController {
                     } else {
                         if (!brandName.isEmpty() && normalizeField(company.getBrandName()).isEmpty()) company.setBrandName(brandName);
                         if (!address.isEmpty() && normalizeField(company.getAddress()).isEmpty()) company.setAddress(address);
-                        if (!officePhone.isEmpty() && normalizeField(company.getOfficePhone()).isEmpty()) company.setOfficePhone(officePhone);
+                        if (!officePhone.isEmpty() && (normalizeField(company.getOfficePhone()).isEmpty()
+                                || officePhone.equals(normalizeOfficePhone(company.getOfficePhone())))) {
+                            company.setOfficePhone(officePhone);
+                        }
                         if (!website.isEmpty() && normalizeField(company.getWebsite()).isEmpty()) company.setWebsite(website);
                         if (!industry.isEmpty() && normalizeField(company.getIndustry()).isEmpty()) company.setIndustry(industry);
                         if (!sizeRevenue.isEmpty() && normalizeField(company.getCompanySizeRevenue()).isEmpty()) company.setCompanySizeRevenue(sizeRevenue);
@@ -337,7 +340,7 @@ public class ExcelImportController {
                 companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
                 Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
                 for (int column : List.of(1, 2, 10, 11, 15, 16, 17, 18, 20, 21, 22)) {
-                    String value = normalizeKey(cell(row, column));
+                    String value = normalizeKey(column == 11 ? normalizeOfficePhone(cell(row, column)) : cell(row, column));
                     if (value.isEmpty()) continue;
                     String previous = values.putIfAbsent(column, value);
                     if (previous != null && !previous.equals(value)) {
@@ -536,6 +539,14 @@ public class ExcelImportController {
                 .filter(email -> !isPublicPersonalEmail(email))
                 .distinct()
                 .toList();
+    }
+
+    private String normalizeOfficePhone(String value) {
+        String phone = cleanPhone(value);
+        // Keep lists/extensions intact; do not concatenate them into a different phone number.
+        if (!phone.matches("[+()0-9\\s.-]+")) return phone;
+        String normalized = formatNormalizedPhone(phone);
+        return normalized == null ? "" : normalized.substring(1);
     }
 
     private String formatNormalizedPhone(String phone) {

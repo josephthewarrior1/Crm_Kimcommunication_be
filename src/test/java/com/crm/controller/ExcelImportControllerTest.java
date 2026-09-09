@@ -82,6 +82,64 @@ class ExcelImportControllerTest {
     }
 
     @Test
+    void officePhoneFormattingDoesNotBlockPreviewOrImport() throws Exception {
+        for (String equivalent : List.of("(022) 6030798", "+62 22 6030798", "62226030798", "022-6030798", "022.6030798")) {
+            String[] a = row("Andi", "081234567890", "office@example.com", "");
+            String[] b = row("Budi", "081234567891", "office@example.com", "");
+            a[11] = "22 6030798";
+            b[11] = equivalent;
+            var upload = file(a, b);
+            assertEquals(0, preview(upload).getConflictCount(), equivalent);
+            assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value(), equivalent);
+        }
+        assertEquals("62226030798", company.getOfficePhone());
+    }
+
+    @Test
+    void importTidiesEquivalentExistingOfficePhoneWithoutReplacingAnotherNumber() throws Exception {
+        String[] data = row("Andi", "081234567890", "office@example.com", "");
+        data[11] = "22 6030798";
+        for (String existing : List.of("22 6030798", "(022) 6030798", "+62 22 6030798", "62226030798")) {
+            company.setOfficePhone(existing);
+            assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+            assertEquals("62226030798", company.getOfficePhone());
+        }
+        company.setOfficePhone("(021) 123456");
+        assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals("(021) 123456", company.getOfficePhone());
+    }
+
+    @Test
+    void newCompanyStoresCanonicalOfficePhone() throws Exception {
+        when(companies.findAll()).thenReturn(new ArrayList<>());
+        String[] data = row("Andi", "081234567890", "office@example.com", "");
+        data[11] = "22 6030798";
+        assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+        verify(companies).save(argThat(saved -> "62226030798".equals(saved.getOfficePhone())));
+    }
+
+    @Test
+    void officePhoneNormalizationStillRejectsDifferentNumbersAndIndustry() throws Exception {
+        String[] a = row("Andi", "081234567890", "office@example.com", "");
+        String[] b = row("Budi", "081234567891", "office@example.com", "");
+        a[11] = "22 6030798";
+        for (String different : List.of("(022) 6030799", "(022) 6030798 ext 12", "022 6030798 / 022 6030799")) {
+            b[11] = different;
+            var upload = file(a, b);
+            assertEquals(2, preview(upload).getConflictCount(), different);
+            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value(), different);
+        }
+        b[11] = "(022) 6030798";
+        a[15] = "Education - K12";
+        b[15] = "Education - Higher";
+        var result = preview(file(a, b));
+        assertEquals(2, result.getConflictCount());
+        assertTrue(result.getRows().get(0).getMessage().contains("Industry"));
+        assertFalse(result.getRows().get(0).getMessage().contains("Office Phone"));
+        verify(databases, never()).save(any());
+    }
+
+    @Test
     void personalEmailAndNormalizedMobileDuplicatesBlockPreviewAndImport() throws Exception {
         var file = file(row("Andi", "081234567890", "office@example.com", "same@gmail.com"),
                 row("Budi", "+62 812-3456-7890", "office@example.com", "SAME@gmail.com"));

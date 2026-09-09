@@ -71,6 +71,121 @@ class ExcelImportControllerTest {
     }
 
     @Test
+    void importsOnlySixtyCleanRowsOutOfOneHundredAndReportsOriginalRowNumbers() throws Exception {
+        List<String[]> rows = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            String[] data = row("Person" + i, "08123456" + String.format("%04d", i), "office@example.com", "");
+            if (i >= 60) {
+                data[9] = "";
+                data[1] = "Skipped Holding";
+                data[3] = "Skipped Company PT";
+            }
+            rows.add(data);
+        }
+        var upload = file(rows.toArray(String[][]::new));
+        assertEquals(60, preview(upload).getNewCount());
+        assertEquals(40, preview(upload).getIncompleteCount());
+        var response = controller.importDatabases(upload, "test");
+        assertEquals(200, response.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) response.getBody();
+        assertEquals(100, body.get("totalRows"));
+        assertEquals(60, body.get("count"));
+        assertEquals(60, body.get("newCount"));
+        assertEquals(0, body.get("updatedCount"));
+        assertEquals(40, body.get("skippedCount"));
+        var skipped = (List<ExcelImportController.RowPreview>) body.get("skippedRows");
+        assertEquals(62, skipped.get(0).getRowNum());
+        assertEquals(101, skipped.get(39).getRowNum());
+        assertTrue(skipped.stream().allMatch(r -> r.getMessage().contains("Job Title")));
+        verify(databases, times(60)).save(any());
+        verify(databases, never()).save(argThat(d -> Integer.parseInt(d.getFirstName().substring(6)) >= 60));
+        verify(companies, never()).save(argThat(c -> "Skipped Company PT".equals(c.getName())));
+        verify(groups, never()).save(argThat(g -> "Skipped Holding".equals(g.getName())));
+    }
+
+    @Test
+    void conflictedCompanySkipsEveryRowIncludingLaterMatchingRowsButOtherCompanyImports() throws Exception {
+        String[] first = row("First", "081234567891", "office@example.com", "");
+        String[] second = row("Second", "081234567892", "office@example.com", "");
+        String[] third = row("Third", "081234567893", "office@example.com", "");
+        second[15] = "Manufacturing";
+        String[] clean = row("Clean", "081234567894", "office@example.com", "");
+        clean[3] = "Other Company PT";
+        var upload = file(first, second, third, clean);
+        assertEquals(3, preview(upload).getConflictCount());
+        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "test").getBody();
+        assertEquals(1, body.get("newCount"));
+        assertEquals(3, body.get("skippedCount"));
+        verify(databases).save(argThat(d -> "Clean".equals(d.getFirstName())));
+        verify(companies, never()).save(company);
+    }
+
+    @Test
+    void personalDuplicatesAreBothSkippedWithoutBlockingAnIndependentCleanRow() throws Exception {
+        var upload = file(row("First", "081234567890", "office@example.com", "same@gmail.com"),
+                row("Second", "081234567890", "office@example.com", "same@gmail.com"),
+                row("Clean", "081234567891", "office@example.com", ""));
+        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "test").getBody();
+        assertEquals(1, body.get("count"));
+        assertEquals(2, body.get("skippedCount"));
+        verify(databases).save(argThat(d -> "Clean".equals(d.getFirstName())));
+        verify(emails, never()).save(argThat(e -> "same@gmail.com".equals(e.getEmail())));
+    }
+
+    @Test
+    void blankUpdateNeedsRealRetainedDataAndCleanUpdatesAreCountedSeparately() throws Exception {
+        Database existing = contact(1L, "Andi", "Person", "081234567890");
+        when(databases.findAll()).thenReturn(List.of(existing));
+        when(databases.findById(1L)).thenReturn(Optional.of(existing));
+        String[] update = row("Andi", "", "office@example.com", "");
+        update[9] = "";
+        assertEquals(1, preview(file(update)).getIncompleteCount());
+        existing.setJobTitle("Existing Job");
+        assertEquals(1, preview(file(update)).getDuplicateCount());
+        update[20] = "";
+        assertEquals(1, preview(file(update)).getIncompleteCount());
+        company.setCity("Jakarta");
+        String[] dirty = row("Dirty", "081234567892", "office@example.com", "bad-email");
+        var body = (java.util.Map<?, ?>) controller.importDatabases(file(update,
+                row("New", "081234567891", "office@example.com", ""), dirty), "test").getBody();
+        assertEquals(2, body.get("count"));
+        assertEquals(1, body.get("newCount"));
+        assertEquals(1, body.get("updatedCount"));
+        assertEquals(1, body.get("skippedCount"));
+        assertEquals("Existing Job", existing.getJobTitle());
+        assertEquals("081234567890", existing.getMobilePhone());
+    }
+
+    @Test
+    void revalidatesAtImportAndAllDirtyFilesHaveNoWrites() throws Exception {
+        var upload = file(row("Clean", "081234567890", "office@example.com", ""));
+        assertEquals(1, preview(upload).getNewCount());
+        when(databases.findAll()).thenReturn(List.of(contact(1L, "Other", "Person", "081234567890")));
+        var response = controller.importDatabases(upload, "test");
+        assertEquals(400, response.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) response.getBody();
+        assertEquals(0, body.get("count"));
+        assertEquals(1, body.get("skippedCount"));
+        verify(databases, never()).save(any());
+        verify(companies, never()).save(any());
+        verify(groups, never()).save(any());
+        verify(emails, never()).save(any());
+    }
+
+    @Test
+    void movingTheOnlyCompanyEmailToPersonalCannotMakeAnUpdateDirty() throws Exception {
+        Database existing = contact(1L, "Andi", "Person", "081234567890");
+        existing.getEmails().add(email(existing, "andi@gmail.com", true, true));
+        when(databases.findAll()).thenReturn(List.of(existing));
+        var upload = file(row("Andi", "081234567890", "", "andi@gmail.com"));
+        var result = preview(upload);
+        assertEquals(1, result.getIncompleteCount());
+        assertTrue(result.getRows().get(0).getMessage().contains("Company Email"));
+        assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value());
+        verify(databases, never()).save(any());
+    }
+
+    @Test
     void onlyNewImportedContactsGetUploadAttribution() throws Exception {
         assertEquals(200, controller.importDatabases(file(row("New", "081234567899", "office@example.com", "")), "test").getStatusCode().value());
         verify(databases).save(argThat(saved -> "New".equals(saved.getFirstName())

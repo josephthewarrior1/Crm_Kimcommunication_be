@@ -231,9 +231,11 @@ public class DatabaseController {
                 .toList();
 
         List<String> industries = industryScopedDatabases.stream()
-                .map(database -> database.getCompany() != null ? safe(database.getCompany().getIndustry()).trim() : "")
+                .map(database -> industryFilterLabel(database.getCompany() != null ? database.getCompany().getIndustry() : null))
                 .filter(value -> !value.isBlank())
-                .distinct()
+                .collect(Collectors.toMap(this::normalizeIndustry, value -> value,
+                        (existing, replacement) -> existing, LinkedHashMap::new))
+                .values().stream()
                 .sorted(String::compareToIgnoreCase)
                 .toList();
 
@@ -577,10 +579,7 @@ public class DatabaseController {
         if (industry == null || industry.isBlank()) return true;
         String databaseIndustry = normalizeIndustry(database.getCompany() != null ? database.getCompany().getIndustry() : null);
         String targetIndustry = normalizeIndustry(industry);
-        return !databaseIndustry.isBlank()
-                && (databaseIndustry.equals(targetIndustry)
-                || databaseIndustry.contains(targetIndustry)
-                || targetIndustry.contains(databaseIndustry));
+        return !databaseIndustry.isBlank() && databaseIndustry.equals(targetIndustry);
     }
 
     private boolean matchesCity(Database database, String city) {
@@ -641,11 +640,21 @@ public class DatabaseController {
     }
 
     private String normalizeIndustry(String value) {
-        return safe(value)
-                .trim()
-                .toLowerCase(Locale.ROOT)
-                .replace("mm", "m")
-                .replaceAll("s$", "");
+        return industryFilterLabel(value).toLowerCase(Locale.ROOT);
+    }
+
+    private String industryFilterLabel(String value) {
+        String label = safe(value).replaceAll("(?U)\\s+", " ").trim()
+                .replaceAll("\\s*/\\s*", "/");
+        // Read-time aliases only: never reclassify ambiguous industries or update stored data.
+        return switch (label.toLowerCase(Locale.ROOT)) {
+            case "financial service", "financial services",
+                    "financial services (banking/insurance/multifinance/fintech)" -> "Financial Services (Banking / Insurance / Multifinance / Fintech)";
+            case "telecommunication", "telecommunications" -> "Telecommunication";
+            case "mining/oil/gas" -> "Mining/Oil/Gas";
+            case "manufacturing", "manufaktur" -> "Manufacturing";
+            default -> label;
+        };
     }
 
     private String normalizeCity(String value) {

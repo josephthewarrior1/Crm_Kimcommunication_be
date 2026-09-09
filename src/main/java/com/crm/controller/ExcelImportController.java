@@ -61,15 +61,18 @@ public class ExcelImportController {
         ImportPreviewResponse preview = (ImportPreviewResponse) validation.getBody();
         List<RowPreview> invalidRows = preview.getRows().stream()
                 .filter(row -> !Set.of("NEW", "DUPLICATE").contains(row.getStatus())).toList();
-        if (!invalidRows.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message",
-                    "Import ditolak:\n- " + String.join("\n- ", invalidRows.stream()
-                            .map(row -> "Baris Excel " + row.getRowNum() + ": " + row.getMessage()).toList())));
-        }
         Map<Integer, RowPreview> validatedRows = new LinkedHashMap<>();
-        preview.getRows().forEach(row -> validatedRows.put(row.getRowNum(), row));
+        preview.getRows().stream().filter(row -> Set.of("NEW", "DUPLICATE").contains(row.getStatus()))
+                .forEach(row -> validatedRows.put(row.getRowNum(), row));
+        if (validatedRows.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message",
+                    "Tidak ada baris bersih untuk diimport. Perbaiki baris yang dilewati lalu upload ulang.",
+                    "count", 0, "skippedCount", invalidRows.size(), "skippedRows", invalidRows));
+        }
 
         int successCount = 0;
+        int newCount = 0;
+        int updatedCount = 0;
         try (InputStream is = file.getInputStream();
              Workbook workbook = WorkbookFactory.create(is)) {
             
@@ -176,6 +179,7 @@ public class ExcelImportController {
                     if (!linkedinUrl.isEmpty()) targetDb.setLinkedinUrl(linkedinUrl);
                     if (company != null) targetDb.setCompany(company);
                     targetDb = databaseRepository.save(targetDb);
+                    updatedCount++;
                 } else {
                     targetDb = Database.builder()
                             .createdByUserId(currentUser.getId())
@@ -193,6 +197,7 @@ public class ExcelImportController {
                             .company(company)
                             .build();
                     targetDb = databaseRepository.save(targetDb);
+                    newCount++;
                 }
 
                 // Merge email lists by their Excel column; never infer ownership from the domain.
@@ -223,12 +228,18 @@ public class ExcelImportController {
                     "IMPORT",
                     null,
                     file.getOriginalFilename(),
-                    "Import Excel '" + safeFileName(file.getOriginalFilename()) + "' berhasil memproses " + successCount + " data database"
+                    "Import Excel '" + safeFileName(file.getOriginalFilename()) + "': " + newCount
+                            + " kontak baru, " + updatedCount + " update, " + invalidRows.size() + " baris dilewati"
             );
 
             return ResponseEntity.ok(Map.of(
-                "message", "Excel data imported successfully",
-                "count", successCount
+                "message", successCount + " baris berhasil diproses; " + invalidRows.size() + " baris kotor dilewati.",
+                "count", successCount,
+                "newCount", newCount,
+                "updatedCount", updatedCount,
+                "totalRows", preview.getTotalRows(),
+                "skippedCount", invalidRows.size(),
+                "skippedRows", invalidRows
             ));
             
         } catch (Exception e) {
@@ -256,6 +267,7 @@ public class ExcelImportController {
             Map<String, List<RowPreview>> fileOwners = new LinkedHashMap<>();
             Map<String, List<RowPreview>> companyRows = new LinkedHashMap<>();
             Map<String, Map<Integer, String>> companyValues = new LinkedHashMap<>();
+            Map<String, Set<Integer>> companyConflicts = new LinkedHashMap<>();
 
             for (int r = 1; r <= sheet.getLastRowNum(); r++) {
                 Row row = sheet.getRow(r);
@@ -305,11 +317,10 @@ public class ExcelImportController {
                         cell(row, 4), firstName, lastName, cell(row, 7), cell(row, 9), cell(row, 10),
                         cleanPhone(cell(row, 11)), mobilePhone, companyEmail, cell(row, 15), cell(row, 20), cell(row, 22));
                 if (target != null) {
-                    // Existing values satisfy a merge update; a new company must still be complete.
-                    Set<String> retainedContactFields = Set.of("Salutation", "Last Name", "Position", "Job Title", "Mobile Phone", "Company Email");
-                    boolean companyExists = matchedCompany != null;
-                    missing.removeIf(field -> !Set.of("First Name", "Company Name").contains(field)
-                            && (companyExists || retainedContactFields.contains(field)));
+                    // A blank update is valid only if the retained value actually fills that field.
+                    Database retained = target;
+                    Company retainedCompany = matchedCompany;
+                    missing.removeIf(field -> hasRetainedValue(field, retained, retainedCompany, personal));
                 }
                 if (!missing.isEmpty()) {
                     if ("NEW".equals(preview.getStatus())) preview.setStatus("INCOMPLETE");
@@ -346,12 +357,15 @@ public class ExcelImportController {
                     if (value.isEmpty()) continue;
                     String previous = values.putIfAbsent(column, value);
                     if (previous != null && !previous.equals(value)) {
-                        for (RowPreview companyRow : companyRows.get(companyKey)) {
-                            conflict(companyRow, "Data company tidak konsisten antarbaris pada kolom " + HEADERS.get(column) + ".");
-                        }
+                        companyConflicts.computeIfAbsent(companyKey, key -> new LinkedHashSet<>()).add(column);
                     }
                 }
             }
+
+            // Every row of a conflicting company must be skipped, including later rows matching the first.
+            companyConflicts.forEach((key, columns) -> companyRows.get(key).forEach(row ->
+                    columns.forEach(column -> conflict(row,
+                            "Data company tidak konsisten antarbaris pada kolom " + HEADERS.get(column) + "."))));
 
             // Company emails may repeat, except when that address is also claimed as personal in this file.
             for (RowPreview row : previews) {
@@ -399,6 +413,28 @@ public class ExcelImportController {
                     + String.join(", ", matches.stream().map(company -> String.valueOf(company.getId())).toList()) + ").");
         }
         return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private boolean hasRetainedValue(String field, Database contact, Company company, Set<String> incomingPersonal) {
+        String value = switch (field) {
+            case "Salutation" -> contact.getSalutation();
+            case "Last Name" -> contact.getLastName();
+            case "Position" -> contact.getPositionLevel() == null ? null : contact.getPositionLevel().getValue();
+            case "Job Title" -> contact.getJobTitle();
+            case "Mobile Phone" -> cleanPhone(contact.getMobilePhone());
+            case "Company Email" -> emails(contact).stream().filter(ExcelImportController::isCompanyEmail)
+                    .map(DatabaseEmail::getEmail).filter(email -> !normalizeField(email).isEmpty()
+                            && !incomingPersonal.contains(normalizeKey(email))).findFirst().orElse(null);
+            case "Nama Group Holding" -> company == null || company.getGroup() == null ? null : company.getGroup().getName();
+            case "Nama Brand" -> company == null ? null : company.getBrandName();
+            case "Address" -> company == null ? null : company.getAddress();
+            case "Office Phone" -> company == null ? null : cleanPhone(company.getOfficePhone());
+            case "Industry" -> company == null ? null : company.getIndustry();
+            case "City" -> company == null ? null : company.getCity();
+            case "Company Website" -> company == null ? null : company.getWebsite();
+            default -> null;
+        };
+        return !normalizeField(value).isEmpty();
     }
 
     private Database findExistingDatabase(List<Database> databases, String firstName, String lastName,

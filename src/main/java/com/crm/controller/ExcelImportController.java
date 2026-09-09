@@ -105,6 +105,12 @@ public class ExcelImportController {
                             + String.join(", ", corporateEmailsInPersonal) + "]");
                 }
 
+                List<String> personalEmailConflicts = getPersonalEmailConflicts(personalEmail, firstName, lastName, companyName);
+                if (!personalEmailConflicts.isEmpty()) {
+                    validationErrors.add(rowLabel + " (" + fullName + "): Personal Email sudah dipakai kontak lain ["
+                            + String.join(", ", personalEmailConflicts) + "]");
+                }
+
                 registerEmailsForRow(emailOwnersInFile, rowLabel, fullName, companyEmail, personalEmail, row.getRowNum() + 1);
             }
 
@@ -244,6 +250,7 @@ public class ExcelImportController {
                 if (targetDb.getEmails() == null) {
                     targetDb.setEmails(new ArrayList<>());
                 }
+                Long targetDatabaseId = targetDb.getId();
 
                 List<String> cTokens = splitEmailTokens(companyEmail);
                 List<String> pTokens = splitEmailTokens(personalEmail);
@@ -303,15 +310,15 @@ public class ExcelImportController {
                 // Save Corporate Emails
                 boolean firstCorp = true;
                 for (String cEmail : corporateEmails) {
-                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(cEmail);
-                    if (existingGlobalEmail.isPresent()) {
-                        DatabaseEmail dEmail = existingGlobalEmail.get();
-                        if (dEmail.getDatabase() != null && dEmail.getDatabase().getId().equals(targetDb.getId())) {
-                            dEmail.setIsCorporate(true);
-                            dEmail.setIsPrimary(firstCorp);
-                            dEmail.setEmailType("company");
-                            databaseEmailRepository.save(dEmail);
-                        }
+                    DatabaseEmail existingForContact = databaseEmailRepository.findAllByEmailIgnoreCase(cEmail).stream()
+                            .filter(email -> email.getDatabase() != null && email.getDatabase().getId().equals(targetDatabaseId))
+                            .findFirst()
+                            .orElse(null);
+                    if (existingForContact != null) {
+                        existingForContact.setIsCorporate(true);
+                        existingForContact.setIsPrimary(firstCorp);
+                        existingForContact.setEmailType("company");
+                        databaseEmailRepository.save(existingForContact);
                     } else {
                         DatabaseEmail emailObj = DatabaseEmail.builder()
                                 .email(cEmail)
@@ -329,16 +336,17 @@ public class ExcelImportController {
                 // Save Personal Emails
                 boolean firstPers = true;
                 for (String pEmail : personalEmails) {
-                    Optional<DatabaseEmail> existingGlobalEmail = databaseEmailRepository.findByEmail(pEmail);
-                    if (existingGlobalEmail.isPresent()) {
-                        DatabaseEmail dEmail = existingGlobalEmail.get();
-                        if (dEmail.getDatabase() != null && dEmail.getDatabase().getId().equals(targetDb.getId())) {
-                            dEmail.setIsCorporate(false);
-                            dEmail.setIsPrimary(firstPers);
-                            dEmail.setEmailType("personal");
-                            databaseEmailRepository.save(dEmail);
-                        }
-                    } else {
+                    List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(pEmail);
+                    DatabaseEmail existingForContact = existingEmails.stream()
+                            .filter(email -> email.getDatabase() != null && email.getDatabase().getId().equals(targetDatabaseId))
+                            .findFirst()
+                            .orElse(null);
+                    if (existingForContact != null) {
+                        existingForContact.setIsCorporate(false);
+                        existingForContact.setIsPrimary(firstPers);
+                        existingForContact.setEmailType("personal");
+                        databaseEmailRepository.save(existingForContact);
+                    } else if (existingEmails.isEmpty()) {
                         DatabaseEmail emailObj = DatabaseEmail.builder()
                                 .email(pEmail)
                                 .emailType("personal")
@@ -348,6 +356,8 @@ public class ExcelImportController {
                                 .build();
                         databaseEmailRepository.save(emailObj);
                         targetDb.getEmails().add(emailObj);
+                    } else {
+                        throw new IllegalStateException("Personal email already belongs to another contact: " + pEmail);
                     }
                     firstPers = false;
                 }
@@ -432,6 +442,7 @@ public class ExcelImportController {
                 Database existingDatabase = findExistingDatabase(firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
 
                 boolean phoneShared = false;
+                boolean phoneSameCompany = false;
                 String sharedDatabaseName = "";
                 if (!mobilePhone.isEmpty()) {
                     String normPhone = formatNormalizedPhone(mobilePhone);
@@ -443,25 +454,22 @@ public class ExcelImportController {
                     }
                     if (otherPhoneDatabase != null && (existingDatabase == null || !existingDatabase.getId().equals(otherPhoneDatabase.getId()))) {
                         phoneShared = true;
-                        sharedDatabaseName = otherPhoneDatabase.getFirstName() + " " + otherPhoneDatabase.getLastName();
+                        String otherCompany = otherPhoneDatabase.getCompany() != null ? Objects.toString(otherPhoneDatabase.getCompany().getName(), "") : "";
+                        phoneSameCompany = !companyName.isBlank() && otherCompany.trim().equalsIgnoreCase(companyName.trim());
+                        sharedDatabaseName = otherPhoneDatabase.getFirstName() + " " + otherPhoneDatabase.getLastName()
+                                + (!phoneSameCompany && !otherCompany.isBlank() ? " (" + otherCompany + ")" : "");
                     }
                 }
 
                 boolean emailShared = false;
                 String sharedEmailDatabaseName = "";
-                List<String> allTokens = new ArrayList<>(splitEmailTokens(companyEmail));
-                allTokens.addAll(splitEmailTokens(personalEmail));
-                for (String token : allTokens) {
-                    DatabaseEmail otherEmailRecord = databaseEmailRepository.findByEmail(token).orElse(null);
-                    if (otherEmailRecord != null && otherEmailRecord.getDatabase() != null) {
-                        Database other = otherEmailRecord.getDatabase();
-                        if (existingDatabase == null || !existingDatabase.getId().equals(other.getId())) {
-                            emailShared = true;
-                            sharedEmailDatabaseName = other.getFirstName() + " " + other.getLastName();
-                            break;
-                        }
-                    }
+                List<String> personalEmailConflicts = getPersonalEmailConflicts(personalEmail, firstName, lastName, companyName);
+                if (!personalEmailConflicts.isEmpty()) {
+                    emailShared = true;
+                    sharedEmailDatabaseName = String.join(", ", personalEmailConflicts);
                 }
+
+                List<String> sharedCompanyEmails = getSharedCompanyEmailWarnings(companyEmail, firstName, lastName, companyName);
 
                 List<String> corpEmailsInPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
 
@@ -480,9 +488,11 @@ public class ExcelImportController {
                         missing,
                         existingDatabase != null,
                         phoneShared,
+                        phoneSameCompany,
                         sharedDatabaseName,
                         emailShared,
                         sharedEmailDatabaseName,
+                        sharedCompanyEmails,
                         corpEmailsInPersonal
                 ));
             }
@@ -522,15 +532,29 @@ public class ExcelImportController {
                     duplicateCount++;
                 }
 
+                if (state.emailShared()) {
+                    if ("NEW".equals(status) || "DUPLICATE".equals(status)) {
+                        status = "CONFLICT";
+                    }
+                    messageParts.add("DITOLAK: Personal Email sudah dipakai kontak lain: " + state.sharedEmailDatabaseName() + ".");
+                    conflictCount++;
+                }
+
                 if ("NEW".equals(status)) {
                     newCount++;
                     messageParts.add("Akan disimpan sebagai kontak baru di database.");
-                    if (state.phoneShared()) {
-                        messageParts.add("Peringatan: Nomor telepon sama dengan database '" + state.sharedDatabaseName() + "' (Kandidat Tikus).");
+                }
+
+                if (state.phoneShared()) {
+                    if (state.phoneSameCompany()) {
+                        messageParts.add("Peringatan: Nomor telepon sama dengan rekan sekantor '" + state.sharedDatabaseName() + "'.");
+                    } else {
+                        messageParts.add("Peringatan: Nomor telepon sama dengan database perusahaan lain '" + state.sharedDatabaseName() + "' (Kandidat Tikus / Duplikat Lintas Perusahaan).");
                     }
-                    if (state.emailShared()) {
-                        messageParts.add("Peringatan: Email sama dengan database '" + state.sharedEmailDatabaseName() + "' (Kandidat Tikus).");
-                    }
+                }
+
+                if (!state.sharedCompanyEmails().isEmpty()) {
+                    messageParts.add("Info: Company email digunakan bersama dengan kontak lain: " + String.join(", ", state.sharedCompanyEmails()) + ".");
                 }
 
                 if (state.corpEmailsInPersonal() != null && !state.corpEmailsInPersonal().isEmpty()) {
@@ -569,28 +593,16 @@ public class ExcelImportController {
             String companyEmail,
             String personalEmail) {
 
-        // 1. Match by Email tokens
-        List<String> tokens = new ArrayList<>(splitEmailTokens(companyEmail));
-        tokens.addAll(splitEmailTokens(personalEmail));
-        for (String email : tokens) {
-            Optional<DatabaseEmail> de = databaseEmailRepository.findByEmail(email);
-            if (de.isPresent() && de.get().getDatabase() != null) {
-                return de.get().getDatabase();
+        // Personal email uniquely identifies a person; company email and phone may be shared.
+        for (String email : splitEmailTokens(personalEmail)) {
+            for (DatabaseEmail match : databaseEmailRepository.findAllByEmailIgnoreCase(email)) {
+                if (match.getDatabase() != null && sameIdentity(match.getDatabase(), firstName, lastName, companyName)) {
+                    return match.getDatabase();
+                }
             }
         }
 
-        // 2. Match by Phone Number
-        String normPhone = formatNormalizedPhone(mobilePhone);
-        if (normPhone != null) {
-            Database byNorm = databaseRepository.findByNormalizedPhone(normPhone).stream().findFirst().orElse(null);
-            if (byNorm != null) return byNorm;
-        }
-        if (mobilePhone != null && !mobilePhone.isBlank()) {
-            Database byPhone = databaseRepository.findByMobilePhone(mobilePhone.trim()).stream().findFirst().orElse(null);
-            if (byPhone != null) return byPhone;
-        }
-
-        // 3. Match by Name
+        // Same name within the same company is an update; shared phone/company email is not.
         if (firstName != null && !firstName.isBlank()) {
             List<Database> nameMatches;
             if (lastName != null && !lastName.isBlank()) {
@@ -604,19 +616,10 @@ public class ExcelImportController {
                 }
             }
 
-            if (nameMatches.size() == 1) {
-                return nameMatches.get(0);
-            } else if (nameMatches.size() > 1) {
-                if (companyName != null && !companyName.isBlank()) {
-                    for (Database d : nameMatches) {
-                        if (d.getCompany() != null && d.getCompany().getName() != null
-                                && d.getCompany().getName().equalsIgnoreCase(companyName.trim())) {
-                            return d;
-                        }
-                    }
-                }
-                return nameMatches.get(0);
-            }
+            return nameMatches.stream()
+                    .filter(database -> sameIdentity(database, firstName, lastName, companyName))
+                    .findFirst()
+                    .orElse(null);
         }
 
         return null;
@@ -654,6 +657,41 @@ public class ExcelImportController {
                 .filter(email -> !isPublicPersonalEmail(email))
                 .distinct()
                 .toList();
+    }
+
+    private List<String> getSharedCompanyEmailWarnings(String companyEmail, String firstName, String lastName, String companyName) {
+        return splitEmailTokens(companyEmail).stream()
+                .flatMap(email -> databaseEmailRepository.findAllByEmailIgnoreCase(email).stream())
+                .map(DatabaseEmail::getDatabase)
+                .filter(Objects::nonNull)
+                .filter(database -> !sameIdentity(database, firstName, lastName, companyName))
+                .map(database -> {
+                    String cName = database.getCompany() != null ? Objects.toString(database.getCompany().getName(), "") : "";
+                    return Objects.toString(database.getFirstName(), "") + " "
+                            + Objects.toString(database.getLastName(), "")
+                            + (cName.isBlank() ? "" : " (" + cName + ")");
+                })
+                .distinct()
+                .toList();
+    }
+
+    private List<String> getPersonalEmailConflicts(String personalEmail, String firstName, String lastName, String companyName) {
+        return splitEmailTokens(personalEmail).stream()
+                .flatMap(email -> databaseEmailRepository.findAllByEmailIgnoreCase(email).stream())
+                .map(DatabaseEmail::getDatabase)
+                .filter(Objects::nonNull)
+                .filter(database -> !sameIdentity(database, firstName, lastName, companyName))
+                .map(database -> Objects.toString(database.getFirstName(), "") + " "
+                        + Objects.toString(database.getLastName(), "") + " (ID " + database.getId() + ")")
+                .distinct()
+                .toList();
+    }
+
+    private boolean sameIdentity(Database database, String firstName, String lastName, String companyName) {
+        String databaseCompany = database.getCompany() != null ? Objects.toString(database.getCompany().getName(), "") : "";
+        return Objects.toString(database.getFirstName(), "").trim().equalsIgnoreCase(Objects.toString(firstName, "").trim())
+                && Objects.toString(database.getLastName(), "").trim().equalsIgnoreCase(Objects.toString(lastName, "").trim())
+                && databaseCompany.trim().equalsIgnoreCase(Objects.toString(companyName, "").trim());
     }
 
     private String formatNormalizedPhone(String phone) {
@@ -783,7 +821,6 @@ public class ExcelImportController {
             String personalEmail,
             int excelRowNumber) {
         Set<String> emailsInRow = new LinkedHashSet<>();
-        emailsInRow.addAll(splitEmailTokens(companyEmail));
         emailsInRow.addAll(splitEmailTokens(personalEmail));
 
         for (String email : emailsInRow) {
@@ -823,7 +860,7 @@ public class ExcelImportController {
                     continue;
                 }
 
-                String message = "Konflik Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Satu email tidak boleh dipakai 2 nama berbeda di Excel.";
+                String message = "Konflik Personal Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Personal email tidak boleh dipakai 2 nama berbeda di Excel.";
                 conflictsByRow
                         .computeIfAbsent(owner.excelRowNumber(), key -> new ArrayList<>())
                         .add(message);
@@ -878,8 +915,10 @@ public class ExcelImportController {
             List<String> missing,
             boolean existingDatabase,
             boolean phoneShared,
+            boolean phoneSameCompany,
             String sharedDatabaseName,
             boolean emailShared,
             String sharedEmailDatabaseName,
+            List<String> sharedCompanyEmails,
             List<String> corpEmailsInPersonal) {}
 }

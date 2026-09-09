@@ -216,8 +216,9 @@ public class EmsService {
 
             // Find or create Database record
             Database database;
-            Optional<DatabaseEmail> existingEmailOpt = (email != null && !email.isEmpty()) 
-                    ? databaseEmailRepository.findByEmail(email.toLowerCase()) 
+            boolean personalEmail = email != null && !email.isEmpty() && isPersonalEmail(email);
+            Optional<DatabaseEmail> existingEmailOpt = personalEmail
+                    ? databaseEmailRepository.findAllByEmailIgnoreCase(email).stream().findFirst()
                     : Optional.empty();
 
             if (existingEmailOpt.isPresent()) {
@@ -249,7 +250,8 @@ public class EmsService {
                     database = databaseRepository.save(database);
                 }
 
-                if (email != null && !email.isEmpty() && !databaseEmailRepository.findByEmail(email.toLowerCase()).isPresent()) {
+                if (email != null && !email.isEmpty()
+                        && !databaseEmailRepository.existsByDatabaseIdAndEmailIgnoreCase(database.getId(), email)) {
                     boolean isPersonal = isPersonalEmail(email);
                     DatabaseEmail dbEmail = DatabaseEmail.builder()
                             .database(database)

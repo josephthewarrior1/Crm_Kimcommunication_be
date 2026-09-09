@@ -43,6 +43,9 @@ public class SuspiciousIdentityService {
                     if (other.getId().equals(database.getId())) {
                         continue;
                     }
+                    if (sameCompany(database, other)) {
+                        continue;
+                    }
 
                     // If names are different
                     if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
@@ -93,8 +96,12 @@ public class SuspiciousIdentityService {
         if (databaseEmails != null) {
             for (DatabaseEmail ce : databaseEmails) {
                 String emailStr = normalizeField(ce.getEmail());
-                if (!emailStr.isEmpty()) {
-                    databaseEmailRepository.findByEmail(emailStr).ifPresent(otherEmail -> {
+                if (!emailStr.isEmpty() && "personal".equalsIgnoreCase(ce.getEmailType())) {
+                    databaseEmailRepository.findAllByEmailIgnoreCase(emailStr).stream()
+                            .filter(otherEmail -> otherEmail.getDatabase() != null
+                                    && !otherEmail.getDatabase().getId().equals(database.getId()))
+                            .findFirst()
+                            .ifPresent(otherEmail -> {
                         if (otherEmail.getDatabase() != null && !otherEmail.getDatabase().getId().equals(database.getId())) {
                             Database other = otherEmail.getDatabase();
 
@@ -175,6 +182,12 @@ public class SuspiciousIdentityService {
                 }
             }
         }
+    }
+
+    private boolean sameCompany(Database first, Database second) {
+        return first.getCompany() != null && second.getCompany() != null
+                && first.getCompany().getId() != null
+                && first.getCompany().getId().equals(second.getCompany().getId());
     }
 
     public String extractSubscriberDigits(String value) {

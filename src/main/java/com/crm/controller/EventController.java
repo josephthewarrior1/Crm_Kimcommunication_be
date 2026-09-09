@@ -579,6 +579,13 @@ public class EventController {
                         industry, city, website
                 );
 
+                Database personalEmailOwner = findPersonalEmailOwner(allDatabases, personalEmail);
+                if (personalEmailOwner != null && !sameName(personalEmailOwner, firstName, lastName)) {
+                    issues.add("Personal Email sudah dipakai kontak lain: "
+                            + safe(personalEmailOwner.getFirstName()) + " " + safe(personalEmailOwner.getLastName())
+                            + " (ID " + personalEmailOwner.getId() + ")");
+                }
+
                 EventParticipant existingEventParticipant = findExistingEventParticipant(existingParticipants, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
                 Database existingDatabase = findExistingDatabase(allDatabases, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
 
@@ -2118,7 +2125,15 @@ public class EventController {
 
     private void saveImportEmail(Database database, String email, String emailType, boolean corporate) {
         String normalizedEmail = safe(email).trim().toLowerCase(Locale.ROOT);
-        if (normalizedEmail.isBlank() || databaseEmailRepository.findByEmail(normalizedEmail).isPresent()) {
+        if (normalizedEmail.isBlank()) {
+            return;
+        }
+
+        List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(normalizedEmail);
+        boolean personal = "personal".equalsIgnoreCase(emailType);
+        if ((personal && !existingEmails.isEmpty())
+                || existingEmails.stream().anyMatch(existing -> existing.getDatabase() != null
+                        && existing.getDatabase().getId().equals(database.getId()))) {
             return;
         }
 
@@ -2241,9 +2256,6 @@ public class EventController {
             String personalEmail,
             int excelRowNumber) {
         Set<String> emailsInRow = new LinkedHashSet<>();
-        if (!safe(companyEmail).isBlank()) {
-            emailsInRow.add(companyEmail.trim().toLowerCase(Locale.ROOT));
-        }
         if (!safe(personalEmail).isBlank()) {
             emailsInRow.add(personalEmail.trim().toLowerCase(Locale.ROOT));
         }
@@ -2275,7 +2287,7 @@ public class EventController {
                     continue;
                 }
 
-                String message = "Konflik Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Satu email tidak boleh dipakai 2 nama berbeda di Excel.";
+                String message = "Konflik Personal Email: Email '" + owner.email() + "' sama dengan " + String.join(", ", others) + ". Personal email tidak boleh dipakai 2 nama berbeda di Excel.";
                 conflictsByRow
                         .computeIfAbsent(owner.excelRowNumber(), key -> new ArrayList<>())
                         .add(message);
@@ -2352,18 +2364,29 @@ public class EventController {
         String dbFirstName = safe(database.getFirstName()).trim();
         String dbLastName = safe(database.getLastName()).trim();
         String dbCompanyName = database.getCompany() != null ? safe(database.getCompany().getName()).trim() : "";
-        String dbMobilePhone = safe(database.getMobilePhone()).trim();
-
         boolean nameMatch = !firstName.isBlank() && dbFirstName.equalsIgnoreCase(firstName)
                 && (lastName.isBlank() || dbLastName.equalsIgnoreCase(lastName));
         boolean companyMatch = companyName.isBlank() || dbCompanyName.equalsIgnoreCase(companyName);
-        boolean phoneMatch = !mobilePhone.isBlank() && dbMobilePhone.equalsIgnoreCase(mobilePhone);
-        boolean emailMatch = database.getEmails() != null && database.getEmails().stream().anyMatch(email ->
-                (!companyEmail.isBlank() && safe(email.getEmail()).equalsIgnoreCase(companyEmail))
-                        || (!personalEmail.isBlank() && safe(email.getEmail()).equalsIgnoreCase(personalEmail))
-        );
+        boolean emailMatch = !personalEmail.isBlank() && database.getEmails() != null
+                && database.getEmails().stream().anyMatch(email ->
+                        "personal".equalsIgnoreCase(email.getEmailType())
+                                && safe(email.getEmail()).equalsIgnoreCase(personalEmail));
 
-        return (nameMatch && companyMatch) || phoneMatch || emailMatch;
+        return nameMatch && (companyMatch || emailMatch);
+    }
+
+    private Database findPersonalEmailOwner(List<Database> databases, String personalEmail) {
+        if (personalEmail.isBlank()) return null;
+        return databases.stream()
+                .filter(database -> database.getEmails() != null && database.getEmails().stream().anyMatch(email ->
+                        safe(email.getEmail()).equalsIgnoreCase(personalEmail)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean sameName(Database database, String firstName, String lastName) {
+        return safe(database.getFirstName()).trim().equalsIgnoreCase(firstName.trim())
+                && safe(database.getLastName()).trim().equalsIgnoreCase(lastName.trim());
     }
 
     private String safe(String value) {

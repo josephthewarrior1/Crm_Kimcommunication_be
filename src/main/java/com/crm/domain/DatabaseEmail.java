@@ -20,7 +20,7 @@ public class DatabaseEmail {
     @JoinColumn(name = "database_id", nullable = false)
     private Database database;
 
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String email;
 
     @Column(name = "email_type")

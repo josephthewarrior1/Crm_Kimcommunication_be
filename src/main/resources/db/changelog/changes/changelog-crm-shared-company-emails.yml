@@ -1,0 +1,33 @@
+databaseChangeLog:
+  - changeSet:
+      id: allow-shared-company-emails
+      author: codex
+      changes:
+        - sql:
+            dbms: postgresql
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE constraint_name text;
+              BEGIN
+                SELECT con.conname INTO constraint_name
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                WHERE nsp.nspname = current_schema()
+                  AND rel.relname = 'database_emails'
+                  AND con.contype = 'u'
+                  AND pg_get_constraintdef(con.oid) = 'UNIQUE (email)'
+                LIMIT 1;
+
+                IF constraint_name IS NOT NULL THEN
+                  EXECUTE format('ALTER TABLE database_emails DROP CONSTRAINT %I', constraint_name);
+                END IF;
+              END $$;
+
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_personal_email_lower
+                ON database_emails (LOWER(email))
+                WHERE LOWER(COALESCE(email_type, '')) = 'personal';
+
+              CREATE UNIQUE INDEX IF NOT EXISTS unique_database_email_lower
+                ON database_emails (database_id, LOWER(email));

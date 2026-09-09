@@ -393,7 +393,12 @@ public class DatabaseController {
         }
 
         String cleanEmail = databaseEmail.getEmail().trim().toLowerCase();
-        if (databaseEmailRepository.findByEmail(cleanEmail).isPresent()) {
+        boolean personalEmail = "personal".equalsIgnoreCase(databaseEmail.getEmailType());
+        List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail);
+        boolean duplicate = personalEmail
+                ? !existingEmails.isEmpty()
+                : existingEmails.stream().anyMatch(email -> email.getDatabase() != null && email.getDatabase().getId().equals(databaseId));
+        if (duplicate) {
             return ResponseEntity.badRequest().body("Email address is already in use");
         }
 
@@ -451,19 +456,30 @@ public class DatabaseController {
         }
 
         return databaseEmailRepository.findById(emailId).map(email -> {
+            String cleanEmail = updated.getEmail() != null && !updated.getEmail().trim().isEmpty()
+                    ? updated.getEmail().trim().toLowerCase()
+                    : email.getEmail();
+            String targetType = updated.getEmailType() != null ? updated.getEmailType() : email.getEmailType();
+            boolean personalEmail = "personal".equalsIgnoreCase(targetType);
+            boolean duplicate = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail).stream()
+                    .filter(existing -> !existing.getId().equals(emailId))
+                    .anyMatch(existing -> personalEmail || (existing.getDatabase() != null && existing.getDatabase().getId().equals(databaseId)));
+            if (duplicate) {
+                return ResponseEntity.badRequest().body("Email address is already in use");
+            }
             if (updated.getEmail() != null && !updated.getEmail().trim().isEmpty()) {
-                String cleanEmail = updated.getEmail().trim().toLowerCase();
-                Optional<DatabaseEmail> existing = databaseEmailRepository.findByEmail(cleanEmail);
-                if (existing.isPresent() && !existing.get().getId().equals(emailId)) {
-                    return ResponseEntity.badRequest().body("Email address is already in use");
-                }
                 email.setEmail(cleanEmail);
             }
             if (updated.getEmailType() != null) {
                 email.setEmailType(updated.getEmailType());
+                if ("personal".equalsIgnoreCase(updated.getEmailType())) email.setIsCorporate(false);
+                if ("company".equalsIgnoreCase(updated.getEmailType())) email.setIsCorporate(true);
             }
             if (updated.getIsPrimary() != null) {
                 email.setIsPrimary(updated.getIsPrimary());
+            }
+            if (updated.getIsCorporate() != null) {
+                email.setIsCorporate(updated.getIsCorporate());
             }
             DatabaseEmail savedEmail = databaseEmailRepository.save(email);
             if (email.getDatabase() != null) {

@@ -60,6 +60,15 @@ public class Database {
     @Enumerated(EnumType.STRING)
     private DatabaseSource source;
 
+    // Server-owned attribution; editing a contact must never transfer upload credit.
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    @Column(name = "created_by_user_id", updatable = false)
+    private Long createdByUserId;
+
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    @Column(name = "entry_method", updatable = false)
+    private String entryMethod;
+
     @com.fasterxml.jackson.annotation.JsonProperty("isActive")
     @Column(name = "is_active", nullable = false)
     @Builder.Default

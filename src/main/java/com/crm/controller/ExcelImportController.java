@@ -178,6 +178,8 @@ public class ExcelImportController {
                     targetDb = databaseRepository.save(targetDb);
                 } else {
                     targetDb = Database.builder()
+                            .createdByUserId(currentUser.getId())
+                            .entryMethod("excel_import")
                             .salutation(salutation.isEmpty() ? null : salutation)
                             .firstName(firstName)
                             .lastName(lastName.isEmpty() ? null : lastName)

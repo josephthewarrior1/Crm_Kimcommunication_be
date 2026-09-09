@@ -53,6 +53,33 @@ public class DashboardController {
     @Autowired
     private SecurityHelper securityHelper;
 
+    @GetMapping("/industry-summary")
+    public ResponseEntity<?> getIndustrySummary(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        if (securityHelper.getAuthenticatedUser(authHeader) == null) {
+            return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+        }
+        List<Map<String, Object>> items = companyRepository.summarizeIndustries().stream()
+                .map(row -> Map.<String, Object>of(
+                        "industry", row.getIndustry(),
+                        "companyCount", row.getCompanyCount(),
+                        "databaseCount", row.getDatabaseCount(),
+                        "activeDatabaseCount", row.getActiveDatabaseCount(),
+                        "inactiveDatabaseCount", row.getInactiveDatabaseCount()))
+                .toList();
+        return ResponseEntity.ok(Map.of(
+                "totals", Map.of(
+                        "industries", items.size(),
+                        "companies", sumIndustryCount(items, "companyCount"),
+                        "databases", sumIndustryCount(items, "databaseCount"),
+                        "activeDatabases", sumIndustryCount(items, "activeDatabaseCount"),
+                        "inactiveDatabases", sumIndustryCount(items, "inactiveDatabaseCount")),
+                "items", items));
+    }
+
+    private long sumIndustryCount(List<Map<String, Object>> items, String field) {
+        return items.stream().mapToLong(item -> ((Number) item.get(field)).longValue()).sum();
+    }
+
     @GetMapping("/summary")
     public ResponseEntity<?> getDashboardSummary(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -73,7 +100,6 @@ public class DashboardController {
                 .entrySet()
                 .stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-                .limit(6)
                 .map(entry -> Map.<String, Object>of("name", entry.getKey(), "value", entry.getValue()))
                 .toList();
 

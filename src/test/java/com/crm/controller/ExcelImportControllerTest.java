@@ -71,6 +71,26 @@ class ExcelImportControllerTest {
     }
 
     @Test
+    void onlyNewImportedContactsGetUploadAttribution() throws Exception {
+        assertEquals(200, controller.importDatabases(file(row("New", "081234567899", "office@example.com", "")), "test").getStatusCode().value());
+        verify(databases).save(argThat(saved -> "New".equals(saved.getFirstName())
+                && Long.valueOf(1L).equals(saved.getCreatedByUserId()) && "excel_import".equals(saved.getEntryMethod())));
+        clearInvocations(databases);
+        Database existing = contact(1L, "Andi", "Person", "081234567890");
+        existing.setCreatedByUserId(9L);
+        existing.setEntryMethod("manual");
+        when(databases.findAll()).thenReturn(List.of(existing));
+        when(databases.findById(1L)).thenReturn(Optional.of(existing));
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "test").getStatusCode().value());
+        assertEquals(9L, existing.getCreatedByUserId());
+        assertEquals("manual", existing.getEntryMethod());
+        // Legacy contacts remain unattributed even when imported again.
+        existing.setCreatedByUserId(null); existing.setEntryMethod(null);
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "test").getStatusCode().value());
+        assertNull(existing.getCreatedByUserId());assertNull(existing.getEntryMethod());
+    }
+
+    @Test
     void sharedCompanyEmailAndOfficePhoneAreAllowedIncludingPublicDomains() throws Exception {
         for (String shared : List.of("sales@example.com", "office@gmail.com")) {
             String[] a = row("Andi", "081234567890", shared, "andi@gmail.com");

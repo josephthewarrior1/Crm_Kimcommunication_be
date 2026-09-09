@@ -1,0 +1,82 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-database-upload-targets-1
+      author: codex
+      changes:
+        - addColumn:
+            tableName: databases
+            columns:
+              - column:
+                  name: created_by_user_id
+                  type: BIGINT
+              - column:
+                  name: entry_method
+                  type: VARCHAR(32)
+        - addForeignKeyConstraint:
+            baseTableName: databases
+            baseColumnNames: created_by_user_id
+            referencedTableName: app_users
+            referencedColumnNames: id
+            constraintName: fk_databases_created_by_user
+            onDelete: SET NULL
+        - createIndex:
+            tableName: databases
+            indexName: idx_databases_creator_date
+            columns:
+              - column:
+                  name: created_by_user_id
+              - column:
+                  name: created_at
+        - createTable:
+            tableName: database_upload_targets
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: target_month
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: target_count
+                  type: INT
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: database_upload_targets
+            columnNames: user_id, target_month
+            constraintName: uq_database_upload_target_user_month
+        - addForeignKeyConstraint:
+            baseTableName: database_upload_targets
+            baseColumnNames: user_id
+            referencedTableName: app_users
+            referencedColumnNames: id
+            constraintName: fk_database_upload_target_user
+            onDelete: CASCADE
+        - sql:
+            sql: ALTER TABLE database_upload_targets ADD CONSTRAINT ck_database_upload_target_count CHECK (target_count >= 0)
+  - changeSet:
+      id: crm-database-upload-targets-2-daily-mode
+      author: codex
+      changes:
+        - addColumn:
+            tableName: database_upload_targets
+            columns:
+              - column:
+                  name: target_mode
+                  type: VARCHAR(16)
+                  defaultValue: MONTHLY
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: ALTER TABLE database_upload_targets ADD CONSTRAINT ck_database_upload_target_mode CHECK (target_mode IN ('DAILY', 'MONTHLY'))

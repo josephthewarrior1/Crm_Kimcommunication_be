@@ -273,6 +273,7 @@ public class DatabaseController {
     }
 
     @PostMapping
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> createDatabase(
             @RequestBody Database database, 
             @RequestParam(required = false) Long companyId,
@@ -284,6 +285,12 @@ public class DatabaseController {
         if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can create database records");
         }
+
+        if (database.getId() != null) {
+            return ResponseEntity.badRequest().body("Use the update endpoint for an existing database record");
+        }
+        database.setCreatedByUserId(currentUser.getId());
+        database.setEntryMethod("manual");
 
         if (companyId != null) {
             Company company = companyRepository.findById(companyId).orElse(null);

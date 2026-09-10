@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: company-website-text-20260910
+      author: codex
+      changes:
+        - modifyDataType:
+            tableName: companies
+            columnName: website
+            newDataType: TEXT

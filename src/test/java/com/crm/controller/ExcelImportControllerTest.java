@@ -519,6 +519,143 @@ class ExcelImportControllerTest {
         verify(databases, never()).save(any());
     }
 
+    @Test
+    void oversizedCompanyNameIsSkippedBeforeAnyWritesWhileCleanRowsImport() throws Exception {
+        String[] dirty = row("Kristiyanto", "081234567890", "office@example.com", "");
+        dirty[3] = "x".repeat(330);
+        var upload = file(dirty, row("Clean", "081234567891", "office@example.com", ""));
+        var result = preview(upload);
+        assertEquals(1, result.getConflictCount());
+        assertEquals(2, result.getRows().get(0).getRowNum());
+        assertTrue(result.getRows().get(0).getMessage().contains("Company Name berisi 330 karakter; maksimal 255"));
+        var response = controller.importDatabases(upload, "test");
+        assertEquals(200, response.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) response.getBody();
+        assertEquals(1, body.get("count"));
+        assertEquals(1, body.get("skippedCount"));
+        verify(databases).save(argThat(d -> "Clean".equals(d.getFirstName())));
+        verify(companies, never()).save(argThat(c -> dirty[3].equals(c.getName())));
+    }
+
+    @Test
+    void companyLengthLimitsAcceptBoundaryAndLongTextButRejectOverflow() throws Exception {
+        for (int[] field : new int[][]{{1,255},{2,255},{3,255},{11,50},{15,100},{16,100},{17,100},{20,100},{21,20}}) {
+            String[] data = row("Andi", "081234567890", "office@example.com", "");
+            data[field[0]] = "1".repeat(field[1]);
+            if (field[0] == 11) data[11] = "62" + "1".repeat(48);
+            assertEquals(0, preview(file(data)).getConflictCount(), "Boundary column " + field[0]);
+            data[field[0]] += "1";
+            assertEquals(1, preview(file(data)).getConflictCount(), "Overflow column " + field[0]);
+        }
+        String[] data = row("Andi", "081234567890", "office@example.com", "");
+        data[2] = "\uD83D\uDE00".repeat(255);
+        data[10] = "Long address ".repeat(100);
+        data[18] = "Long hardware description ".repeat(100);
+        assertEquals(0, preview(file(data)).getConflictCount());
+    }
+
+    @Test
+    void longWebsiteSurvivesPreviewAndImportWithoutTruncation() throws Exception {
+        String[] data = row("Kristiyanto", "081234567890", "office@example.com", "");
+        data[3] = "Ivonesia Solusi Data PT";
+        data[22] = "https://ivosights.com/ripple10?utm_campaign=" + "x".repeat(286);
+        assertEquals(330, data[22].length());
+        var upload = file(data);
+        assertEquals(0, preview(upload).getConflictCount());
+        assertEquals(1, preview(upload).getNewCount());
+        var response = controller.importDatabases(upload, "test");
+        assertEquals(200, response.getStatusCode().value());
+        verify(companies).save(argThat(c -> data[3].equals(c.getName()) && data[22].equals(c.getWebsite())));
+        verify(databases).save(argThat(c -> data[22].equals(c.getCompany().getWebsite())));
+        assertEquals("TEXT", Company.class.getDeclaredField("website")
+                .getAnnotation(jakarta.persistence.Column.class).columnDefinition());
+    }
+
+    @Test
+    void postalConflictNamesTheDifferentRowAndExplainsWhyMatchingRowsAreHeld() throws Exception {
+        List<String[]> data = new ArrayList<>();
+        for (int i = 0; i < 47; i++) {
+            String[] same = row("Person" + i, "08123456" + String.format("%04d", i), "office@example.com", "");
+            same[21] = "12920";
+            data.add(same);
+        }
+        String[] nurul = row("Nurul", "081234569999", "office@example.com", "");
+        nurul[6] = "Pratiwi";
+        nurul[21] = "12940";
+        data.add(nurul);
+        for (boolean outlierFirst : List.of(false, true)) {
+            if (outlierFirst) { data.remove(nurul); data.add(0, nurul); }
+            var upload = file(data.toArray(String[][]::new));
+            var result = preview(upload);
+            assertEquals(48, result.getConflictCount());
+            var different = result.getRows().stream().filter(r -> r.getFirstName().equals("Nurul")).findFirst().orElseThrow();
+            var same = result.getRows().stream().filter(r -> r.getFirstName().equals("Person0")).findFirst().orElseThrow();
+            assertTrue(different.getMessage().startsWith("Periksa nilai berbeda: Postal Code baris ini '12940'"));
+            assertTrue(same.getMessage().startsWith("Ikut tertahan karena perbedaan data perusahaan: Postal Code baris ini '12920'"));
+            assertTrue(same.getMessage().contains("'12920' dipakai 47 baris"));
+            assertTrue(same.getMessage().contains("#" + different.getRowNum() + " Nurul Pratiwi"));
+            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value());
+        }
+        verify(databases, never()).save(any());
+        verify(companies, never()).save(any());
+    }
+
+    @Test
+    void equalSizedPostalGroupsDoNotLabelEitherValueAsTheOutlier() throws Exception {
+        String[] first = row("First", "081234567890", "office@example.com", "");
+        String[] second = row("Second", "081234567891", "office@example.com", "");
+        String[] blank = row("Blank", "081234567892", "office@example.com", "");
+        first[21] = "12920";
+        second[21] = "12940";
+        var result = preview(file(first, second, blank));
+        assertEquals(3, result.getConflictCount());
+        assertTrue(result.getRows().stream().noneMatch(r -> r.getMessage().contains("Periksa nilai berbeda")));
+        assertTrue(result.getRows().get(2).getMessage().contains("Postal Code baris ini kosong"));
+        assertTrue(result.getRows().get(0).getMessage().contains("#3 Second Person"));
+    }
+
+    @Test
+    void everySharedCompanyColumnIdentifiesTheDifferentValueAndContact() throws Exception {
+        Object[][] cases = {
+                {1, "Nama Group/Holding Company", "holding satu", "holding dua"},
+                {2, "Nama Brand", "brand satu", "brand dua"},
+                {10, "Address", "alamat satu", "alamat dua"},
+                {11, "Office Phone", "6221123456", "6221654321"},
+                {15, "Industry", "technology", "manufacturing"},
+                {16, "Company Size (Revenue)", "100 miliar", "200 miliar"},
+                {17, "Company Size (Employee)", "100", "200"},
+                {18, "Company Hardware", "server", "laptop"},
+                {20, "City", "jakarta", "bandung"},
+                {21, "Postal Code", "12920", "12940"},
+                {22, "Company Website", "https://example.com", "https://other.example.com"}
+        };
+        for (Object[] example : cases) {
+            int column = (Integer) example[0];
+            String header = (String) example[1], common = (String) example[2], different = (String) example[3];
+            String[] first = row("Ahmad", "081234567890", "office@example.com", "");
+            String[] second = row("Ronald", "081234567891", "office@example.com", "");
+            String[] outlier = row("Nurul", "081234567892", "office@example.com", "");
+            outlier[6] = "Pratiwi";
+            first[column] = second[column] = common;
+            outlier[column] = different;
+            var upload = file(first, second, outlier);
+            var result = preview(upload);
+            assertEquals(3, result.getConflictCount(), header);
+            assertTrue(result.getRows().get(2).getMessage().startsWith(
+                    "Periksa nilai berbeda: " + header + " baris ini '" + different + "'"), header);
+            for (var same : result.getRows().subList(0, 2)) {
+                assertTrue(same.getMessage().startsWith(
+                        "Ikut tertahan karena perbedaan data perusahaan: " + header), header);
+                assertTrue(same.getMessage().contains("'" + common + "' dipakai 2 baris"), header);
+                assertTrue(same.getMessage().contains("'" + different + "' dipakai 1 baris: #4 Nurul Pratiwi"), header);
+            }
+            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value(), header);
+        }
+        verify(databases, never()).save(any());
+        verify(companies, never()).save(any());
+        verify(groups, never()).save(any());
+    }
+
     private Database contact(long id, String first, String last, String phone) {
         return Database.builder().id(id).firstName(first).lastName(last).mobilePhone(phone)
                 .company(company).emails(new ArrayList<>()).build();

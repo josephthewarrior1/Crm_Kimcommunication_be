@@ -33,6 +33,7 @@ public class Company {
     @Column(name = "office_phone")
     private String officePhone;
 
+    @Column(columnDefinition = "TEXT")
     private String website;
 
     private String industry;

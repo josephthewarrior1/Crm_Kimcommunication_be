@@ -287,6 +287,7 @@ public class ExcelImportController {
                         .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
                         .status("NEW").message("").build();
                 previews.add(preview);
+                validateCompanyFieldLengths(row, preview);
 
                 for (String email : emailTokens(companyEmail + ";" + personalEmail)) {
                     if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
@@ -353,7 +354,7 @@ public class ExcelImportController {
                 companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
                 Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
                 for (int column : List.of(1, 2, 10, 11, 15, 16, 17, 18, 20, 21, 22)) {
-                    String value = normalizeKey(column == 11 ? normalizeOfficePhone(cell(row, column)) : cell(row, column));
+                    String value = companyCellValue(row, column);
                     if (value.isEmpty()) continue;
                     String previous = values.putIfAbsent(column, value);
                     if (previous != null && !previous.equals(value)) {
@@ -363,9 +364,8 @@ public class ExcelImportController {
             }
 
             // Every row of a conflicting company must be skipped, including later rows matching the first.
-            companyConflicts.forEach((key, columns) -> companyRows.get(key).forEach(row ->
-                    columns.forEach(column -> conflict(row,
-                            "Data company tidak konsisten antarbaris pada kolom " + HEADERS.get(column) + "."))));
+            companyConflicts.forEach((key, columns) -> columns.forEach(column ->
+                    describeCompanyConflict(sheet, companyRows.get(key), column)));
 
             // Company emails may repeat, except when that address is also claimed as personal in this file.
             for (RowPreview row : previews) {
@@ -402,6 +402,38 @@ public class ExcelImportController {
                     .rows(previews).build());
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("message", "Gagal memvalidasi Excel: " + e.getMessage()));
+        }
+    }
+
+    private String companyCellValue(Row row, int column) {
+        return normalizeKey(column == 11 ? normalizeOfficePhone(cell(row, column)) : cell(row, column));
+    }
+
+    private void describeCompanyConflict(Sheet sheet, List<RowPreview> rows, int column) {
+        Map<String, List<RowPreview>> variants = new LinkedHashMap<>();
+        for (RowPreview row : rows) {
+            String value = companyCellValue(sheet.getRow(row.getRowNum() - 1), column);
+            if (!value.isEmpty()) variants.computeIfAbsent(value, ignored -> new ArrayList<>()).add(row);
+        }
+        int largest = variants.values().stream().mapToInt(List::size).max().orElse(0);
+        boolean uniqueLargest = variants.values().stream().filter(group -> group.size() == largest).count() == 1;
+        String details = String.join("; ", variants.entrySet().stream()
+                .sorted(Comparator.comparingInt(entry -> entry.getValue().size()))
+                .map(entry -> "'" + entry.getKey() + "' dipakai " + entry.getValue().size() + " baris: "
+                        + String.join(", ", entry.getValue().stream().limit(3)
+                        .map(row -> "#" + row.getRowNum() + " " + (row.getFirstName() + " " + row.getLastName()).trim()).toList())
+                        + (entry.getValue().size() > 3 ? " dan " + (entry.getValue().size() - 3) + " baris lainnya" : ""))
+                .toList());
+        for (RowPreview row : rows) {
+            String value = companyCellValue(sheet.getRow(row.getRowNum() - 1), column);
+            int count = variants.getOrDefault(value, List.of()).size();
+            String reason = uniqueLargest && count > 0 && count < largest
+                    ? "Periksa nilai berbeda: "
+                    : "Ikut tertahan karena perbedaan data perusahaan: ";
+            conflict(row, reason + HEADERS.get(column) + " baris ini "
+                    + (value.isEmpty() ? "kosong" : "'" + value + "'") + ". " + details
+                    + ". Pastikan nilai yang benar lalu samakan baris untuk lokasi perusahaan yang sama."
+                    + " Semua " + rows.size() + " baris perusahaan ini ditahan; nilai terbanyak belum tentu benar.");
         }
     }
 
@@ -541,6 +573,28 @@ public class ExcelImportController {
             "Mobile Phone", "Company Email Address", "Personal Email Address", "Industry",
             "Company Size (Revenue)", "Company Size (Employee)", "Company Hardware", "Linkedin Link",
             "City", "Postal Code", "Company Website");
+
+    private void validateCompanyFieldLengths(Row row, RowPreview preview) {
+        // Match the bounded company/group columns in the Liquibase schema; never truncate input.
+        for (int column = 1; column < HEADERS.size(); column++) {
+            int limit = switch (column) {
+                case 1, 2, 3 -> 255;
+                case 11 -> 50;
+                case 15, 16, 17, 20 -> 100;
+                case 21 -> 20;
+                default -> 0;
+            };
+            if (limit == 0) continue;
+            String value = switch (column) {
+                case 3 -> cleanCompanyName(cell(row, column));
+                case 11 -> normalizeOfficePhone(cell(row, column));
+                default -> cell(row, column);
+            };
+            int length = value.codePointCount(0, value.length());
+            if (length > limit) conflict(preview, "Kolom " + HEADERS.get(column) + " berisi "
+                    + length + " karakter; maksimal " + limit + ". Perbaiki isi sel lalu upload ulang.");
+        }
+    }
 
     private void validateHeaders(Row row) {
         if (row == null) throw new IllegalArgumentException("Header Excel kosong.");

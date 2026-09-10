@@ -307,7 +307,7 @@ public class ExcelImportController {
                 Company matchedCompany = null;
                 try {
                     matchedCompany = findCompany(knownCompanies, companyName);
-                    target = findExistingDatabase(databases, firstName, lastName, companyName, personal);
+                    target = findExistingDatabase(databases, firstName, lastName, companyName, personal, mobilePhone);
                     if (target != null) preview.setExistingDatabaseId(target.getId());
                 } catch (IllegalArgumentException e) {
                     conflict(preview, e.getMessage());
@@ -385,7 +385,7 @@ public class ExcelImportController {
                 if ("NEW".equals(preview.getStatus()) && preview.getExistingDatabaseId() != null) {
                     preview.setStatus("DUPLICATE");
                     addMessage(preview, "Update kontak ID " + preview.getExistingDatabaseId()
-                            + ". Nilai kosong dan email lama dipertahankan; company hanya dilengkapi jika kosong.");
+                            + ". Data kontak dan perusahaan tempat bekerja mengikuti Excel. Nilai kosong dan email lama dipertahankan; data master company hanya dilengkapi jika kosong.");
                 } else if ("NEW".equals(preview.getStatus())) {
                     addMessage(preview, "Akan disimpan sebagai kontak baru. Company yang sudah ada hanya dilengkapi jika kosong.");
                 }
@@ -438,13 +438,16 @@ public class ExcelImportController {
     }
 
     private Database findExistingDatabase(List<Database> databases, String firstName, String lastName,
-                                          String companyName, Set<String> personalEmails) {
+                                          String companyName, Set<String> personalEmails, String mobilePhone) {
         String name = normalizeKey(firstName + " " + lastName);
+        String phone = formatNormalizedPhone(mobilePhone);
         List<Database> candidates = databases.stream().filter(database -> {
             if (!name.equals(normalizeKey(Objects.toString(database.getFirstName(), "") + " "
                     + Objects.toString(database.getLastName(), "")))) return false;
             String company = database.getCompany() == null ? "" : cleanCompanyName(database.getCompany().getName());
             return normalizeKey(companyName).equals(normalizeKey(company))
+                    || (phone != null && (phone.equals(formatNormalizedPhone(database.getMobilePhone()))
+                    || phone.equals(formatNormalizedPhone(database.getNormalizedPhone()))))
                     || emails(database).stream().anyMatch(email -> !isCompanyEmail(email)
                     && personalEmails.contains(normalizeKey(email.getEmail())));
         }).toList();

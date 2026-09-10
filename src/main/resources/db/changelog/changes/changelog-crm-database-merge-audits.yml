@@ -1,0 +1,19 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-database-merge-audits
+      author: codex
+      changes:
+        - sql:
+            dbms: postgresql
+            sql: |
+              CREATE TABLE database_merge_audits (
+                id BIGSERIAL PRIMARY KEY,
+                actor_id BIGINT NOT NULL,
+                target_id BIGINT NOT NULL,
+                source_id BIGINT NOT NULL,
+                preview_token VARCHAR(64) NOT NULL UNIQUE,
+                before_snapshot JSONB NOT NULL,
+                result JSONB NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+              COMMENT ON TABLE database_merge_audits IS 'Restricted merge backups. IDs intentionally have no FK so history survives source deletion.';

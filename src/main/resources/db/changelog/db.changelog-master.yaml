@@ -30,4 +30,6 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-shared-company-emails.yml
   - include:
       file: db/changelog/changes/changelog-crm-database-upload-targets.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-database-merge-audits.yml
 

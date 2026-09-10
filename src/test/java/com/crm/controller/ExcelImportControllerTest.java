@@ -442,6 +442,83 @@ class ExcelImportControllerTest {
         verify(databases, times(2)).save(any());
     }
 
+    @Test
+    void sameNameAndPhoneUpdateCompanyFromExcelWhilePreservingContactIdentity() throws Exception {
+        Database yogita = contact(89L, "Yogita", "Yasmine", "+6281904164306");
+        yogita.setIsActive(false);
+        yogita.setCreatedByUserId(9L);
+        yogita.setEntryMethod("manual");
+        yogita.setLinkedinUrl("https://www.linkedin.com/in/yogita");
+        var oldEmail = email(yogita, "old@example.com", true, true);
+        yogita.getEmails().add(oldEmail);
+        Company destination = Company.builder().id(20L).name("MNC Asia Holding Tbk")
+                .address("Alamat master").build();
+        when(companies.findAll()).thenReturn(List.of(company, destination));
+        when(databases.findAll()).thenReturn(List.of(yogita));
+        when(databases.findById(89L)).thenReturn(Optional.of(yogita));
+        String[] data = row("Yogita", "081904164306", "yogitayasmine@mncgroup.com", "yogitayasmine@gmail.com");
+        data[6] = "Yasmine";
+        data[3] = destination.getName();
+        data[9] = "New Job";
+        var upload = file(data);
+        var result = preview(upload);
+        assertEquals(1, result.getDuplicateCount());
+        assertEquals(0, result.getConflictCount());
+        assertEquals(89L, result.getRows().get(0).getExistingDatabaseId());
+        verify(databases, never()).save(any());
+        assertSame(company, yogita.getCompany());
+        var response = controller.importDatabases(upload, "test");
+        assertEquals(200, response.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) response.getBody();
+        assertEquals(1, body.get("updatedCount"));
+        assertEquals(0, body.get("newCount"));
+        verify(databases).save(same(yogita));
+        assertEquals(89L, yogita.getId());
+        assertSame(destination, yogita.getCompany());
+        assertEquals("New Job", yogita.getJobTitle());
+        assertEquals("Alamat master", destination.getAddress());
+        assertEquals("Alamat lama", company.getAddress());
+        assertEquals("https://www.linkedin.com/in/yogita", yogita.getLinkedinUrl());
+        assertEquals(9L, yogita.getCreatedByUserId());
+        assertEquals("manual", yogita.getEntryMethod());
+        assertFalse(yogita.getIsActive());
+        assertTrue(yogita.getEmails().contains(oldEmail));
+        assertTrue(yogita.getEmails().stream().anyMatch(e -> "yogitayasmine@gmail.com".equals(e.getEmail())));
+    }
+
+    @Test
+    void companyMoveUsesNormalizedPhoneAndRejectsMultipleMatchingContacts() throws Exception {
+        Database target = contact(1L, "Andi", "Person", null);
+        target.setNormalizedPhone("+6281234567890");
+        when(databases.findAll()).thenReturn(List.of(target));
+        String[] data = row("Andi", "081234567890", "office@example.com", "");
+        data[3] = "New Employer PT";
+        assertEquals(1L, preview(file(data)).getRows().get(0).getExistingDatabaseId());
+        Database duplicate = contact(2L, "Andi", "Person", "+62 812-3456-7890");
+        when(databases.findAll()).thenReturn(List.of(target, duplicate));
+        var result = preview(file(data));
+        assertEquals(1, result.getConflictCount());
+        assertTrue(result.getRows().get(0).getMessage().contains("Target update ambigu"));
+        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        verify(databases, never()).save(any());
+    }
+
+    @Test
+    void companyMoveCannotMatchDifferentNamesOrMissingPhoneIdentity() throws Exception {
+        Database target = contact(1L, "Andi", "Person", "081234567890");
+        when(databases.findAll()).thenReturn(List.of(target));
+        String[] data = row("Budi", "081234567890", "office@example.com", "");
+        data[3] = "New Employer PT";
+        assertEquals(1, preview(file(data)).getConflictCount());
+        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        target.setMobilePhone(null);
+        data[5] = "Andi";
+        data[12] = "";
+        assertNull(preview(file(data)).getRows().get(0).getExistingDatabaseId());
+        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        verify(databases, never()).save(any());
+    }
+
     private Database contact(long id, String first, String last, String phone) {
         return Database.builder().id(id).firstName(first).lastName(last).mobilePhone(phone)
                 .company(company).emails(new ArrayList<>()).build();

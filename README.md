@@ -104,3 +104,58 @@ Frontend Integration
 - The endpoint `GET /api/frontend/projects` returns a simplified list shaped for the Next.js UI:
   - `{ id, name, client, eventDate, status, progress, daysUntilEvent, currentStage, priority }`
 - CORS is enabled for `http://localhost:3000` by default (see `app.cors.allowed-origins`).
+
+## Merge kontak database (ADMIN only, PostgreSQL)
+
+Endpoint ini menggabungkan **satu pasangan kontak** per transaksi, bukan merge company/group.
+Deploy backend beserta migration `changelog-crm-database-merge-audits.yml` sebelum digunakan.
+Tidak ada data production yang otomatis berubah ketika migration dijalankan.
+
+1. `POST /api/databases/merge/preview` dengan header `Authorization: Bearer <token ADMIN>` dan `Content-Type: application/json`:
+
+   ```json
+   {
+     "targetId": 140,
+     "sourceId": 2422,
+     "fieldChoices": {},
+     "emailTypes": {"jodianto@gmail.com": "personal"}
+   }
+   ```
+
+2. Preview mengembalikan `conflicts`, calon `contact`/`emails`, hitungan relasi, dan `previewToken`.
+   ID target dipertahankan; ID source dihapus **hanya saat commit merge**.
+   Field kosong/unknown diisi otomatis. Untuk dua nilai berbeda, pilih `"target"` atau `"source"` pada `fieldChoices` lalu preview ulang.
+   Nama field menggunakan nama kolom: `first_name`, `last_name`, `company_id`, `salutation`, `position_level`,
+   `speciality_division`, `job_title`, `mobile_phone`, `linkedin_url`, `database_type`, `source`.
+   Contoh: `"fieldChoices": {"first_name":"target", "last_name":"target"}`.
+3. Setelah `conflicts` kosong, kirim body yang **sama persis** ditambah `previewToken` ke `POST /api/databases/merge`.
+   Request tanpa preview ditolak. Data/relasi berubah atau pilihan diganti setelah preview: `409`, wajib preview ulang.
+   Retry token merge yang sudah sukses mengembalikan hasil sebelumnya tanpa menulis lagi.
+
+Perilaku penting:
+
+- Nama harus cocok setelah normalisasi, dengan bukti HP/email pribadi/LinkedIn individu yang sama. Nomor kantor sama saja tidak cukup.
+- Company beda hanya diizinkan jika normalisasi nama company sama; pilihan company survivor tetap eksplisit.
+- Email legacy dipisah per alamat, gabungan alamat dideduplikasi, tipe personal menang jika salah satu sudah personal.
+  Domain tidak dipakai untuk menebak tipe: gunakan `emailTypes` untuk salah label legacy. Email pribadi yang juga ada pada kontak ketiga ditolak.
+- Riwayat event dan activity mempertahankan ID; relasi flag dan removal request dipindah ke target.
+  Jika kedua kontak ada pada event yang sama, merge **ditolak**, bukan menimpa salah satu registrasi.
+- Tidak mengaktifkan ulang kontak nonaktif, confirmed flag, atau opt-out yang belum rejected.
+- `created_by_user_id`, `entry_method`, `created_at` target tidak diubah. Source dengan creator berbeda/target tanpa creator ditolak;
+  pilih record berkredit sebagai target. Dua record dengan creator yang sama tetap menjadi satu input setelah merge.
+- Snapshot sebelum merge (termasuk relasi dan nilai yang tidak dipilih) disimpan di `database_merge_audits` dalam transaksi yang sama.
+  Tabel berisi data pribadi, tidak diekspos ke endpoint log umum, dan akses SQL/retensinya harus dibatasi sesuai kebijakan backup.
+  Ini backup untuk pemulihan manual, bukan endpoint undo otomatis.
+- Semua langkah rollback jika gagal. Tabel terkait dikunci singkat untuk melindungi dari writer legacy; lakukan saat trafik tulis rendah.
+  Lock timeout 5 detik; transaksi timeout 30 detik. Relasi FK baru yang belum didukung ditolak.
+
+Pengujian PostgreSQL terisolasi (bukan database CRM):
+
+```powershell
+docker run --detach --rm --name crm-contact-merge-test -e POSTGRES_USER=merge_test -e POSTGRES_PASSWORD=merge_test_local_only -e POSTGRES_DB=merge_test -p 127.0.0.1:55439:5432 postgres:17-alpine
+$env:CRM_MERGE_TEST_URL='jdbc:postgresql://127.0.0.1:55439/merge_test'
+mvn test-compile org.apache.maven.plugins:maven-surefire-plugin:3.2.2:test
+docker stop crm-contact-merge-test
+```
+
+Integration test hanya aktif jika URL menunjuk localhost dengan nama DB `merge_test`; schema `merge_test_case` di DB tes tersebut dibuat ulang tiap test.

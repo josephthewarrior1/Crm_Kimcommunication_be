@@ -27,6 +27,18 @@ public class Database {
     @JoinColumn(name = "company_id")
     private Company company;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "branch_id")
+    @com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    private CompanyBranch branch;
+
+    public void setCompany(Company company) {
+        if (branch != null && !java.util.Objects.equals(branch.getCompanyId(), company != null ? company.getId() : null)) {
+            branch = null;
+        }
+        this.company = company;
+    }
+
     private String salutation;
 
     @Column(name = "first_name")

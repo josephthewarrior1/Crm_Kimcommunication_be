@@ -32,6 +32,9 @@ public class CompanyController {
     private DatabaseRepository databaseRepository;
 
     @Autowired
+    private com.crm.repository.CompanyBranchRepository companyBranchRepository;
+
+    @Autowired
     private SecurityHelper securityHelper;
 
     @GetMapping
@@ -206,6 +209,7 @@ public class CompanyController {
     }
 
     @DeleteMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> deleteCompany(
             @PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -218,6 +222,9 @@ public class CompanyController {
         }
 
         if (companyRepository.existsById(id)) {
+            if (companyBranchRepository.existsByCompanyId(id)) {
+                return ResponseEntity.status(409).body("Remove the company's branches before deleting the company");
+            }
             // Nullify company references in database records
             databaseRepository.findAll().stream()
                     .filter(c -> c.getCompany() != null && c.getCompany().getId().equals(id))

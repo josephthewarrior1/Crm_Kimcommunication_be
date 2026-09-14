@@ -31,6 +31,8 @@ class ExcelImportControllerTest {
     private DatabaseRepository databases;
     private DatabaseEmailRepository emails;
     private CompanyRepository companies;
+    private CompanyBranchRepository branches;
+    private List<CompanyBranch> storedBranches;
     private GroupRepository groups;
     private final Company company = Company.builder().id(10L).name("Example PT").address("Alamat lama").build();
 
@@ -40,6 +42,8 @@ class ExcelImportControllerTest {
         databases = mock(DatabaseRepository.class);
         emails = mock(DatabaseEmailRepository.class);
         companies = mock(CompanyRepository.class);
+        branches = mock(CompanyBranchRepository.class);
+        storedBranches = new ArrayList<>();
         groups = mock(GroupRepository.class);
         SecurityHelper security = mock(SecurityHelper.class);
         AppUser user = AppUser.builder().id(1L).build();
@@ -48,11 +52,21 @@ class ExcelImportControllerTest {
         ReflectionTestUtils.setField(controller, "databaseRepository", databases);
         ReflectionTestUtils.setField(controller, "databaseEmailRepository", emails);
         ReflectionTestUtils.setField(controller, "companyRepository", companies);
+        ReflectionTestUtils.setField(controller, "companyBranchRepository", branches);
         ReflectionTestUtils.setField(controller, "groupRepository", groups);
         ReflectionTestUtils.setField(controller, "securityHelper", security);
         ReflectionTestUtils.setField(controller, "auditLogService", mock(AuditLogService.class));
         ReflectionTestUtils.setField(controller, "suspiciousIdentityService", mock(SuspiciousIdentityService.class));
         when(companies.findAll()).thenReturn(new ArrayList<>(List.of(company)));
+        when(branches.findAll()).thenAnswer(invocation -> new ArrayList<>(storedBranches));
+        when(branches.save(any())).thenAnswer(invocation -> {
+            CompanyBranch branch = invocation.getArgument(0);
+            if (branch.getId() == null) {
+                branch.setId(1000L + storedBranches.size());
+                storedBranches.add(branch);
+            }
+            return branch;
+        });
         when(companies.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(groups.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(emails.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -654,6 +668,192 @@ class ExcelImportControllerTest {
         verify(databases, never()).save(any());
         verify(companies, never()).save(any());
         verify(groups, never()).save(any());
+    }
+
+    @Test
+    void optionalBranchColumnImportsItsLocationWithoutWritingToCompany() throws Exception {
+        try (Workbook workbook = new XSSFWorkbook()) {
+            String[] data = row("Budi", "081234567890", "office@example.com", "");
+            data[20] = "Bandung";
+            populate(workbook, data);
+            Sheet sheet = workbook.getSheetAt(0);
+            sheet.getRow(0).createCell(23).setCellValue("Cabang/Kantor");
+            sheet.getRow(1).createCell(23).setCellValue(" Pademangan ");
+            var file = upload(workbook);
+            assertEquals(1, preview(file).getNewCount());
+            assertEquals("Pademangan", preview(file).getRows().get(0).getBranchName());
+            assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+            assertEquals(1, storedBranches.size());
+            assertEquals("Alamat Excel", storedBranches.get(0).getAddress());
+            assertEquals("Bandung", storedBranches.get(0).getCity());
+            assertEquals(company.getId(), storedBranches.get(0).getCompanyId());
+            verify(databases).save(argThat(database -> database.getBranch() == storedBranches.get(0)));
+            assertEquals("Alamat lama", company.getAddress());
+            assertNull(company.getCity());
+            assertNull(company.getOfficePhone());
+            sheet.getRow(1).getCell(23).setCellValue("");
+            assertEquals(1, preview(upload(workbook)).getNewCount());
+        }
+    }
+
+    @Test
+    void twoBcaBranchesShareOneCompanyAndRepeatedImportReusesBothBranchesAndContacts() throws Exception {
+        company.setName("BCA"); company.setBrandName("BCA");
+        company.setOfficePhone("021900"); company.setCity("Jakarta"); company.setPostalCode("10000");
+        List<Database> savedContacts = new ArrayList<>();
+        when(databases.findAll()).thenAnswer(invocation -> new ArrayList<>(savedContacts));
+        when(databases.findById(anyLong())).thenAnswer(invocation -> savedContacts.stream()
+                .filter(contact -> contact.getId().equals(invocation.getArgument(0))).findFirst());
+        doAnswer(invocation -> {
+            Database contact = invocation.getArgument(0);
+            if (contact.getId() == null) { contact.setId(100L + savedContacts.size()); savedContacts.add(contact); }
+            return contact;
+        }).when(databases).save(any());
+        String[] first = branchRow("Andi", "081234567890", " Pademangan ", "Alamat Pademangan", "021111", "Jakarta");
+        String[] second = branchRow("Budi", "081234567891", "Bandung", "Alamat Bandung", "022222", "Bandung");
+        first[2] = second[2] = "BCA"; first[3] = second[3] = "BCA";
+        var file = branchFile(first, second);
+        assertEquals(2, preview(file).getNewCount());
+        assertEquals(0, preview(file).getConflictCount());
+        assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals(2, storedBranches.size()); assertEquals(2, savedContacts.size());
+        assertSame(company, savedContacts.get(0).getCompany()); assertSame(company, savedContacts.get(1).getCompany());
+        assertNotEquals(savedContacts.get(0).getBranch().getId(), savedContacts.get(1).getBranch().getId());
+        assertEquals("Alamat Pademangan", savedContacts.get(0).getBranch().getAddress());
+        assertEquals("Alamat Bandung", savedContacts.get(1).getBranch().getAddress());
+        first[23] = "pAdEmAnGaN";
+        var repeated = branchFile(first, second);
+        assertEquals(2, preview(repeated).getDuplicateCount());
+        assertEquals(200, controller.importDatabases(repeated, "test").getStatusCode().value());
+        assertEquals(2, storedBranches.size()); assertEquals(2, savedContacts.size());
+        assertEquals("Alamat lama", company.getAddress()); assertEquals("021900", company.getOfficePhone());
+        assertEquals("Jakarta", company.getCity()); assertEquals("10000", company.getPostalCode());
+    }
+
+    @Test
+    void locationConflictsWithinSameBranchBlockAllItsRowsButDifferentBranchesKeepDifferentAddresses() throws Exception {
+        for (int column : List.of(10, 11, 20, 21)) {
+            String[] first = branchRow("Andi", "081234567890", "Pademangan", "Alamat Satu", "021111", "Jakarta");
+            String[] second = branchRow("Budi", "081234567891", " pademangan ", "Alamat Satu", "021111", "Jakarta");
+            first[21] = second[21] = "10000";
+            second[column] = column == 11 ? "022222" : "Different";
+            var file = branchFile(first, second);
+            assertEquals(2, preview(file).getConflictCount(), "column " + column);
+            assertTrue(preview(file).getRows().get(0).getMessage().contains("Semua 2 baris cabang Pademangan ditahan"));
+            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+        }
+        String[] first = branchRow("Andi", "081234567890", "Pademangan", "Alamat Satu", "021111", "Jakarta");
+        String[] second = branchRow("Budi", "081234567891", "Bandung", "Alamat Dua", "022222", "Bandung");
+        second[15] = "Other Industry";
+        assertEquals(2, preview(branchFile(first, second)).getConflictCount(), "Company industry is still shared");
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+    }
+
+    @Test
+    void conflictInOneBranchDoesNotBlockAnotherBranchAtSameCompany() throws Exception {
+        String[] first = branchRow("Andi", "081234567890", "Pademangan", "Alamat Satu", "021111", "Jakarta");
+        String[] second = branchRow("Budi", "081234567891", "Pademangan", "Alamat Salah", "021111", "Jakarta");
+        String[] third = branchRow("Cici", "081234567892", "Bandung", "Alamat Bandung", "022222", "Bandung");
+        var upload = branchFile(first, second, third);
+        assertEquals(2, preview(upload).getConflictCount()); assertEquals(1, preview(upload).getNewCount());
+        assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value());
+        assertEquals(1, storedBranches.size()); assertEquals("Bandung", storedBranches.get(0).getName());
+        verify(databases).save(argThat(contact -> "Cici".equals(contact.getFirstName())));
+    }
+
+    @Test
+    void legacyAndBlankBranchColumnRetainAssignmentAndUseBranchValuesForCompleteness() throws Exception {
+        CompanyBranch branch = existingBranch("Pademangan", "Alamat Cabang", "021111", "Bandung");
+        Database target = contact(77L, "Andi", "Person", "081234567890"); target.setBranch(branch);
+        when(databases.findAll()).thenReturn(List.of(target)); when(databases.findById(77L)).thenReturn(Optional.of(target));
+        company.setCity("Jakarta"); company.setOfficePhone("021999");
+        String[] data = row("Andi", "081234567890", "office@example.com", "");
+        data[10] = data[11] = data[20] = "";
+        for (MockMultipartFile upload : List.of(file(data), branchFile(Arrays.copyOf(data, 24)))) {
+            assertEquals(1, preview(upload).getDuplicateCount());
+            assertEquals("Pademangan", preview(upload).getRows().get(0).getBranchName());
+            assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value());
+            assertSame(branch, target.getBranch());
+            assertEquals("Alamat Cabang", branch.getAddress()); assertEquals("Bandung", branch.getCity());
+            assertEquals("Alamat lama", company.getAddress()); assertEquals("021999", company.getOfficePhone());
+        }
+        branch.setAddress(null); branch.setCity(null);
+        var incomplete = preview(file(data));
+        assertEquals(1, incomplete.getIncompleteCount());
+        assertTrue(incomplete.getRows().get(0).getMessage().contains("Address"));
+        assertTrue(incomplete.getRows().get(0).getMessage().contains("City"));
+    }
+
+    @Test
+    void existingBranchLocationsAreReusedButConflictingValuesAndAssignmentMovesAreRejected() throws Exception {
+        CompanyBranch branch = existingBranch("Pademangan", "Alamat Cabang", "021111", "Bandung");
+        String[] data = branchRow("Andi", "081234567890", "pademangan", "Alamat Cabang", "021111", "Bandung");
+        data[10] = data[11] = data[20] = "";
+        assertEquals(1, preview(branchFile(data)).getNewCount(), "New contact can reuse the branch's location");
+        data[10] = "Alamat Lain";
+        assertEquals(1, preview(branchFile(data)).getConflictCount());
+        assertEquals(400, controller.importDatabases(branchFile(data), "test").getStatusCode().value());
+        Database target = contact(77L, "Andi", "Person", "081234567890"); target.setBranch(branch);
+        when(databases.findAll()).thenReturn(List.of(target));
+        data[23] = "Bandung";
+        assertEquals(1, preview(branchFile(data)).getConflictCount());
+        assertTrue(preview(branchFile(data)).getRows().get(0).getMessage().contains("form kontak"));
+        data[3] = "New Employer PT"; data[23] = "";
+        assertEquals(1, preview(branchFile(data)).getConflictCount());
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+        assertSame(branch, target.getBranch()); assertEquals("Alamat Cabang", branch.getAddress());
+    }
+
+    @Test
+    void newCompanyHasNoHeadquartersLocationCopiedFromBranchesAndNamesAreScopedToCompany() throws Exception {
+        existingBranch("Pademangan", "Alamat Perusahaan Lama", "021111", "Jakarta");
+        when(companies.save(any())).thenAnswer(invocation -> {
+            Company saved = invocation.getArgument(0); if (saved.getId() == null) saved.setId(20L); return saved;
+        });
+        String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat BCA", "022222", "Bandung"); data[3] = "BCA";
+        assertEquals(1, preview(branchFile(data)).getNewCount());
+        assertEquals(200, controller.importDatabases(branchFile(data), "test").getStatusCode().value());
+        assertEquals(2, storedBranches.size());
+        assertEquals(20L, storedBranches.get(1).getCompanyId()); assertEquals("Alamat BCA", storedBranches.get(1).getAddress());
+        verify(companies).save(argThat(saved -> saved.getId() == 20L && saved.getAddress() == null
+                && saved.getOfficePhone() == null && saved.getCity() == null && saved.getPostalCode() == null));
+    }
+
+    @Test
+    void ambiguousBranchesOversizedNamesAndRepeatedOptionalHeadersAreRejected() throws Exception {
+        existingBranch("Pademangan", "Alamat", "021111", "Jakarta");
+        existingBranch("pademangan", "Alamat", "021111", "Jakarta");
+        String[] data = branchRow("Andi", "081234567890", "Pademangan", "Alamat", "021111", "Jakarta");
+        assertTrue(preview(branchFile(data)).getRows().get(0).getMessage().contains("Cabang ambigu"));
+        data[23] = "x".repeat(256);
+        assertTrue(preview(branchFile(data)).getRows().get(0).getMessage().contains("maksimal 255"));
+        try (Workbook workbook = new XSSFWorkbook()) {
+            populate(workbook, data);
+            workbook.getSheetAt(0).getRow(0).createCell(23).setCellValue("Cabang/Kantor");
+            workbook.getSheetAt(0).getRow(0).createCell(24).setCellValue("Branch");
+            assertEquals(400, controller.previewImport(upload(workbook)).getStatusCode().value());
+        }
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+    }
+
+    private CompanyBranch existingBranch(String name, String address, String phone, String city) {
+        CompanyBranch branch = CompanyBranch.builder().id(1000L + storedBranches.size()).companyId(company.getId())
+                .name(name).address(address).officePhone(phone).city(city).build();
+        storedBranches.add(branch); return branch;
+    }
+
+    private String[] branchRow(String first, String mobile, String branch, String address, String officePhone, String city) {
+        String[] data = Arrays.copyOf(row(first, mobile, "office@example.com", ""), 24);
+        data[10] = address; data[11] = officePhone; data[20] = city; data[23] = branch;
+        return data;
+    }
+
+    private MockMultipartFile branchFile(String[]... rows) throws Exception {
+        try (Workbook workbook = new XSSFWorkbook()) {
+            populate(workbook, rows);
+            workbook.getSheetAt(0).getRow(0).createCell(23).setCellValue("Cabang/Kantor");
+            return upload(workbook);
+        }
     }
 
     private Database contact(long id, String first, String last, String phone) {

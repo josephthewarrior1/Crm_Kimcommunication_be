@@ -24,6 +24,9 @@ public class ExcelImportController {
     private CompanyRepository companyRepository;
 
     @Autowired
+    private CompanyBranchRepository companyBranchRepository;
+
+    @Autowired
     private DatabaseRepository databaseRepository;
 
     @Autowired
@@ -79,6 +82,7 @@ public class ExcelImportController {
             Sheet sheet = workbook.getSheetAt(0);
             int lastRowNum = sheet.getLastRowNum();
             List<Company> knownCompanies = new ArrayList<>(companyRepository.findAll());
+            List<CompanyBranch> knownBranches = new ArrayList<>(companyBranchRepository.findAll());
             
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
@@ -111,8 +115,23 @@ public class ExcelImportController {
 
                 if (!validatedRows.containsKey(row.getRowNum() + 1)) continue;
 
+                RowPreview validated = validatedRows.get(row.getRowNum() + 1);
+                String branchName = Objects.toString(validated.getBranchName(), "");
+                Long existingId = validated.getExistingDatabaseId();
+                Database targetDb = existingId == null ? null : databaseRepository.findById(existingId)
+                        .orElseThrow(() -> new IllegalStateException("Kontak target sudah tidak tersedia: " + existingId));
+
                 // Preserve existing company ownership; only create a group when it can be assigned.
                 Company company = findCompany(knownCompanies, companyName);
+                if (targetDb != null && targetDb.getBranch() != null && (company == null
+                        || !Objects.equals(targetDb.getBranch().getCompanyId(), company.getId())
+                        || !normalizeKey(targetDb.getBranch().getName()).equals(normalizeKey(branchName)))) {
+                    throw new IllegalStateException("Penugasan cabang kontak berubah. Preview ulang sebelum import.");
+                }
+                CompanyBranch branch = findBranch(knownBranches, company, branchName);
+                if (branch != null && !branchLocationConflicts(row, branch).isEmpty()) {
+                    throw new IllegalStateException("Lokasi cabang berubah. Preview ulang sebelum import.");
+                }
                 Group group = company == null ? null : company.getGroup();
                 if (group == null && !groupName.isEmpty()) {
                     group = groupRepository.findByNameIgnoreCase(groupName).orElse(null);
@@ -128,23 +147,23 @@ public class ExcelImportController {
                         company = Company.builder()
                                 .name(companyName)
                                 .brandName(brandName.isEmpty() ? null : brandName)
-                                .address(address.isEmpty() ? null : address)
-                                .officePhone(officePhone.isEmpty() ? null : officePhone)
+                                .address(!branchName.isEmpty() || address.isEmpty() ? null : address)
+                                .officePhone(!branchName.isEmpty() || officePhone.isEmpty() ? null : officePhone)
                                 .website(website.isEmpty() ? null : website)
                                 .industry(industry.isEmpty() ? null : industry)
                                 .companySizeRevenue(sizeRevenue.isEmpty() ? null : sizeRevenue)
                                 .companySizeEmployee(sizeEmployee.isEmpty() ? null : sizeEmployee)
                                 .companyHardware(hardware.isEmpty() ? null : hardware)
-                                .city(city.isEmpty() ? null : city)
-                                .postalCode(postalCode.isEmpty() ? null : postalCode)
+                                .city(!branchName.isEmpty() || city.isEmpty() ? null : city)
+                                .postalCode(!branchName.isEmpty() || postalCode.isEmpty() ? null : postalCode)
                                 .group(group)
                                 .build();
                         company = companyRepository.save(company);
                         knownCompanies.add(company);
                     } else {
                         if (!brandName.isEmpty() && normalizeField(company.getBrandName()).isEmpty()) company.setBrandName(brandName);
-                        if (!address.isEmpty() && normalizeField(company.getAddress()).isEmpty()) company.setAddress(address);
-                        if (!officePhone.isEmpty() && (normalizeField(company.getOfficePhone()).isEmpty()
+                        if (branchName.isEmpty() && !address.isEmpty() && normalizeField(company.getAddress()).isEmpty()) company.setAddress(address);
+                        if (branchName.isEmpty() && !officePhone.isEmpty() && (normalizeField(company.getOfficePhone()).isEmpty()
                                 || officePhone.equals(normalizeOfficePhone(company.getOfficePhone())))) {
                             company.setOfficePhone(officePhone);
                         }
@@ -153,17 +172,28 @@ public class ExcelImportController {
                         if (!sizeRevenue.isEmpty() && normalizeField(company.getCompanySizeRevenue()).isEmpty()) company.setCompanySizeRevenue(sizeRevenue);
                         if (!sizeEmployee.isEmpty() && normalizeField(company.getCompanySizeEmployee()).isEmpty()) company.setCompanySizeEmployee(sizeEmployee);
                         if (!hardware.isEmpty() && normalizeField(company.getCompanyHardware()).isEmpty()) company.setCompanyHardware(hardware);
-                        if (!city.isEmpty() && normalizeField(company.getCity()).isEmpty()) company.setCity(city);
-                        if (!postalCode.isEmpty() && normalizeField(company.getPostalCode()).isEmpty()) company.setPostalCode(postalCode);
+                        if (branchName.isEmpty() && !city.isEmpty() && normalizeField(company.getCity()).isEmpty()) company.setCity(city);
+                        if (branchName.isEmpty() && !postalCode.isEmpty() && normalizeField(company.getPostalCode()).isEmpty()) company.setPostalCode(postalCode);
                         if (group != null && company.getGroup() == null) company.setGroup(group);
                         company = companyRepository.save(company);
                     }
                 }
 
+                if (!branchName.isEmpty()) {
+                    if (company == null || company.getId() == null) throw new IllegalStateException("Perusahaan cabang belum tersedia");
+                    if (branch == null) {
+                        branch = CompanyBranch.builder().companyId(company.getId()).name(branchName).build();
+                    }
+                    if (normalizeField(branch.getAddress()).isEmpty() && !address.isEmpty()) branch.setAddress(address);
+                    if (normalizeField(branch.getOfficePhone()).isEmpty() && !officePhone.isEmpty()) branch.setOfficePhone(officePhone);
+                    if (normalizeField(branch.getCity()).isEmpty() && !city.isEmpty()) branch.setCity(city);
+                    if (normalizeField(branch.getPostalCode()).isEmpty() && !postalCode.isEmpty()) branch.setPostalCode(postalCode);
+                    boolean newBranch = branch.getId() == null;
+                    branch = companyBranchRepository.save(branch);
+                    if (newBranch) knownBranches.add(branch);
+                }
+
                 // 3. Find existing Database record or create new
-                Long existingId = validatedRows.get(row.getRowNum() + 1).getExistingDatabaseId();
-                Database targetDb = existingId == null ? null : databaseRepository.findById(existingId)
-                        .orElseThrow(() -> new IllegalStateException("Kontak target sudah tidak tersedia: " + existingId));
                 PositionLevel posLevel = PositionLevel.fromValue(positionStr);
                 String normPhone = formatNormalizedPhone(mobilePhone);
 
@@ -178,6 +208,7 @@ public class ExcelImportController {
                     if (normPhone != null) targetDb.setNormalizedPhone(normPhone);
                     if (!linkedinUrl.isEmpty()) targetDb.setLinkedinUrl(linkedinUrl);
                     if (company != null) targetDb.setCompany(company);
+                    if (branch != null) targetDb.setBranch(branch);
                     targetDb = databaseRepository.save(targetDb);
                     updatedCount++;
                 } else {
@@ -195,6 +226,7 @@ public class ExcelImportController {
                             .linkedinUrl(linkedinUrl.isEmpty() ? null : linkedinUrl)
                             .isActive(true)
                             .company(company)
+                            .branch(branch)
                             .build();
                     targetDb = databaseRepository.save(targetDb);
                     newCount++;
@@ -260,9 +292,11 @@ public class ExcelImportController {
         try (InputStream is = file.getInputStream(); Workbook workbook = WorkbookFactory.create(is)) {
             Sheet sheet = workbook.getSheetAt(0);
             validateHeaders(sheet.getRow(0));
+            int branchColumn = branchColumn(sheet.getRow(0));
             // ponytail: one snapshot, O(rows * contacts); index identities if large imports become slow.
             List<Database> databases = databaseRepository.findAll();
             List<Company> knownCompanies = companyRepository.findAll();
+            List<CompanyBranch> knownBranches = companyBranchRepository.findAll();
             List<RowPreview> previews = new ArrayList<>();
             Map<String, List<RowPreview>> fileOwners = new LinkedHashMap<>();
             Map<String, List<RowPreview>> companyRows = new LinkedHashMap<>();
@@ -275,19 +309,23 @@ public class ExcelImportController {
 
                 String groupName = cell(row, 1);
                 String companyName = cleanCompanyName(cell(row, 3));
+                String branchName = branchColumn < 0 ? "" : cell(row, branchColumn);
                 String firstName = cell(row, 5);
                 String lastName = cell(row, 6);
                 String mobilePhone = cleanPhone(cell(row, 12));
                 String companyEmail = cell(row, 13);
                 String personalEmail = cell(row, 14);
                 RowPreview preview = RowPreview.builder()
-                        .rowNum(r + 1).groupName(groupName).companyName(companyName)
+                        .rowNum(r + 1).groupName(groupName).companyName(companyName).branchName(branchName)
                         .firstName(firstName).lastName(lastName).jobTitle(cell(row, 9))
                         .companyEmail(companyEmail).personalEmail(personalEmail).mobilePhone(mobilePhone)
                         .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
                         .status("NEW").message("").build();
                 previews.add(preview);
                 validateCompanyFieldLengths(row, preview);
+                if (branchName.codePointCount(0, branchName.length()) > 255) {
+                    conflict(preview, "Nama Cabang/Kantor maksimal 255 karakter. Perbaiki isi sel lalu upload ulang.");
+                }
 
                 for (String email : emailTokens(companyEmail + ";" + personalEmail)) {
                     if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
@@ -306,10 +344,29 @@ public class ExcelImportController {
 
                 Database target = null;
                 Company matchedCompany = null;
+                CompanyBranch matchedBranch = null;
                 try {
                     matchedCompany = findCompany(knownCompanies, companyName);
                     target = findExistingDatabase(databases, firstName, lastName, companyName, personal, mobilePhone);
                     if (target != null) preview.setExistingDatabaseId(target.getId());
+                    if (target != null && target.getBranch() != null) {
+                        CompanyBranch retainedBranch = target.getBranch();
+                        if (matchedCompany == null || !Objects.equals(retainedBranch.getCompanyId(), matchedCompany.getId())
+                                || (!branchName.isEmpty() && !normalizeKey(branchName).equals(normalizeKey(retainedBranch.getName())))) {
+                            conflict(preview, "Kontak sudah terdaftar di cabang " + retainedBranch.getName()
+                                    + ". Pindahkan perusahaan/cabang melalui form kontak sebelum import.");
+                        } else if (branchName.isEmpty()) {
+                            branchName = retainedBranch.getName();
+                        }
+                    }
+                    matchedBranch = findBranch(knownBranches, matchedCompany, branchName);
+                    preview.setBranchName(matchedBranch == null ? branchName : matchedBranch.getName());
+                    if (matchedBranch != null) {
+                        for (String field : branchLocationConflicts(row, matchedBranch)) {
+                            conflict(preview, field + " berbeda dari data cabang " + matchedBranch.getName()
+                                    + ". Perbaiki Excel atau ubah lokasi cabang melalui Company Details sebelum import.");
+                        }
+                    }
                 } catch (IllegalArgumentException e) {
                     conflict(preview, e.getMessage());
                 }
@@ -321,8 +378,12 @@ public class ExcelImportController {
                     // A blank update is valid only if the retained value actually fills that field.
                     Database retained = target;
                     Company retainedCompany = matchedCompany;
-                    missing.removeIf(field -> hasRetainedValue(field, retained, retainedCompany, personal));
+                    CompanyBranch retainedBranch = matchedBranch;
+                    boolean branchLocation = !preview.getBranchName().isEmpty();
+                    missing.removeIf(field -> hasRetainedValue(field, retained, retainedCompany, retainedBranch, branchLocation, personal));
                 }
+                CompanyBranch availableBranch = matchedBranch;
+                if (availableBranch != null) missing.removeIf(field -> !normalizeField(branchLocationValue(field, availableBranch)).isEmpty());
                 if (!missing.isEmpty()) {
                     if ("NEW".equals(preview.getStatus())) preview.setStatus("INCOMPLETE");
                     addMessage(preview, "Kolom kosong: " + String.join(", ", missing));
@@ -350,15 +411,18 @@ public class ExcelImportController {
                 if (normalizedPhone != null) registerOwner(fileOwners, "Mobile Phone: " + normalizedPhone, preview);
                 for (String email : personal) registerOwner(fileOwners, "Personal Email: " + email, preview);
 
-                String companyKey = normalizeKey(companyName);
-                companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
-                Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
-                for (int column : List.of(1, 2, 10, 11, 15, 16, 17, 18, 20, 21, 22)) {
-                    String value = companyCellValue(row, column);
-                    if (value.isEmpty()) continue;
-                    String previous = values.putIfAbsent(column, value);
-                    if (previous != null && !previous.equals(value)) {
-                        companyConflicts.computeIfAbsent(companyKey, key -> new LinkedHashSet<>()).add(column);
+                // Company metadata is shared; locations are compared only within the same office.
+                for (boolean location : List.of(false, true)) {
+                    String companyKey = normalizeKey(companyName) + (location ? "\u0000" + normalizeKey(preview.getBranchName()) : "");
+                    companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
+                    Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
+                    for (int column : location ? List.of(10, 11, 20, 21) : List.of(1, 2, 15, 16, 17, 18, 22)) {
+                        String value = companyCellValue(row, column);
+                        if (value.isEmpty()) continue;
+                        String previous = values.putIfAbsent(column, value);
+                        if (previous != null && !previous.equals(value)) {
+                            companyConflicts.computeIfAbsent(companyKey, key -> new LinkedHashSet<>()).add(column);
+                        }
                     }
                 }
             }
@@ -385,9 +449,9 @@ public class ExcelImportController {
                 if ("NEW".equals(preview.getStatus()) && preview.getExistingDatabaseId() != null) {
                     preview.setStatus("DUPLICATE");
                     addMessage(preview, "Update kontak ID " + preview.getExistingDatabaseId()
-                            + ". Data kontak dan perusahaan tempat bekerja mengikuti Excel. Nilai kosong dan email lama dipertahankan; data master company hanya dilengkapi jika kosong.");
+                            + ". Nilai kosong dan email lama dipertahankan; data master company/cabang hanya dilengkapi jika kosong.");
                 } else if ("NEW".equals(preview.getStatus())) {
-                    addMessage(preview, "Akan disimpan sebagai kontak baru. Company yang sudah ada hanya dilengkapi jika kosong.");
+                    addMessage(preview, "Akan disimpan sebagai kontak baru. Company/cabang yang sudah ada hanya dilengkapi jika kosong.");
                 }
             }
             if (previews.isEmpty()) {
@@ -410,6 +474,9 @@ public class ExcelImportController {
     }
 
     private void describeCompanyConflict(Sheet sheet, List<RowPreview> rows, int column) {
+        boolean branchScope = List.of(10, 11, 20, 21).contains(column) && !rows.get(0).getBranchName().isEmpty();
+        String scope = branchScope ? "cabang " + rows.get(0).getBranchName() : "perusahaan ini";
+        String subject = branchScope ? "cabang" : "perusahaan";
         Map<String, List<RowPreview>> variants = new LinkedHashMap<>();
         for (RowPreview row : rows) {
             String value = companyCellValue(sheet.getRow(row.getRowNum() - 1), column);
@@ -429,11 +496,11 @@ public class ExcelImportController {
             int count = variants.getOrDefault(value, List.of()).size();
             String reason = uniqueLargest && count > 0 && count < largest
                     ? "Periksa nilai berbeda: "
-                    : "Ikut tertahan karena perbedaan data perusahaan: ";
+                    : "Ikut tertahan karena perbedaan data " + subject + ": ";
             conflict(row, reason + HEADERS.get(column) + " baris ini "
                     + (value.isEmpty() ? "kosong" : "'" + value + "'") + ". " + details
-                    + ". Pastikan nilai yang benar lalu samakan baris untuk lokasi perusahaan yang sama."
-                    + " Semua " + rows.size() + " baris perusahaan ini ditahan; nilai terbanyak belum tentu benar.");
+                    + ". Pastikan nilai yang benar lalu samakan baris untuk lokasi " + subject + " yang sama."
+                    + " Semua " + rows.size() + " baris " + scope + " ditahan; nilai terbanyak belum tentu benar.");
         }
     }
 
@@ -447,7 +514,38 @@ public class ExcelImportController {
         return matches.isEmpty() ? null : matches.get(0);
     }
 
-    private boolean hasRetainedValue(String field, Database contact, Company company, Set<String> incomingPersonal) {
+    private CompanyBranch findBranch(List<CompanyBranch> branches, Company company, String name) {
+        if (company == null || name.isEmpty()) return null;
+        List<CompanyBranch> matches = branches.stream()
+                .filter(branch -> Objects.equals(company.getId(), branch.getCompanyId())
+                        && normalizeKey(name).equals(normalizeKey(branch.getName()))).toList();
+        if (matches.size() > 1) throw new IllegalArgumentException("Cabang ambigu: " + name + ". Rapikan cabang duplikat sebelum import.");
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private List<String> branchLocationConflicts(Row row, CompanyBranch branch) {
+        List<String> conflicts = new ArrayList<>();
+        for (int column : List.of(10, 11, 20, 21)) {
+            String incoming = companyCellValue(row, column);
+            String retained = normalizeKey(normalizeField(branchLocationValue(HEADERS.get(column), branch)));
+            if (!incoming.isEmpty() && !retained.isEmpty() && !incoming.equals(retained)) conflicts.add(HEADERS.get(column));
+        }
+        return conflicts;
+    }
+
+    private String branchLocationValue(String field, CompanyBranch branch) {
+        if (branch == null) return null;
+        return switch (field) {
+            case "Address" -> branch.getAddress();
+            case "Office Phone" -> normalizeOfficePhone(branch.getOfficePhone());
+            case "City" -> branch.getCity();
+            case "Postal Code" -> branch.getPostalCode();
+            default -> null;
+        };
+    }
+
+    private boolean hasRetainedValue(String field, Database contact, Company company, CompanyBranch branch,
+                                     boolean branchLocation, Set<String> incomingPersonal) {
         String value = switch (field) {
             case "Salutation" -> contact.getSalutation();
             case "Last Name" -> contact.getLastName();
@@ -459,10 +557,10 @@ public class ExcelImportController {
                             && !incomingPersonal.contains(normalizeKey(email))).findFirst().orElse(null);
             case "Nama Group Holding" -> company == null || company.getGroup() == null ? null : company.getGroup().getName();
             case "Nama Brand" -> company == null ? null : company.getBrandName();
-            case "Address" -> company == null ? null : company.getAddress();
-            case "Office Phone" -> company == null ? null : cleanPhone(company.getOfficePhone());
+            case "Address" -> branchLocation ? branchLocationValue(field, branch) : company == null ? null : company.getAddress();
+            case "Office Phone" -> branchLocation ? branchLocationValue(field, branch) : company == null ? null : cleanPhone(company.getOfficePhone());
             case "Industry" -> company == null ? null : company.getIndustry();
-            case "City" -> company == null ? null : company.getCity();
+            case "City" -> branchLocation ? branchLocationValue(field, branch) : company == null ? null : company.getCity();
             case "Company Website" -> company == null ? null : company.getWebsite();
             default -> null;
         };
@@ -561,7 +659,7 @@ public class ExcelImportController {
     }
 
     private boolean isBlankRow(Row row) {
-        for (int column = 1; column < HEADERS.size(); column++) {
+        for (int column = 1; column < Math.max(HEADERS.size(), row.getLastCellNum()); column++) {
             if (!cell(row, column).isEmpty()) return false;
         }
         return true;
@@ -603,6 +701,18 @@ public class ExcelImportController {
                 throw new IllegalArgumentException("Kolom " + (column + 1) + " harus '" + HEADERS.get(column) + "'.");
             }
         }
+    }
+
+    private int branchColumn(Row headers) {
+        int found = -1;
+        for (Cell header : headers) {
+            if (header.getColumnIndex() >= HEADERS.size()
+                    && Set.of("cabang/kantor", "branch", "branch name").contains(normalizeKey(getCellValueAsString(header)))) {
+                if (found >= 0) throw new IllegalArgumentException("Kolom Cabang/Kantor hanya boleh satu.");
+                found = header.getColumnIndex();
+            }
+        }
+        return found;
     }
 
     private static List<String> emailTokens(String raw) {
@@ -784,6 +894,7 @@ public class ExcelImportController {
         private int rowNum;
         private String groupName;
         private String companyName;
+        private String branchName;
         private String firstName;
         private String lastName;
         private String jobTitle;

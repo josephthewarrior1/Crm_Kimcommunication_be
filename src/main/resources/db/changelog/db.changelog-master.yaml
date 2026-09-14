@@ -34,4 +34,6 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-database-merge-audits.yml
   - include:
       file: db/changelog/changes/changelog-crm-company-website-text.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-company-branches.yml
 

@@ -1,0 +1,60 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-company-branches
+      author: codex
+      changes:
+        - createTable:
+            tableName: company_branches
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: company_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_company_branches_company
+                    referencedTableName: companies
+                    referencedColumnNames: id
+              - column:
+                  name: name
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: address
+                  type: TEXT
+              - column:
+                  name: city
+                  type: VARCHAR(100)
+              - column:
+                  name: postal_code
+                  type: VARCHAR(20)
+              - column:
+                  name: office_phone
+                  type: VARCHAR(50)
+        - sql:
+            dbms: postgresql
+            sql: CREATE UNIQUE INDEX uq_company_branches_name ON company_branches (company_id, lower(trim(name)))
+        - addColumn:
+            tableName: databases
+            columns:
+              - column:
+                  name: branch_id
+                  type: BIGINT
+                  constraints:
+                    nullable: true
+                    foreignKeyName: fk_databases_branch
+                    referencedTableName: company_branches
+                    referencedColumnNames: id
+        - createIndex:
+            tableName: databases
+            indexName: idx_databases_branch
+            columns:
+              - column:
+                  name: branch_id

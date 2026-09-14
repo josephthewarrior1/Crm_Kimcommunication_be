@@ -7,6 +7,7 @@ import java.util.List;
 
 @Repository
 public interface DatabaseRepository extends JpaRepository<Database, Long> {
+    boolean existsByBranchId(Long branchId);
     interface UploadCount {
         Long getUserId();
         String getMethod();

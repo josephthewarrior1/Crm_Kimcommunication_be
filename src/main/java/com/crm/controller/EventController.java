@@ -461,7 +461,7 @@ public class EventController {
             row.put("Last Name", safe(participant.getDatabase() != null ? participant.getDatabase().getLastName() : null));
             row.put("Position", safe(participant.getDatabase() != null && participant.getDatabase().getPositionLevel() != null ? participant.getDatabase().getPositionLevel().getValue() : null));
             row.put("Job Title", safe(participant.getDatabase() != null ? participant.getDatabase().getJobTitle() : null));
-            row.put("Office Phone", safe(participant.getDatabase() != null && participant.getDatabase().getCompany() != null ? participant.getDatabase().getCompany().getOfficePhone() : null));
+            row.put("Office Phone", contactOfficePhone(participant.getDatabase()));
             row.put("Mobile Phone", safe(participant.getDatabase() != null ? participant.getDatabase().getMobilePhone() : null));
             row.put("Office Email", getOfficeEmail(participant));
             row.put("Personal Email", getPersonalEmail(participant));
@@ -1229,7 +1229,7 @@ public class EventController {
                 .toList();
 
         List<String> cityOptions = availableDatabases.stream()
-                .map(database -> database.getCompany() != null ? safe(database.getCompany().getCity()).trim() : "")
+                .map(database -> contactCity(database).trim())
                 .filter(value -> !value.isBlank())
                 .distinct()
                 .sorted(String::compareToIgnoreCase)
@@ -1562,8 +1562,20 @@ public class EventController {
         if (city == null || city.isBlank()) {
             return true;
         }
-        return safe(database.getCompany() != null ? database.getCompany().getCity() : null)
+        return contactCity(database)
                 .equalsIgnoreCase(city.trim());
+    }
+
+    private String contactCity(Database database) {
+        if (database == null) return "";
+        return safe(database.getBranch() != null ? database.getBranch().getCity()
+                : database.getCompany() != null ? database.getCompany().getCity() : null);
+    }
+
+    private String contactOfficePhone(Database database) {
+        if (database == null) return "";
+        return safe(database.getBranch() != null ? database.getBranch().getOfficePhone()
+                : database.getCompany() != null ? database.getCompany().getOfficePhone() : null);
     }
 
     private boolean matchesAvailableDatabaseInvitedEvent(

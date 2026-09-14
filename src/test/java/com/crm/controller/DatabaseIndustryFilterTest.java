@@ -40,14 +40,14 @@ class DatabaseIndustryFilterTest {
     @SuppressWarnings("unchecked")
     private List<Database> exported(String industry) {
         Map<String, Object> body = (Map<String, Object>) controller.exportDatabases(
-                null, null, null, null, industry, null, "all", "id", "asc", "test").getBody();
+                null, null, null, null, null, industry, null, "all", "id", "asc", "test").getBody();
         return (List<Database>) body.get("items");
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> options(String industry, Long companyId, String tab) {
         return (Map<String, Object>) controller.getDatabaseFilterOptions(
-                null, null, companyId, null, industry, null, tab, "test").getBody();
+                null, null, companyId, null, null, industry, null, tab, "test").getBody();
     }
 
     @Test void distinctCategoriesNeverMatchBySubstring() {
@@ -89,7 +89,7 @@ class DatabaseIndustryFilterTest {
     @Test void listExportAndFacetsAgreeAndStillRespectCompanyAndTabFilters() {
         Database first = contact(1, "Mining / Oil / Gas"), second = contact(2, "Mining/Oil/Gas");
         when(databases.findAll()).thenReturn(List.of(first, second, contact(3, "Education")));
-        Map<?, ?> page = (Map<?, ?>) controller.getDatabasesList(null, null, null, null,
+        Map<?, ?> page = (Map<?, ?>) controller.getDatabasesList(null, null, null, null, null,
                 "Mining/Oil/Gas", null, "all", "id", "asc", 2, 1, "test").getBody();
         assertEquals(2, page.get("total"));
         assertEquals(2, page.get("totalPages"));

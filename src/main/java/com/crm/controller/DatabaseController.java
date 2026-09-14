@@ -1,6 +1,7 @@
 package com.crm.controller;
 
 import com.crm.domain.Company;
+import com.crm.domain.CompanyBranch;
 import com.crm.domain.Database;
 import com.crm.domain.DatabaseEmail;
 import com.crm.domain.EventParticipant;
@@ -10,6 +11,7 @@ import com.crm.domain.FlagStatus;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.repository.CompanyRepository;
+import com.crm.repository.CompanyBranchRepository;
 import com.crm.repository.DatabaseEmailRepository;
 import com.crm.repository.DatabaseRepository;
 import com.crm.repository.EventParticipantRepository;
@@ -38,6 +40,9 @@ public class DatabaseController {
 
     @Autowired
     private CompanyRepository companyRepository;
+
+    @Autowired
+    private CompanyBranchRepository companyBranchRepository;
 
     @Autowired
     private DatabaseEmailRepository databaseEmailRepository;
@@ -71,6 +76,7 @@ public class DatabaseController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Long groupId,
             @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) Long branchId,
             @RequestParam(required = false) String positionLevel,
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String city,
@@ -106,6 +112,7 @@ public class DatabaseController {
                 .filter(database -> matchesSearch(database, search))
                 .filter(database -> matchesGroup(database, groupId))
                 .filter(database -> matchesCompany(database, companyId))
+                .filter(database -> matchesBranch(database, branchId))
                 .filter(database -> matchesPositionLevel(database, positionLevel))
                 .filter(database -> matchesIndustry(database, industry))
                 .filter(database -> matchesCity(database, city))
@@ -137,6 +144,7 @@ public class DatabaseController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Long groupId,
             @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) Long branchId,
             @RequestParam(required = false) String positionLevel,
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String city,
@@ -149,7 +157,7 @@ public class DatabaseController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<Database> items = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, city, tab).stream()
+        List<Database> items = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, city, tab).stream()
                 .sorted(buildComparator(sortBy, sortOrder))
                 .toList();
 
@@ -164,6 +172,7 @@ public class DatabaseController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) Long groupId,
             @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) Long branchId,
             @RequestParam(required = false) String positionLevel,
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String city,
@@ -174,12 +183,12 @@ public class DatabaseController {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<Database> scopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, city, tab);
-        List<Database> groupScopedDatabases = filterVisibleDatabases(search, null, companyId, positionLevel, industry, city, tab);
-        List<Database> companyScopedDatabases = filterVisibleDatabases(search, groupId, null, positionLevel, industry, city, tab);
-        List<Database> cityScopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, industry, null, tab);
-        List<Database> industryScopedDatabases = filterVisibleDatabases(search, groupId, companyId, positionLevel, null, city, tab);
-        List<Database> positionScopedDatabases = filterVisibleDatabases(search, groupId, companyId, null, industry, city, tab);
+        List<Database> groupScopedDatabases = filterVisibleDatabases(search, null, companyId, branchId, positionLevel, industry, city, tab);
+        List<Database> companyScopedDatabases = filterVisibleDatabases(search, groupId, null, branchId, positionLevel, industry, city, tab);
+        List<Database> branchScopedDatabases = filterVisibleDatabases(search, groupId, companyId, null, positionLevel, industry, city, tab);
+        List<Database> cityScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, null, tab);
+        List<Database> industryScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, null, city, tab);
+        List<Database> positionScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, null, industry, city, tab);
 
         List<Map<String, Object>> groups = groupScopedDatabases.stream()
                 .filter(database -> database.getCompany() != null && database.getCompany().getGroup() != null)
@@ -213,8 +222,18 @@ public class DatabaseController {
                 ))
                 .toList();
 
+        List<Map<String, Object>> branches = branchScopedDatabases.stream()
+                .map(Database::getBranch)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toMap(CompanyBranch::getId, branch -> branch,
+                        (existing, replacement) -> existing, LinkedHashMap::new))
+                .values().stream()
+                .sorted(Comparator.comparing(branch -> safe(branch.getName()).toLowerCase(Locale.ROOT)))
+                .map(branch -> Map.<String, Object>of("id", branch.getId(), "companyId", branch.getCompanyId(), "name", safe(branch.getName())))
+                .toList();
+
         List<Map<String, String>> cities = cityScopedDatabases.stream()
-                .map(database -> database.getCompany() != null ? database.getCompany().getCity() : null)
+                .map(this::contactCity)
                 .filter(value -> !isBlank(value))
                 .collect(Collectors.toMap(
                         this::normalizeCity,
@@ -250,6 +269,7 @@ public class DatabaseController {
                 "cities", cities,
                 "groups", groups,
                 "companies", companies,
+                "branches", branches,
                 "industries", industries,
                 "positionLevels", positionLevels
         ));
@@ -259,6 +279,7 @@ public class DatabaseController {
             String search,
             Long groupId,
             Long companyId,
+            Long branchId,
             String positionLevel,
             String industry,
             String city,
@@ -268,6 +289,7 @@ public class DatabaseController {
                 .filter(database -> matchesSearch(database, search))
                 .filter(database -> matchesGroup(database, groupId))
                 .filter(database -> matchesCompany(database, companyId))
+                .filter(database -> matchesBranch(database, branchId))
                 .filter(database -> matchesPositionLevel(database, positionLevel))
                 .filter(database -> matchesIndustry(database, industry))
                 .filter(database -> matchesCity(database, city))
@@ -279,6 +301,8 @@ public class DatabaseController {
     public ResponseEntity<?> createDatabase(
             @RequestBody Database database, 
             @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) Long branchId,
+            @RequestParam(required = false, defaultValue = "false") boolean clearBranch,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -291,13 +315,18 @@ public class DatabaseController {
         if (database.getId() != null) {
             return ResponseEntity.badRequest().body("Use the update endpoint for an existing database record");
         }
+        if (branchId != null && clearBranch) return ResponseEntity.badRequest().body("Choose branchId or clearBranch, not both");
+        Long resolvedCompanyId = companyId != null ? companyId : database.getCompany() != null ? database.getCompany().getId() : null;
+        Company company = resolvedCompanyId == null ? null : companyRepository.findById(resolvedCompanyId).orElse(null);
+        if (resolvedCompanyId != null && company == null) return ResponseEntity.badRequest().body("Company not found");
+        CompanyBranch branch = branchId == null ? null : companyBranchRepository.findById(branchId).orElse(null);
+        if (branchId != null && (branch == null || company == null || !branch.getCompanyId().equals(company.getId()))) {
+            return ResponseEntity.badRequest().body("Cabang harus berasal dari perusahaan yang dipilih");
+        }
+        database.setCompany(company);
+        database.setBranch(branch);
         database.setCreatedByUserId(currentUser.getId());
         database.setEntryMethod("manual");
-
-        if (companyId != null) {
-            Company company = companyRepository.findById(companyId).orElse(null);
-            database.setCompany(company);
-        }
         Database saved = databaseRepository.save(database);
         suspiciousIdentityService.checkAndFlagDatabase(saved);
         return ResponseEntity.ok(saved);
@@ -321,6 +350,8 @@ public class DatabaseController {
             @PathVariable Long id, 
             @RequestBody Database databaseDetails, 
             @RequestParam(required = false) Long companyId,
+            @RequestParam(required = false) Long branchId,
+            @RequestParam(required = false, defaultValue = "false") boolean clearBranch,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -331,6 +362,17 @@ public class DatabaseController {
         }
 
         return databaseRepository.findById(id).map(existing -> {
+            if (branchId != null && clearBranch) return ResponseEntity.badRequest().body("Choose branchId or clearBranch, not both");
+            Long requestedCompanyId = companyId != null ? companyId : databaseDetails.getCompany() != null ? databaseDetails.getCompany().getId() : null;
+            Company company = requestedCompanyId == null ? existing.getCompany() : companyRepository.findById(requestedCompanyId).orElse(null);
+            if (requestedCompanyId != null && company == null) return ResponseEntity.badRequest().body("Company not found");
+            CompanyBranch branch = branchId == null ? null : companyBranchRepository.findById(branchId).orElse(null);
+            if (branchId != null && (branch == null || company == null || !branch.getCompanyId().equals(company.getId()))) {
+                return ResponseEntity.badRequest().body("Cabang harus berasal dari perusahaan yang dipilih");
+            }
+            // Validate the complete assignment before touching this managed contact.
+            existing.setCompany(company);
+            if (clearBranch || branchId != null) existing.setBranch(branch);
             if (databaseDetails.getSalutation() != null) existing.setSalutation(databaseDetails.getSalutation());
             if (databaseDetails.getFirstName() != null) existing.setFirstName(databaseDetails.getFirstName());
             if (databaseDetails.getLastName() != null) existing.setLastName(databaseDetails.getLastName());
@@ -344,13 +386,6 @@ public class DatabaseController {
             if (databaseDetails.getSource() != null) existing.setSource(databaseDetails.getSource());
             if (databaseDetails.getIsActive() != null) {
                 existing.setIsActive(databaseDetails.getIsActive());
-            }
-
-            if (companyId != null) {
-                Company company = companyRepository.findById(companyId).orElse(null);
-                existing.setCompany(company);
-            } else if (databaseDetails.getCompany() != null) {
-                existing.setCompany(databaseDetails.getCompany());
             }
 
             Database saved = databaseRepository.save(existing);
@@ -543,18 +578,18 @@ public class DatabaseController {
 
     private boolean matchesSearch(Database database, String search) {
         if (search == null || search.isBlank()) return true;
-        String query = search.trim().toLowerCase(Locale.ROOT);
-        String fullName = (safe(database.getFirstName()) + " " + safe(database.getLastName())).toLowerCase(Locale.ROOT);
-        return fullName.contains(query)
-                || safe(database.getJobTitle()).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getSpecialityDivision()).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getMobilePhone()).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getSource() != null ? database.getSource().name() : null).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getCompany() != null ? database.getCompany().getName() : null).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getCompany() != null ? database.getCompany().getBrandName() : null).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null).toLowerCase(Locale.ROOT).contains(query)
-                || safe(database.getCompany() != null ? database.getCompany().getCity() : null).toLowerCase(Locale.ROOT).contains(query);
+        Company company = database.getCompany();
+        String searchable = String.join(" ", safe(database.getFirstName()), safe(database.getLastName()),
+                safe(database.getJobTitle()), safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null),
+                safe(database.getSpecialityDivision()), safe(database.getMobilePhone()),
+                safe(database.getSource() != null ? database.getSource().name() : null),
+                safe(company != null ? company.getName() : null), safe(company != null ? company.getBrandName() : null),
+                safe(company != null && company.getGroup() != null ? company.getGroup().getName() : null),
+                safe(database.getBranch() != null ? database.getBranch().getName() : null),
+                safe(contactCity(database)), safe(contactAddress(database)), safe(contactOfficePhone(database)))
+                .toLowerCase(Locale.ROOT);
+        return java.util.Arrays.stream(search.trim().toLowerCase(Locale.ROOT).split("\\s+"))
+                .allMatch(searchable::contains);
     }
 
     private boolean matchesGroup(Database database, Long groupId) {
@@ -567,6 +602,22 @@ public class DatabaseController {
     private boolean matchesCompany(Database database, Long companyId) {
         if (companyId == null) return true;
         return database.getCompany() != null && companyId.equals(database.getCompany().getId());
+    }
+
+    private boolean matchesBranch(Database database, Long branchId) {
+        return branchId == null || (database.getBranch() != null && branchId.equals(database.getBranch().getId()));
+    }
+
+    private String contactCity(Database database) {
+        return database.getBranch() != null ? database.getBranch().getCity() : database.getCompany() != null ? database.getCompany().getCity() : null;
+    }
+
+    private String contactAddress(Database database) {
+        return database.getBranch() != null ? database.getBranch().getAddress() : database.getCompany() != null ? database.getCompany().getAddress() : null;
+    }
+
+    private String contactOfficePhone(Database database) {
+        return database.getBranch() != null ? database.getBranch().getOfficePhone() : database.getCompany() != null ? database.getCompany().getOfficePhone() : null;
     }
 
     private boolean matchesPositionLevel(Database database, String positionLevel) {
@@ -584,7 +635,7 @@ public class DatabaseController {
 
     private boolean matchesCity(Database database, String city) {
         if (city == null || city.isBlank()) return true;
-        return normalizeCity(database.getCompany() != null ? database.getCompany().getCity() : null)
+        return normalizeCity(contactCity(database))
                 .equalsIgnoreCase(normalizeCity(city));
     }
 
@@ -613,7 +664,7 @@ public class DatabaseController {
             case "jobTitle" -> safe(database.getJobTitle()).toLowerCase(Locale.ROOT);
             case "position" -> safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null).toLowerCase(Locale.ROOT);
             case "industry" -> safe(database.getCompany() != null ? database.getCompany().getIndustry() : null).toLowerCase(Locale.ROOT);
-            case "city" -> safe(database.getCompany() != null ? database.getCompany().getCity() : null).toLowerCase(Locale.ROOT);
+            case "city" -> safe(contactCity(database)).toLowerCase(Locale.ROOT);
             default -> String.valueOf(database.getId() == null ? 0L : database.getId());
         };
     }
@@ -628,14 +679,14 @@ public class DatabaseController {
         if (isBlank(database.getLastName())) return true;
         if (isBlank(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null)) return true;
         if (isBlank(database.getJobTitle())) return true;
-        if (isBlank(database.getCompany() != null ? database.getCompany().getAddress() : null)) return true;
-        if (isBlank(database.getCompany() != null ? database.getCompany().getOfficePhone() : null)) return true;
+        if (isBlank(contactAddress(database))) return true;
+        if (isBlank(contactOfficePhone(database))) return true;
         if (isBlank(database.getMobilePhone())) return true;
         boolean hasCompanyEmail = database.getEmails() != null && database.getEmails().stream()
                 .anyMatch(email -> Boolean.TRUE.equals(email.getIsCorporate()) || "company".equalsIgnoreCase(safe(email.getEmailType())));
         if (!hasCompanyEmail) return true;
         if (isBlank(database.getCompany() != null ? database.getCompany().getIndustry() : null)) return true;
-        if (isBlank(database.getCompany() != null ? database.getCompany().getCity() : null)) return true;
+        if (isBlank(contactCity(database))) return true;
         return isBlank(database.getCompany() != null ? database.getCompany().getWebsite() : null);
     }
 

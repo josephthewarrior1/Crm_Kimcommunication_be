@@ -29,13 +29,13 @@ class DatabaseAttributionTest {
         ReflectionTestUtils.setField(controller,"suspiciousIdentityService",mock(SuspiciousIdentityService.class));
         when(databases.save(any())).thenAnswer(i -> i.getArgument(0));
         Database contact=Database.builder().firstName("Budi").createdByUserId(99L).entryMethod("excel_import").build();
-        assertEquals(200,controller.createDatabase(contact,null,"test").getStatusCode().value());
+        assertEquals(200,controller.createDatabase(contact,null,null,false,"test").getStatusCode().value());
         assertEquals(7L,contact.getCreatedByUserId());assertEquals("manual",contact.getEntryMethod());
         contact.setId(10L);
-        assertEquals(400,controller.createDatabase(contact,null,"test").getStatusCode().value());
+        assertEquals(400,controller.createDatabase(contact,null,null,false,"test").getStatusCode().value());
         when(databases.findById(10L)).thenReturn(Optional.of(contact));
         Database changes=Database.builder().firstName("Budi updated").createdByUserId(9L).entryMethod("excel_import").build();
-        assertEquals(200,controller.updateDatabase(10L,changes,null,"test").getStatusCode().value());
+        assertEquals(200,controller.updateDatabase(10L,changes,null,null,false,"test").getStatusCode().value());
         assertEquals(7L,contact.getCreatedByUserId());assertEquals("manual",contact.getEntryMethod());
         verify(databases,times(2)).save(any());
     }

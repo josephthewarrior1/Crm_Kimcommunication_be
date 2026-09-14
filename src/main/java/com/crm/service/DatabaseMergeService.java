@@ -82,6 +82,12 @@ public class DatabaseMergeService {
         before.put("removals", removals);
         require(samePerson(target, source, emails), HttpStatus.CONFLICT,
                 "Identity mismatch: normalized name plus matching phone, personal email or individual LinkedIn required");
+        require(Objects.equals(target.get("branch_id"), source.get("branch_id")), HttpStatus.CONFLICT,
+                "Different branches: align company/branch assignments before merging");
+        if (target.get("branch_id") != null) {
+            require(Objects.equals(target.get("company_id"), source.get("company_id")), HttpStatus.CONFLICT,
+                    "Branch company mismatch: align company/branch assignments before merging");
+        }
         if (target.get("company_id") != null && source.get("company_id") != null
                 && number(target.get("company_id")) != number(source.get("company_id"))) {
             require(companies.size() == 2 && !companyKey(companies.get(0).get("name")).isEmpty()

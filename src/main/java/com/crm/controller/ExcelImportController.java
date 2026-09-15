@@ -109,9 +109,9 @@ public class ExcelImportController {
                 String sizeEmployee = normalizeField(getCellValueAsString(row.getCell(17)));
                 String hardware = normalizeField(getCellValueAsString(row.getCell(18)));
                 String linkedinUrl = normalizeField(getCellValueAsString(row.getCell(19)));
-                String city = normalizeField(getCellValueAsString(row.getCell(20)));
-                String postalCode = normalizeField(getCellValueAsString(row.getCell(21)));
-                String website = normalizeField(getCellValueAsString(row.getCell(22)));
+                String city = cell(row, 20);
+                String postalCode = cell(row, 21);
+                String website = cell(row, 22);
 
                 if (!validatedRows.containsKey(row.getRowNum() + 1)) continue;
 
@@ -291,8 +291,7 @@ public class ExcelImportController {
 
         try (InputStream is = file.getInputStream(); Workbook workbook = WorkbookFactory.create(is)) {
             Sheet sheet = workbook.getSheetAt(0);
-            validateHeaders(sheet.getRow(0));
-            int branchColumn = branchColumn(sheet.getRow(0));
+            int branchColumn = validateHeaders(sheet.getRow(0));
             // ponytail: one snapshot, O(rows * contacts); index identities if large imports become slow.
             List<Database> databases = databaseRepository.findAll();
             List<Company> knownCompanies = companyRepository.findAll();
@@ -309,7 +308,7 @@ public class ExcelImportController {
 
                 String groupName = cell(row, 1);
                 String companyName = cleanCompanyName(cell(row, 3));
-                String branchName = branchColumn < 0 ? "" : cell(row, branchColumn);
+                String branchName = branchColumn < 0 ? "" : normalizeField(getCellValueAsString(row.getCell(branchColumn)));
                 String firstName = cell(row, 5);
                 String lastName = cell(row, 6);
                 String mobilePhone = cleanPhone(cell(row, 12));
@@ -655,12 +654,18 @@ public class ExcelImportController {
     }
 
     private String cell(Row row, int index) {
-        return normalizeField(getCellValueAsString(row.getCell(index)));
+        return normalizeField(getCellValueAsString(row.getCell(columnIndex(row, index))));
+    }
+
+    private int columnIndex(Row row, int index) {
+        // The new template inserts Cabang/Kantor after LinkedIn; legacy columns stay semantic here.
+        return index >= 20 && index < HEADERS.size()
+                && isBranchHeader(row.getSheet().getRow(0).getCell(20)) ? index + 1 : index;
     }
 
     private boolean isBlankRow(Row row) {
         for (int column = 1; column < Math.max(HEADERS.size(), row.getLastCellNum()); column++) {
-            if (!cell(row, column).isEmpty()) return false;
+            if (!normalizeField(getCellValueAsString(row.getCell(column))).isEmpty()) return false;
         }
         return true;
     }
@@ -694,23 +699,32 @@ public class ExcelImportController {
         }
     }
 
-    private void validateHeaders(Row row) {
+    private int validateHeaders(Row row) {
         if (row == null) throw new IllegalArgumentException("Header Excel kosong.");
+        int branchColumn = branchColumn(row);
         for (int column = 0; column < HEADERS.size(); column++) {
             if (!normalizeKey(HEADERS.get(column)).equals(normalizeKey(cell(row, column)))) {
-                throw new IllegalArgumentException("Kolom " + (column + 1) + " harus '" + HEADERS.get(column) + "'.");
+                throw new IllegalArgumentException("Kolom " + (columnIndex(row, column) + 1) + " harus '" + HEADERS.get(column) + "'.");
             }
         }
+        return branchColumn;
+    }
+
+    private boolean isBranchHeader(Cell header) {
+        return Set.of("cabang/kantor", "branch", "branch name")
+                .contains(normalizeKey(getCellValueAsString(header)));
     }
 
     private int branchColumn(Row headers) {
         int found = -1;
         for (Cell header : headers) {
-            if (header.getColumnIndex() >= HEADERS.size()
-                    && Set.of("cabang/kantor", "branch", "branch name").contains(normalizeKey(getCellValueAsString(header)))) {
+            if (isBranchHeader(header)) {
                 if (found >= 0) throw new IllegalArgumentException("Kolom Cabang/Kantor hanya boleh satu.");
                 found = header.getColumnIndex();
             }
+        }
+        if (found >= 0 && found != 20 && found < HEADERS.size()) {
+            throw new IllegalArgumentException("Kolom Cabang/Kantor harus setelah Linkedin Link atau di akhir template lama.");
         }
         return found;
     }

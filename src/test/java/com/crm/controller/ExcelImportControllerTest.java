@@ -671,6 +671,121 @@ class ExcelImportControllerTest {
     }
 
     @Test
+    void branchAfterLinkedinPreviewsAndPersistsTheCorrectLocationInXlsxAndXls() throws Exception {
+        String[] data = branchRow("Budi", "081234567890", " Pademangan ", "Alamat Cabang", "021111", "Jakarta");
+        data[19] = "https://www.linkedin.com/in/budi";
+        data[21] = "14420";
+        data[22] = "https://example.com/company";
+        for (Workbook workbook : List.of(new XSSFWorkbook(), new HSSFWorkbook())) {
+            try (workbook) {
+                populateBranchAfterLinkedin(workbook, data);
+                var file = upload(workbook);
+                assertEquals(1, preview(file).getNewCount());
+                assertEquals("Pademangan", preview(file).getRows().get(0).getBranchName());
+                assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+                assertEquals(1, storedBranches.size());
+                CompanyBranch branch = storedBranches.get(0);
+                assertEquals("Pademangan", branch.getName());
+                assertEquals("Jakarta", branch.getCity());
+                assertEquals("14420", branch.getPostalCode());
+                assertEquals("Alamat Cabang", branch.getAddress());
+                assertEquals("https://example.com/company", company.getWebsite());
+                assertEquals("Alamat lama", company.getAddress());
+                assertNull(company.getCity()); assertNull(company.getPostalCode());
+            }
+        }
+        verify(databases, times(2)).save(argThat(database -> database.getBranch() == storedBranches.get(0)
+                && "https://www.linkedin.com/in/budi".equals(database.getLinkedinUrl())));
+    }
+
+    @Test
+    void blankBranchAfterLinkedinStillStoresCompanyCityPostalCodeAndWebsite() throws Exception {
+        String[] data = branchRow("Budi", "081234567890", "", "Alamat Excel", "021111", "Bandung");
+        data[21] = "40111"; data[22] = "https://example.com/bandung";
+        var file = branchAfterLinkedinFile(data);
+        assertEquals(1, preview(file).getNewCount());
+        assertEquals("", preview(file).getRows().get(0).getBranchName());
+        assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals("Bandung", company.getCity());
+        assertEquals("40111", company.getPostalCode());
+        assertEquals("https://example.com/bandung", company.getWebsite());
+        verify(branches, never()).save(any());
+        verify(databases).save(argThat(database -> database.getBranch() == null));
+    }
+
+    @Test
+    void branchAfterLinkedinValidatesShiftedRequiredFieldsAndFieldLengths() throws Exception {
+        for (int column : List.of(20, 22)) {
+            String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat Cabang", "021111", "Jakarta");
+            data[column] = "";
+            var file = branchAfterLinkedinFile(data);
+            assertEquals(1, preview(file).getIncompleteCount());
+            assertTrue(preview(file).getRows().get(0).getMessage().contains(column == 20 ? "City" : "Company Website"));
+            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+        }
+        for (int column : List.of(20, 21)) {
+            String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat Cabang", "021111", "Jakarta");
+            data[column] = "x".repeat(column == 20 ? 101 : 21);
+            var file = branchAfterLinkedinFile(data);
+            assertEquals(1, preview(file).getConflictCount());
+            assertTrue(preview(file).getRows().get(0).getMessage().contains(column == 20 ? "City" : "Postal Code"));
+        }
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+    }
+
+    @Test
+    void branchAfterLinkedinRejectsConflictingExistingBranchCityAndPostalCode() throws Exception {
+        CompanyBranch branch = existingBranch("Pademangan", "Alamat Cabang", "021111", "Jakarta");
+        branch.setPostalCode("14420");
+        for (int column : List.of(20, 21)) {
+            String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat Cabang", "021111", "Jakarta");
+            data[21] = "14420";
+            data[column] = column == 20 ? "Bandung" : "40111";
+            var file = branchAfterLinkedinFile(data);
+            assertEquals(1, preview(file).getConflictCount());
+            assertTrue(preview(file).getRows().get(0).getMessage().contains(column == 20 ? "City" : "Postal Code"));
+            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+        }
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+    }
+
+    @Test
+    void branchAfterLinkedinRejectsDuplicateMisplacedAndMalformedHeadersBeforeWrites() throws Exception {
+        String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat Cabang", "021111", "Jakarta");
+        for (String issue : List.of("duplicate", "misplaced", "missing city", "unknown branch")) {
+            try (Workbook workbook = new XSSFWorkbook()) {
+                populateBranchAfterLinkedin(workbook, data);
+                Row headers = workbook.getSheetAt(0).getRow(0);
+                switch (issue) {
+                    case "duplicate" -> headers.createCell(24).setCellValue("Branch");
+                    case "misplaced" -> {
+                        headers.getCell(20).setCellValue("City");
+                        headers.getCell(21).setCellValue("Cabang/Kantor");
+                    }
+                    case "missing city" -> headers.getCell(21).setCellValue("Postal Code");
+                    case "unknown branch" -> headers.getCell(20).setCellValue("Cabang typo");
+                }
+                var file = upload(workbook);
+                var response = controller.previewImport(file);
+                assertEquals(400, response.getStatusCode().value(), issue);
+                if (issue.equals("duplicate")) assertTrue(response.getBody().toString().contains("hanya boleh satu"));
+                if (issue.equals("missing city")) assertTrue(response.getBody().toString().contains("Kolom 22 harus 'City'"));
+                assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value(), issue);
+            }
+        }
+        verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
+    }
+
+    @Test
+    void aRowContainingOnlyTheNewBranchColumnIsValidatedInsteadOfSilentlySkipped() throws Exception {
+        String[] data = new String[24]; Arrays.fill(data, ""); data[23] = "Pademangan";
+        var result = preview(branchAfterLinkedinFile(data));
+        assertEquals(1, result.getTotalRows());
+        assertEquals("Pademangan", result.getRows().get(0).getBranchName());
+        assertNotEquals("NEW", result.getRows().get(0).getStatus());
+    }
+
+    @Test
     void optionalBranchColumnImportsItsLocationWithoutWritingToCompany() throws Exception {
         try (Workbook workbook = new XSSFWorkbook()) {
             String[] data = row("Budi", "081234567890", "office@example.com", "");
@@ -737,10 +852,11 @@ class ExcelImportControllerTest {
             String[] second = branchRow("Budi", "081234567891", " pademangan ", "Alamat Satu", "021111", "Jakarta");
             first[21] = second[21] = "10000";
             second[column] = column == 11 ? "022222" : "Different";
-            var file = branchFile(first, second);
-            assertEquals(2, preview(file).getConflictCount(), "column " + column);
-            assertTrue(preview(file).getRows().get(0).getMessage().contains("Semua 2 baris cabang Pademangan ditahan"));
-            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+            for (var file : List.of(branchFile(first, second), branchAfterLinkedinFile(first, second))) {
+                assertEquals(2, preview(file).getConflictCount(), "column " + column);
+                assertTrue(preview(file).getRows().get(0).getMessage().contains("Semua 2 baris cabang Pademangan ditahan"));
+                assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+            }
         }
         String[] first = branchRow("Andi", "081234567890", "Pademangan", "Alamat Satu", "021111", "Jakarta");
         String[] second = branchRow("Budi", "081234567891", "Bandung", "Alamat Dua", "022222", "Bandung");
@@ -769,7 +885,8 @@ class ExcelImportControllerTest {
         company.setCity("Jakarta"); company.setOfficePhone("021999");
         String[] data = row("Andi", "081234567890", "office@example.com", "");
         data[10] = data[11] = data[20] = "";
-        for (MockMultipartFile upload : List.of(file(data), branchFile(Arrays.copyOf(data, 24)))) {
+        for (MockMultipartFile upload : List.of(file(data), branchFile(Arrays.copyOf(data, 24)),
+                branchAfterLinkedinFile(Arrays.copyOf(data, 24)))) {
             assertEquals(1, preview(upload).getDuplicateCount());
             assertEquals("Pademangan", preview(upload).getRows().get(0).getBranchName());
             assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value());
@@ -853,6 +970,27 @@ class ExcelImportControllerTest {
             populate(workbook, rows);
             workbook.getSheetAt(0).getRow(0).createCell(23).setCellValue("Cabang/Kantor");
             return upload(workbook);
+        }
+    }
+
+    private MockMultipartFile branchAfterLinkedinFile(String[]... rows) throws Exception {
+        try (Workbook workbook = new XSSFWorkbook()) {
+            populateBranchAfterLinkedin(workbook, rows);
+            return upload(workbook);
+        }
+    }
+
+    private void populateBranchAfterLinkedin(Workbook workbook, String[]... rows) {
+        populate(workbook, rows);
+        Sheet sheet = workbook.getSheetAt(0);
+        sheet.getRow(0).createCell(23).setCellValue("Cabang/Kantor");
+        for (Row row : sheet) {
+            Cell branch = row.getCell(23);
+            String name = branch == null ? "" : branch.getStringCellValue();
+            for (int column = 22; column >= 20; column--) {
+                row.createCell(column + 1).setCellValue(row.getCell(column).getStringCellValue());
+            }
+            row.createCell(20).setCellValue(name);
         }
     }
 

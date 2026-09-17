@@ -185,7 +185,7 @@ public class ExcelImportController {
                         branch = CompanyBranch.builder().companyId(company.getId()).name(branchName).build();
                     }
                     if (normalizeField(branch.getAddress()).isEmpty() && !address.isEmpty()) branch.setAddress(address);
-                    if (normalizeField(branch.getOfficePhone()).isEmpty() && !officePhone.isEmpty()) branch.setOfficePhone(officePhone);
+                    if (!officePhone.isEmpty()) branch.setOfficePhone(officePhone);
                     if (normalizeField(branch.getCity()).isEmpty() && !city.isEmpty()) branch.setCity(city);
                     if (normalizeField(branch.getPostalCode()).isEmpty() && !postalCode.isEmpty()) branch.setPostalCode(postalCode);
                     boolean newBranch = branch.getId() == null;
@@ -448,9 +448,9 @@ public class ExcelImportController {
                 if ("NEW".equals(preview.getStatus()) && preview.getExistingDatabaseId() != null) {
                     preview.setStatus("DUPLICATE");
                     addMessage(preview, "Update kontak ID " + preview.getExistingDatabaseId()
-                            + ". Nilai kosong dan email lama dipertahankan; data master company/cabang hanya dilengkapi jika kosong.");
+                            + ". Nilai kosong dan email lama dipertahankan; Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong.");
                 } else if ("NEW".equals(preview.getStatus())) {
-                    addMessage(preview, "Akan disimpan sebagai kontak baru. Company/cabang yang sudah ada hanya dilengkapi jika kosong.");
+                    addMessage(preview, "Akan disimpan sebagai kontak baru. Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong.");
                 }
             }
             if (previews.isEmpty()) {
@@ -524,7 +524,7 @@ public class ExcelImportController {
 
     private List<String> branchLocationConflicts(Row row, CompanyBranch branch) {
         List<String> conflicts = new ArrayList<>();
-        for (int column : List.of(10, 11, 20, 21)) {
+        for (int column : List.of(10, 20, 21)) {
             String incoming = companyCellValue(row, column);
             String retained = normalizeKey(normalizeField(branchLocationValue(HEADERS.get(column), branch)));
             if (!incoming.isEmpty() && !retained.isEmpty() && !incoming.equals(retained)) conflicts.add(HEADERS.get(column));

@@ -953,6 +953,27 @@ class ExcelImportControllerTest {
         verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
     }
 
+    @Test
+    void newContactsUpdateExistingBranchPhoneAndBlankPhoneRetainsIt() throws Exception {
+        CompanyBranch branch = existingBranch("Sukasari", "Alamat Cabang", "(+62)227303049", "Bandung");
+        String[] first = branchRow("Miftahul", "081234567890", "Sukasari", "Alamat Cabang", "8111317193", "Bandung");
+        String[] second = branchRow("Firman", "081234567891", "Sukasari", "Alamat Cabang", "8111317193", "Bandung");
+        var upload = branchAfterLinkedinFile(first, second);
+        assertEquals(2, preview(upload).getNewCount());
+        assertEquals("(+62)227303049", branch.getOfficePhone(), "Preview must not mutate the branch");
+        var result = controller.importDatabases(upload, "test");
+        assertEquals(200, result.getStatusCode().value());
+        assertEquals(2, ((java.util.Map<?, ?>) result.getBody()).get("newCount"));
+        assertEquals(0, ((java.util.Map<?, ?>) result.getBody()).get("skippedCount"));
+        assertEquals("628111317193", branch.getOfficePhone());
+        verify(databases, times(2)).save(argThat(contact -> contact.getBranch() == branch));
+        first[11] = "";
+        assertEquals(200, controller.importDatabases(branchAfterLinkedinFile(first), "test").getStatusCode().value());
+        assertEquals("628111317193", branch.getOfficePhone());
+        first[11] = "022999999";
+        assertEquals(2, preview(branchAfterLinkedinFile(first, second)).getConflictCount(),
+                "Different phones for one branch within the same file remain ambiguous");
+    }
     private CompanyBranch existingBranch(String name, String address, String phone, String city) {
         CompanyBranch branch = CompanyBranch.builder().id(1000L + storedBranches.size()).companyId(company.getId())
                 .name(name).address(address).officePhone(phone).city(city).build();

@@ -25,6 +25,8 @@ public class UserController {
     @Autowired
     private SecurityHelper securityHelper;
 
+    @Autowired private com.crm.tagtog.TagtogProperties tagtogConfig;
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @GetMapping
@@ -141,6 +143,8 @@ public class UserController {
             @PathVariable Long id,
             @RequestBody UpdatePasswordRequest request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        if (tagtogConfig != null && tagtogConfig.enabled)
+            return ResponseEntity.status(403).body(java.util.Map.of("error", "CENTRAL_LOGIN_REQUIRED", "message", "Use TAGTOG to manage your login"));
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");

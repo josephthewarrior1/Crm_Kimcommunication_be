@@ -1,0 +1,28 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-tagtog-sso-v1
+      author: tagtog
+      changes:
+        - sql:
+            sql: |
+              CREATE TABLE tagtog_identity_links (
+                id BIGSERIAL PRIMARY KEY,
+                issuer VARCHAR(255) NOT NULL,
+                subject VARCHAR(64) NOT NULL,
+                crm_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE RESTRICT,
+                updated_at TIMESTAMPTZ NOT NULL,
+                CONSTRAINT uq_crm_tagtog_identity UNIQUE(issuer, subject),
+                CONSTRAINT uq_crm_tagtog_user UNIQUE(crm_user_id)
+              );
+              ALTER TABLE session_tokens ADD COLUMN token_hash VARCHAR(64);
+              ALTER TABLE session_tokens ADD COLUMN tagtog_issuer VARCHAR(255);
+              ALTER TABLE session_tokens ADD COLUMN tagtog_subject VARCHAR(64);
+              ALTER TABLE session_tokens ADD COLUMN tagtog_session_id VARCHAR(128);
+              ALTER TABLE session_tokens ADD COLUMN tagtog_expires_at TIMESTAMPTZ;
+              ALTER TABLE session_tokens ADD COLUMN tagtog_revoked BOOLEAN NOT NULL DEFAULT FALSE;
+              CREATE UNIQUE INDEX uq_crm_session_token_hash ON session_tokens(token_hash) WHERE token_hash IS NOT NULL;
+              CREATE INDEX idx_crm_tagtog_session_identity ON session_tokens(tagtog_issuer, tagtog_subject);
+              ALTER TABLE session_tokens ADD CONSTRAINT ck_crm_tagtog_bound_session CHECK (
+                (token_hash IS NULL AND tagtog_issuer IS NULL AND tagtog_subject IS NULL AND tagtog_session_id IS NULL AND tagtog_expires_at IS NULL)
+                OR (token_hash IS NOT NULL AND tagtog_issuer IS NOT NULL AND tagtog_subject IS NOT NULL AND tagtog_session_id IS NOT NULL AND tagtog_expires_at IS NOT NULL)
+              );

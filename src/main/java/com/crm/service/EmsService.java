@@ -14,6 +14,9 @@ import java.util.*;
 @Service
 public class EmsService {
 
+    @Value("${ems.integration.enabled:true}")
+    private boolean emsIntegrationEnabled = true;
+
     @Value("${EMS_API_URL:https://api.admin.event.kimcommunication.com}")
     private String emsApiUrl;
 
@@ -44,6 +47,7 @@ public class EmsService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     private String getEmsAccessToken() {
+        if (!emsIntegrationEnabled) return null;
         try {
             String loginUrl = emsApiUrl + "/api/admin/v1/login";
             HttpHeaders headers = new HttpHeaders();

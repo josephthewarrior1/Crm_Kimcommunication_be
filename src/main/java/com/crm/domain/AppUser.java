@@ -30,6 +30,7 @@ public class AppUser {
     private String fullName;
 
     @Column(nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private String password;
 
     @ElementCollection(fetch = FetchType.EAGER)

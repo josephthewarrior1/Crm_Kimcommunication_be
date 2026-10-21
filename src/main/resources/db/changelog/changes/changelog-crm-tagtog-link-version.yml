@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-tagtog-link-version-v1
+      author: tagtog
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE tagtog_identity_links ADD COLUMN link_version VARCHAR(36) NOT NULL DEFAULT gen_random_uuid()::text;
+              ALTER TABLE session_tokens ADD COLUMN tagtog_mapping_version VARCHAR(36);
+              UPDATE session_tokens SET tagtog_revoked = TRUE WHERE token_hash IS NOT NULL;
+              ALTER TABLE session_tokens ADD CONSTRAINT ck_crm_tagtog_mapping_version CHECK (
+                (token_hash IS NULL AND tagtog_mapping_version IS NULL)
+                OR (token_hash IS NOT NULL AND (tagtog_revoked OR tagtog_mapping_version IS NOT NULL))
+              );

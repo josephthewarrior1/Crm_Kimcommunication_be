@@ -29,6 +29,9 @@ public class AuthController {
     @Autowired
     private SecurityHelper securityHelper;
 
+    @Autowired private com.crm.tagtog.TagtogProperties tagtogConfig;
+    @Autowired private com.crm.tagtog.TagtogService tagtogService;
+
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @PostMapping("/register")
@@ -36,6 +39,7 @@ public class AuthController {
             @RequestBody RegisterRequest request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         
+        if (tagtogConfig != null && tagtogConfig.enabled) return centralLoginRequired();
         long userCount = userRepository.count();
         if (userCount > 0) {
             AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -99,6 +103,7 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
+        if (tagtogConfig != null && tagtogConfig.enabled) return centralLoginRequired();
         String identifier = request.getUsernameOrEmail();
         String rawPassword = request.getPassword();
 
@@ -167,6 +172,8 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Unauthorized");
         }
 
+        if (tagtogConfig != null && tagtogConfig.enabled)
+            return ResponseEntity.ok().header("Cache-Control", "no-store").body(com.crm.tagtog.TagtogService.userView(currentUser));
         currentUser.setPassword(null);
         return ResponseEntity.ok(currentUser);
     }
@@ -176,6 +183,10 @@ public class AuthController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(required = false) String token) {
         
+        if (tagtogConfig != null && tagtogConfig.enabled) {
+            tagtogService.logout(com.crm.tagtog.TagtogService.bearer(authHeader));
+            return ResponseEntity.ok(java.util.Map.of("message", "CRM session signed out"));
+        }
         String tokenStr = null;
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             tokenStr = authHeader.substring(7);
@@ -198,6 +209,10 @@ public class AuthController {
         } catch (NumberFormatException e) {
             return ResponseEntity.badRequest().body(java.util.Collections.singletonMap("error", "Invalid token format"));
         }
+    }
+
+    private ResponseEntity<?> centralLoginRequired() {
+        return ResponseEntity.status(403).body(java.util.Map.of("error", "CENTRAL_LOGIN_REQUIRED", "message", "Use TAGTOG to manage your login"));
     }
 
     @lombok.Data

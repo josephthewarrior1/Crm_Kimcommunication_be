@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-ems-source-to-events
+      author: codex
+      changes:
+        - addColumn:
+            tableName: events
+            columns:
+              - column:
+                  name: ems_source
+                  type: VARCHAR(16)
+                  defaultValue: LEGACY
+        - update:
+            tableName: events
+            columns:
+              - column:
+                  name: ems_source
+                  value: LEGACY
+            where: ems_source IS NULL
+      rollback:
+        - dropColumn:
+            tableName: events
+            columnName: ems_source

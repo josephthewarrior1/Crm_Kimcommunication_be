@@ -1,6 +1,7 @@
 package com.crm.controller;
 
 import com.crm.domain.Event;
+import com.crm.domain.EmsSource;
 import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.domain.AttendanceStatus;
@@ -85,23 +86,28 @@ public class EventController {
     private com.crm.service.EmsService emsService;
 
     @GetMapping("/ems-upcoming")
-    public ResponseEntity<?> getEmsUpcomingEvents(@RequestHeader(value = "Authorization", required = false) String authHeader) {
-        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
-        if (currentUser == null) {
-            return ResponseEntity.status(401).body("Unauthorized");
-        }
-        return ResponseEntity.ok(emsService.getUpcomingEvents());
-    }
-
-    @GetMapping("/ems-participants/{emsEventId}")
-    public ResponseEntity<?> getEmsEventParticipants(
-            @PathVariable Long emsEventId,
+    public ResponseEntity<?> getEmsUpcomingEvents(
+            @RequestParam(defaultValue = "LEGACY") EmsSource source,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
-        return ResponseEntity.ok(emsService.getEventParticipants(emsEventId));
+        Object events = emsService.getUpcomingEvents(source);
+        return ResponseEntity.ok(source == EmsSource.V2 ? Map.of("source", "V2", "data", events) : events);
+    }
+
+    @GetMapping("/ems-participants/{emsEventId}")
+    public ResponseEntity<?> getEmsEventParticipants(
+            @PathVariable Long emsEventId,
+            @RequestParam(defaultValue = "LEGACY") EmsSource source,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) {
+            return ResponseEntity.status(401).body("Unauthorized");
+        }
+        Object participants = emsService.getEventParticipants(emsEventId, source);
+        return ResponseEntity.ok(source == EmsSource.V2 ? Map.of("source", "V2", "data", participants) : participants);
     }
 
     @GetMapping
@@ -1379,13 +1385,10 @@ public class EventController {
         }
         String cleanName = eventDetails.getName().trim();
 
-        Event existing = eventRepository.findById(id).orElseGet(() -> {
-            java.util.Optional<Event> duplicate = eventRepository.findByNameIgnoreCase(cleanName);
-            if (duplicate.isPresent()) {
-                return duplicate.get();
-            }
-            return new Event();
-        });
+        Event existing = eventRepository.findById(id).orElse(null);
+        if (existing == null) {
+            return ResponseEntity.notFound().build();
+        }
 
         existing.setName(cleanName);
         existing.setEventType(eventDetails.getEventType());
@@ -1395,6 +1398,9 @@ public class EventController {
         existing.setNotes(eventDetails.getNotes());
         existing.setTargetParticipants(eventDetails.getTargetParticipants());
         existing.setEmsEventId(eventDetails.getEmsEventId());
+        if (eventDetails.getEmsSource() != null) {
+            existing.setEmsSource(eventDetails.getEmsSource());
+        }
 
         Event saved = eventRepository.save(existing);
         return ResponseEntity.ok(saved);
@@ -1412,14 +1418,6 @@ public class EventController {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can sync EMS participants");
         }
         Event event = eventRepository.findById(id).orElse(null);
-        if (event == null) {
-            event = eventRepository.findByEmsEventId(id).orElse(null);
-        }
-        if (event == null) {
-            event = eventRepository.findAll().stream()
-                    .filter(e -> e.getEmsEventId() != null && e.getEmsEventId() > 0)
-                    .findFirst().orElse(null);
-        }
         if (event == null) {
             return ResponseEntity.notFound().build();
         }

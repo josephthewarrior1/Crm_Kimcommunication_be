@@ -38,6 +38,9 @@ public class EmsService {
     @Autowired
     private EventParticipantActivityRepository eventParticipantActivityRepository;
 
+    @Autowired
+    private EmsV2Client emsV2Client;
+
     private final RestTemplate restTemplate = new RestTemplate();
 
     private String getEmsAccessToken() {
@@ -67,6 +70,11 @@ public class EmsService {
     }
 
     public Object getUpcomingEvents() {
+        return getUpcomingEvents(EmsSource.LEGACY);
+    }
+
+    public Object getUpcomingEvents(EmsSource source) {
+        if (source == EmsSource.V2) return emsV2Client.getEvents();
         try {
             String token = getEmsAccessToken();
             if (token == null) return Collections.emptyList();
@@ -91,6 +99,11 @@ public class EmsService {
     }
 
     public Object getEventParticipants(Long emsEventId) {
+        return getEventParticipants(emsEventId, EmsSource.LEGACY);
+    }
+
+    public Object getEventParticipants(Long emsEventId, EmsSource source) {
+        if (source == EmsSource.V2) return emsV2Client.getEventParticipants(emsEventId);
         try {
             String token = getEmsAccessToken();
             if (token == null) return Collections.emptyList();
@@ -120,7 +133,7 @@ public class EmsService {
             return 0;
         }
 
-        Object raw = getEventParticipants(event.getEmsEventId());
+        Object raw = getEventParticipants(event.getEmsEventId(), event.getEmsSource());
         if (raw instanceof Map && ((Map) raw).get("data") instanceof List) {
             raw = ((Map) raw).get("data");
         }
@@ -129,7 +142,7 @@ public class EmsService {
         }
 
         List list = (List) raw;
-        List<EventParticipant> currentEventParticipants = eventParticipantRepository.findByEventId(event.getId());
+        List<EventParticipant> currentEventParticipants = new ArrayList<>(eventParticipantRepository.findByEventId(event.getId()));
         int syncedCount = 0;
 
         for (Object itemObj : list) {
@@ -277,7 +290,7 @@ public class EmsService {
             Object createdAtObj = item.get("created_at");
             if (createdAtObj == null && profile != null) createdAtObj = profile.get("created_at");
             if (createdAtObj == null) createdAtObj = verifiedAt;
-            java.time.LocalDateTime emsCreatedAt = parseEmsDateTime(createdAtObj);
+            java.time.LocalDateTime emsCreatedAt = parseEmsDateTime(createdAtObj, event.getEmsSource());
 
             boolean isCheckedIn = checkedInAt != null && !checkedInAt.toString().isEmpty() && !"null".equalsIgnoreCase(checkedInAt.toString());
             boolean isVerified = verifiedAt != null && !verifiedAt.toString().isEmpty() && !"null".equalsIgnoreCase(verifiedAt.toString());
@@ -381,6 +394,7 @@ public class EmsService {
                         .requestedAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
                         .build();
                 EventParticipant epSaved = eventParticipantRepository.save(ep);
+                currentEventParticipants.add(epSaved);
 
                 EventParticipantActivity initAct = EventParticipantActivity.builder()
                         .eventParticipant(epSaved)
@@ -525,11 +539,14 @@ public class EmsService {
         return publicDomains.contains(domain);
     }
 
-    private java.time.LocalDateTime parseEmsDateTime(Object dateObj) {
+    private java.time.LocalDateTime parseEmsDateTime(Object dateObj, EmsSource source) {
         if (dateObj == null) return null;
         String str = dateObj.toString().trim();
         if (str.isEmpty() || "null".equalsIgnoreCase(str)) return null;
         try {
+            if (source == EmsSource.V2) {
+                return java.time.Instant.parse(str).atZone(java.time.ZoneId.of("Asia/Jakarta")).toLocalDateTime();
+            }
             if (str.contains("T")) {
                 str = str.replace("Z", "");
                 if (str.contains(".")) {

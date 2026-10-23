@@ -3,6 +3,8 @@ package com.crm.controller;
 import com.crm.domain.AppUser;
 import com.crm.domain.AttendanceStatus;
 import com.crm.domain.Company;
+import com.crm.domain.Database;
+import com.crm.domain.PositionLevel;
 import com.crm.domain.Event;
 import com.crm.domain.EventParticipant;
 import com.crm.domain.FlagStatus;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -137,9 +140,30 @@ public class DashboardController {
                 ))
                 .toList();
 
-        long activeDatabases = databaseRepository.findAll().stream()
-                .filter(database -> !Boolean.FALSE.equals(database.getIsActive()))
-                .count();
+        Map<String, Long> otherPositionCounts = new LinkedHashMap<>();
+        long activeDatabases = 0, cLevel = 0, managerial = 0, staff = 0, other = 0;
+        for (Database database : databaseRepository.findAll()) {
+            if (Boolean.FALSE.equals(database.getIsActive())) continue;
+            activeDatabases++;
+            if (database.getPositionLevel() == PositionLevel.C_LEVEL_GM_DIRECTOR) cLevel++;
+            else if (database.getPositionLevel() == PositionLevel.MANAGERIAL_HEAD) managerial++;
+            else if (database.getPositionLevel() == PositionLevel.STAFF) staff++;
+            else {
+                other++;
+                String position = database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null;
+                otherPositionCounts.merge(position, 1L, Long::sum);
+            }
+        }
+        List<Map<String, Object>> otherPositions = otherPositionCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey(Comparator.nullsLast(String::compareTo))))
+                .map(entry -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("position", entry.getKey());
+                    row.put("count", entry.getValue());
+                    return row;
+                })
+                .toList();
 
         return ResponseEntity.ok(Map.of(
                 "metrics", Map.of(
@@ -149,6 +173,8 @@ public class DashboardController {
                         "totalEvents", visibleEvents.size(),
                         "suspectedTikus", flaggedAlerts.size()
                 ),
+                "positionSummary", Map.of("total", activeDatabases, "cLevel", cLevel,
+                        "managerial", managerial, "staff", staff, "other", other, "otherPositions", otherPositions),
                 "industryDistribution", industryDistribution,
                 "eventAttendancePerformance", eventAttendancePerformance,
                 "flaggedAlerts", flaggedAlerts

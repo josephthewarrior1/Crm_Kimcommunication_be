@@ -131,6 +131,7 @@ public class DatabaseController {
             put("total", total);
             put("totalPages", (int) Math.ceil(total / (double) safeSize));
             put("items", filteredDatabases.subList(fromIndex, toIndex));
+            put("analytics", databaseAnalytics(filteredDatabases));
             put("summary", new LinkedHashMap<String, Long>() {{
                 put("all", totalVisible);
                 put("clean", cleanCount);
@@ -667,6 +668,43 @@ public class DatabaseController {
             case "city" -> safe(contactCity(database)).toLowerCase(Locale.ROOT);
             default -> String.valueOf(database.getId() == null ? 0L : database.getId());
         };
+    }
+
+    private Map<String, Object> databaseAnalytics(List<Database> databases) {
+        long dirty = 0;
+        Map<String, Long> counts = new LinkedHashMap<>();
+        Map<String, String> labels = new LinkedHashMap<>();
+        for (Database database : databases) {
+            if (isIncomplete(database)) dirty++;
+            String label = industryFilterLabel(database.getCompany() != null ? database.getCompany().getIndustry() : null);
+            if (label.isBlank()) label = "Belum diisi";
+            String key = label.toLowerCase(Locale.ROOT);
+            if (key.equals("lainnya")) label = "Lainnya";
+            counts.merge(key, 1L, Long::sum);
+            labels.merge(key, label, (first, second) -> first.compareTo(second) <= 0 ? first : second);
+        }
+
+        List<Map.Entry<String, Long>> ranked = counts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .toList();
+        Map<String, Long> displayed = new LinkedHashMap<>();
+        ranked.stream().limit(6).forEach(entry -> displayed.put(labels.get(entry.getKey()), entry.getValue()));
+        long remaining = ranked.stream().skip(6).mapToLong(Map.Entry::getValue).sum();
+        if (remaining > 0) displayed.merge("Lainnya", remaining, Long::sum);
+
+        List<Map<String, Object>> otherIndustries = ranked.stream().skip(6)
+                .map(entry -> Map.<String, Object>of("name", labels.get(entry.getKey()), "count", entry.getValue()))
+                .collect(Collectors.toList());
+        if (remaining > 0 && ranked.stream().limit(6).anyMatch(entry -> entry.getKey().equals("lainnya"))) {
+            otherIndustries.add(0, Map.of("name", "Lainnya", "count", counts.get("lainnya")));
+        }
+
+        List<Map<String, Object>> industries = displayed.entrySet().stream()
+                .map(entry -> Map.<String, Object>of("name", entry.getKey(), "count", entry.getValue()))
+                .toList();
+        return Map.of("total", databases.size(), "clean", databases.size() - dirty, "dirty", dirty,
+                "industries", industries, "otherIndustries", otherIndustries);
     }
 
     private boolean isIncomplete(Database database) {

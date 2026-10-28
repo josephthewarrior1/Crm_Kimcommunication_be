@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+trap 'printf "Update berhenti di baris %s; periksa log di atas.\n" "$LINENO" >&2' ERR
 target=${1:?Pass the published main commit (40 hex characters)}
 [[ "$target" =~ ^[a-f0-9]{40}$ ]]
 [ "$(id -u)" = 0 ] || { printf 'Jalankan sebagai root.\n' >&2; exit 1; }
@@ -29,8 +30,17 @@ old_tag=$(docker inspect --format '{{.Config.Image}}' crm-kimtele-backend)
 old_id=$(docker inspect --format '{{.Image}}' crm-kimtele-backend)
 [[ "$old_tag" != *@* && "$old_tag" != sha256:* ]]
 "${compose[@]}" config --format json > "$work/compose-before.json"
-configured=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["services"]["backend"]["image"])' "$work/compose-before.json")
-test "$configured" = "$old_tag"
+python3 - "$work/compose-before.json" "$work/image.override.json" "$old_tag" <<'IMAGE_OVERRIDE'
+import json, sys
+config, output, running = sys.argv[1:]
+configured = json.load(open(config))["services"]["backend"].get("image")
+if configured and configured != running:
+    sys.exit("Image Compose berbeda dari container aktif; deploy dihentikan.")
+with open(output, "w") as stream:
+    json.dump({"services": {"backend": {"image": running}}}, stream)
+IMAGE_OVERRIDE
+# Build-only Compose services omit image; use the running tag explicitly for apply and rollback.
+compose+=(-f "$work/image.override.json")
 config_before=$(sha256sum docker-compose.yml docker-compose.override.yml .env .env.ems-v2)
 printf '%s\n' "$old_id" > "$work/backup/old-image-id"
 printf '%s\n' "$old_tag" > "$work/backup/old-image-tag"

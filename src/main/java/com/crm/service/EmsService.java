@@ -218,7 +218,12 @@ public class EmsService {
                 Optional<Company> compOpt = companyRepository.findByNameIgnoreCase(companyName);
                 if (compOpt.isPresent()) {
                     company = compOpt.get();
-                    if ((company.getIndustry() == null || company.getIndustry().isEmpty()) && industry != null && !industry.isEmpty()) {
+                    Object rawIndustry = profile == null ? null : profile.get("ems_v2_industry_raw");
+                    boolean replaceV2RawIndustry = event.getEmsSource() == EmsSource.V2
+                            && rawIndustry instanceof String
+                            && rawIndustry.equals(company.getIndustry()) && !rawIndustry.equals(industry);
+                    if (industry != null && !industry.isEmpty()
+                            && (company.getIndustry() == null || company.getIndustry().isEmpty() || replaceV2RawIndustry)) {
                         company.setIndustry(industry);
                         company = companyRepository.save(company);
                     }

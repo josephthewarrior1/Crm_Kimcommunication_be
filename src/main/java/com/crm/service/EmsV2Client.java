@@ -32,6 +32,7 @@ public class EmsV2Client {
     private static final Set<String> EVENT_STATUSES = Set.of("DRAFT", "PUBLISHED", "ONGOING", "COMPLETED", "CANCELLED");
     private static final Set<String> REGISTRATION_STATUSES = Set.of("PENDING", "ACCEPTED", "DECLINED");
     private static final Set<String> ATTENDANCE_STATUSES = Set.of("PRESENT", "ABSENT", "CHECKED_OUT");
+    private static final List<String> INDUSTRY_KEYS = List.of("industry", "company_industry", "business_sector");
 
     public EmsV2Client() {
         this(new RestTemplate(requestFactory()));
@@ -92,6 +93,7 @@ public class EmsV2Client {
             known(row, "source", Set.of("SCAN", "MANUAL"));
             for (String field : List.of("checkedInAt", "checkedOutAt", "updatedAt")) timestamp(row, field, false);
         }
+        Map<String, Map<String, String>> industryOptions = industryOptions(eventPath, registrations);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map.Entry<Long, Map<String, Object>> entry : byId.entrySet()) {
             Map<String, Object> registration = entry.getValue();
@@ -99,12 +101,40 @@ public class EmsV2Client {
             if (!"DECLINED".equals(registration.get("status")) && attendanceRow == null) {
                 throw invalid("missing attendance row");
             }
-            result.add(normalize(entry.getKey(), registration, attendanceRow));
+            result.add(normalize(entry.getKey(), registration, attendanceRow, industryOptions));
         }
         return result;
     }
 
-    private Map<String, Object> normalize(Long id, Map<String, Object> row, Map<String, Object> attendance) {
+    private Map<String, Map<String, String>> industryOptions(String eventPath, List<Map<String, Object>> registrations) {
+        if (registrations.stream().noneMatch(row -> industryKey(object(row.get("formData"))) != null)) return Map.of();
+        // The page endpoint is read-only; registration-form can seed defaults upstream on GET.
+        Map<String, Object> page = object(get(eventPath + "/page"));
+        Map<String, Map<String, String>> result = new HashMap<>();
+        Set<String> seen = new HashSet<>();
+        for (Map<String, Object> field : rows(page.get("formFields"))) {
+            String key = requiredText(field, "fieldKey");
+            if (!INDUSTRY_KEYS.contains(key)) continue;
+            if (!seen.add(key)) throw invalid("duplicate industry field");
+            if (!"DROPDOWN".equals(requiredText(field, "fieldType"))) continue;
+            Map<String, String> options = new HashMap<>();
+            for (Map<String, Object> option : rows(field.get("options"))) {
+                String value = requiredText(option, "value");
+                String label = requiredText(option, "label");
+                if (options.putIfAbsent(value, label) != null) throw invalid("duplicate industry option value");
+            }
+            result.put(key, options);
+        }
+        return result;
+    }
+
+    private static String industryKey(Map<String, Object> form) {
+        for (String key : INDUSTRY_KEYS) if (text(form, key) != null) return key;
+        return null;
+    }
+
+    private Map<String, Object> normalize(Long id, Map<String, Object> row, Map<String, Object> attendance,
+                                          Map<String, Map<String, String>> industryOptions) {
         Map<String, Object> form = object(row.get("formData"));
         String salutation = text(form, "salutation");
         String name = text(form, "full_name");
@@ -129,7 +159,13 @@ public class EmsV2Client {
         // Custom fields have no global schema: use explicit keys, never infer from a free-text label.
         put(profile, "company", first(form, "company", "company_name", "companyName", "organization", "organisation"));
         put(profile, "job_title", first(form, "job_title", "jobTitle", "position"));
-        put(profile, "industry", first(form, "industry", "company_industry", "business_sector"));
+        String industryKey = industryKey(form);
+        if (industryKey != null) {
+            String rawIndustry = text(form, industryKey);
+            String industry = industryOptions.getOrDefault(industryKey, Map.of()).getOrDefault(rawIndustry, rawIndustry);
+            put(profile, "industry", industry);
+            if (!industry.equals(rawIndustry)) put(profile, "ems_v2_industry_raw", rawIndustry);
+        }
         put(profile, "job_level", first(form, "job_level", "position_level"));
         Map<String, Object> normalized = new LinkedHashMap<>();
         normalized.put("id", id);

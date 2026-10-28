@@ -79,6 +79,83 @@ class EmsV2ClientTest {
     }
 
     @Test
+    void industryUsesTheWinningFieldAndExactOptionValueWithoutGuessing() throws Exception {
+        setup(true);
+        List<Map<String, Object>> registrations = new ArrayList<>();
+        for (long id = 11; id <= 16; id++) registrations.add(registration(id, "ACCEPTED", "Fixture " + id));
+        form(registrations.get(0)).putAll(Map.of("industry", "technology", "company_industry", "technology"));
+        form(registrations.get(1)).putAll(Map.of("industry", " ", "company_industry", "technology"));
+        form(registrations.get(2)).put("business_sector", "education_higher");
+        form(registrations.get(3)).put("industry", "unknown_code");
+        form(registrations.get(4)).put("industry", "Technology");
+        form(registrations.get(5)).put("industry", "TECHNOLOGY");
+        expectGet("/api/events/9/registrations", registrations);
+        expectGet("/api/events/9/attendance", registrations.stream()
+                .map(row -> attendance((Long) row.get("id"), "ABSENT", null)).toList());
+        expectGet("/api/events/9/page", Map.of("formFields", List.of(
+                industryField("industry", "DROPDOWN", "technology", "Technology"),
+                industryField("company_industry", "DROPDOWN", "technology", "Company-specific label"),
+                industryField("business_sector", "DROPDOWN", "education_higher", "Higher Education"))));
+
+        List<Map<String, Object>> profiles = client.getEventParticipants(9L).stream()
+                .map(row -> (Map<String, Object>) row.get("user_profile")).toList();
+        assertEquals(List.of("Technology", "Company-specific label", "Higher Education", "unknown_code", "Technology", "TECHNOLOGY"),
+                profiles.stream().map(profile -> profile.get("industry")).toList());
+        assertEquals("technology", profiles.get(0).get("ems_v2_industry_raw"));
+        assertEquals("technology", profiles.get(1).get("ems_v2_industry_raw"));
+        assertEquals("education_higher", profiles.get(2).get("ems_v2_industry_raw"));
+        for (int i = 3; i < profiles.size(); i++) assertFalse(profiles.get(i).containsKey("ems_v2_industry_raw"));
+        server.verify();
+    }
+
+    @Test
+    void industryOptionsBelongToEachEventAndTextFieldsArePreserved() throws Exception {
+        setup(true);
+        for (long eventId = 9; eventId <= 11; eventId++) {
+            Map<String, Object> row = registration(11L, "ACCEPTED", "Fixture");
+            form(row).put("industry", "technology");
+            expectGet("/api/events/" + eventId + "/registrations", List.of(row));
+            expectGet("/api/events/" + eventId + "/attendance", List.of(attendance(11L, "ABSENT", null)));
+            expectGet("/api/events/" + eventId + "/page", Map.of("formFields", List.of(
+                    industryField("industry", eventId == 11 ? "TEXT" : "DROPDOWN", "technology", "Label " + eventId))));
+        }
+        for (long eventId = 9; eventId <= 11; eventId++) {
+            Map<?, ?> profile = (Map<?, ?>) client.getEventParticipants(eventId).get(0).get("user_profile");
+            assertEquals(eventId == 11 ? "technology" : "Label " + eventId, profile.get("industry"));
+            assertEquals(eventId != 11, profile.containsKey("ems_v2_industry_raw"));
+        }
+        server.verify();
+    }
+
+    @Test
+    void malformedOrUnavailableIndustryMetadataFailsInsteadOfReturningRawPartialData() throws Exception {
+        Map<String, Object> duplicateOptions = new LinkedHashMap<>(industryField("industry", "DROPDOWN", "technology", "Technology"));
+        duplicateOptions.put("options", List.of(Map.of("value", "technology", "label", "Technology"),
+                Map.of("value", "technology", "label", "Conflicting label")));
+        for (Object page : List.of(Map.of(), Map.of("formFields", "invalid"),
+                Map.of("formFields", List.of(industryField("industry", "DROPDOWN", "technology", " "))),
+                Map.of("formFields", List.of(duplicateOptions)))) {
+            setup(true);
+            Map<String, Object> row = registration(11L, "ACCEPTED", "Fixture");
+            form(row).put("industry", "technology");
+            expectGet("/api/events/9/registrations", List.of(row));
+            expectGet("/api/events/9/attendance", List.of(attendance(11L, "ABSENT", null)));
+            expectGet("/api/events/9/page", page);
+            assertGateway(() -> client.getEventParticipants(9L));
+            server.verify();
+        }
+        setup(true);
+        Map<String, Object> row = registration(11L, "ACCEPTED", "Fixture");
+        form(row).put("industry", "technology");
+        expectGet("/api/events/9/registrations", List.of(row));
+        expectGet("/api/events/9/attendance", List.of(attendance(11L, "ABSENT", null)));
+        server.expect(requestTo(API + "/api/events/9/page")).andExpect(method(HttpMethod.GET))
+                .andRespond(withStatus(HttpStatus.FORBIDDEN));
+        assertGateway(() -> client.getEventParticipants(9L));
+        server.verify();
+    }
+
+    @Test
     void displayNameFallbackRemovesOnlyTheExplicitRecordedSalutation() throws Exception {
         setup(true);
         Map<String, Object> row = registration(11L, "ACCEPTED", "unused");
@@ -230,6 +307,11 @@ class EmsV2ClientTest {
         return new LinkedHashMap<>(Map.of("id", id, "referenceCode", "R-" + id, "status", status,
                 "email", "person@example.invalid", "displayName", name, "formData", new LinkedHashMap<>(Map.of("full_name", name)),
                 "source", "PUBLIC", "createdAt", CREATED, "updatedAt", UPDATED));
+    }
+
+    private static Map<String, Object> industryField(String key, String type, String value, String label) {
+        return Map.of("fieldKey", key, "fieldType", type, "label", "Industry",
+                "options", List.of(Map.of("value", value, "label", label)));
     }
 
     @SuppressWarnings("unchecked")

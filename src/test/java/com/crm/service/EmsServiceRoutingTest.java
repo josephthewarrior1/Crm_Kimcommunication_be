@@ -1,5 +1,6 @@
 package com.crm.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crm.domain.EmsSource;
 import com.crm.domain.Event;
 import com.crm.domain.Company;
@@ -183,6 +184,58 @@ class EmsServiceRoutingTest {
         verify(participants, times(2)).save(participant);
         verify(activities).save(any(EventParticipantActivity.class));
         verify(emails, never()).findAllByEmailIgnoreCase(anyString());
+        legacy.verify();
+    }
+
+    @Test void v2ResyncRepairsOnlyTheExactOriginalIndustryCode() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "technology", "technology", "Technology");
+    }
+
+    @Test void v2ResyncPreservesAnExistingHumanIndustry() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "Technology Services", "technology", "Technology Services");
+    }
+
+    @Test void v2ResyncRequiresRawValueProvenanceToReplaceExistingIndustry() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "technology", null, "technology");
+    }
+
+    @Test void legacyResyncCannotUseV2IndustryRepairMetadata() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.LEGACY, "technology", "technology", "technology");
+    }
+
+    @Test void industryStillHydratesAnEmptyCompanyValue() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "", "technology", "Technology");
+    }
+
+    private void assertCompanyIndustryAfterSync(EmsSource source, String current, String raw, String expected) throws Exception {
+        var event = Event.builder().id(1L).emsEventId(42L).emsSource(source).build();
+        var company = Company.builder().id(50L).name("Fixture Company").industry(current).build();
+        var database = Database.builder().id(101L).firstName("Fixture").lastName("Contact").company(company).build();
+        var participant = EventParticipant.builder().id(201L).database(database).event(event).build();
+        Map<String, Object> profile = new HashMap<>(Map.of("registered_name", "Fixture", "registered_last_name", "Contact",
+                "company", "Fixture Company", "industry", "Technology"));
+        if (raw != null) profile.put("ems_v2_industry_raw", raw);
+        List<Map<String, Object>> rows = List.of(Map.of("id", 70L, "user_profile", profile));
+        if (source == EmsSource.V2) {
+            when(v2.getEventParticipants(42L)).thenReturn(rows);
+        } else {
+            expectLegacyLogin(2);
+            expectLegacyGet("/api/admin/v1/events/42/registers", 2, new ObjectMapper().writeValueAsString(rows));
+        }
+        when(companies.findByNameIgnoreCase("Fixture Company")).thenReturn(Optional.of(company));
+        when(companies.save(company)).thenReturn(company);
+        when(participants.findByEventId(1L)).thenReturn(List.of(participant));
+        when(participants.findByEventIdAndDatabaseId(1L, 101L)).thenReturn(Optional.of(participant));
+        when(activities.findByEventParticipantIdOrderByCreatedAtDesc(201L))
+                .thenReturn(List.of(EventParticipantActivity.builder().id(301L).build()));
+
+        assertEquals(1, service.syncParticipantsForEvent(event));
+        assertEquals(expected, company.getIndustry());
+        assertEquals(1, service.syncParticipantsForEvent(event));
+        assertEquals(expected, company.getIndustry());
+        verify(companies, times(current.equals(expected) ? 0 : 1)).save(company);
+        verify(databases, never()).save(any());
+        verify(activities, never()).save(any());
         legacy.verify();
     }
 

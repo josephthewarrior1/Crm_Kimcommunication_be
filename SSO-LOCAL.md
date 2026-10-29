@@ -29,7 +29,7 @@ java -jar target/crm-kimtele-be-0.0.1-SNAPSHOT.jar --spring.profiles.active=tagt
 
 Required: `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, and `TAGTOG_SSO_CLIENT_SECRET`. Optional service configuration: `TAGTOG_IAM_BASE_URL`, `TAGTOG_IAM_ISSUER`, `TAGTOG_SSO_CLIENT_ID`, and `TAGTOG_SSO_REDIRECT_URI`.
 
-The local profile binds API port 8186 to loopback, uses PostgreSQL at `127.0.0.1:55433/tagtog_crm`, disables application/bootstrap seeds and EMS network integration, and uses a local changelog that excludes the legacy fixed-admin seed. It does not connect to the default database profile. Keep generated credentials outside Git.
+The local profile binds API port 8186 to loopback, uses PostgreSQL at `127.0.0.1:55433/tagtog_crm`, disables application/bootstrap seeds and EMS network integration, and uses a local changelog that excludes the legacy fixed-admin seed. It does not connect to the default database profile. Keep generated credentials outside Git. The local changelog includes the current EMS source column; disabled EMS integration rejects both legacy and v2 reads/sync before network or CRM access.
 
 Do not run the default application profile for this preview: the existing default selects PostgreSQL and enables seed settings for the older CRM environment.
 
@@ -74,6 +74,7 @@ With `TAGTOG_SSO_ENABLED=true`, a central filter protects `/api` routes, includi
 Read operations require view and DELETE requires delete. The action map also accounts for side effects that do not match the HTTP verb:
 
 - Read-only import validation/preview and contact-merge preview require view only.
+- Legacy flag list reads require edit plus delete because they can link flags and deactivate contacts. Removing a flag also requires edit plus delete because it can reactivate contacts and update participant statuses.
 - Known POST creates require create; imports/EMS sync require create plus edit; assignment auto-split requires edit.
 - Cleaner apply/group merge and contact merge require edit plus delete because they delete source records.
 - Creating removal requests or flags requires create, edit, and delete because it can immediately archive an existing contact.

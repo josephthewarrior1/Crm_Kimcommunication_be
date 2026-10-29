@@ -97,8 +97,16 @@ public class TagtogService {
             edit |= permission.path("canEdit").asBoolean(false); delete |= permission.path("canDelete").asBoolean(false);
         }
         boolean allowed = switch (method) {
-            case "GET", "HEAD" -> view;
-            case "DELETE" -> delete;
+            case "GET", "HEAD" -> {
+                // Legacy flag reads can link identities and deactivate contacts.
+                if (path.equals("/api/flagged-identities") || path.equals("/api/flagged-identities/list")) yield edit && delete;
+                yield view;
+            }
+            case "DELETE" -> {
+                // Removing a flag can reactivate contacts and update participant statuses.
+                if (path.matches("/api/flagged-identities/[1-9][0-9]*")) yield edit && delete;
+                yield delete;
+            }
             case "PUT", "PATCH" -> {
                 // These update bodies/statuses can soft-delete or restore existing contacts.
                 if (path.matches("/api/databases/[1-9][0-9]*")

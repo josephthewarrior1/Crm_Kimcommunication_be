@@ -64,6 +64,30 @@ class EmsServiceRoutingTest {
         ReflectionTestUtils.setField(service, "eventParticipantActivityRepository", activities);
     }
 
+    @Test void disabledIntegrationStopsBothEmsSourcesBeforeNetworkOrCrmAccess() {
+        ReflectionTestUtils.setField(service, "emsIntegrationEnabled", false);
+        for (EmsSource source : EmsSource.values()) {
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, assertThrows(ResponseStatusException.class,
+                    () -> service.getUpcomingEvents(source)).getStatusCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, assertThrows(ResponseStatusException.class,
+                    () -> service.getEventParticipants(42L, source)).getStatusCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, assertThrows(ResponseStatusException.class,
+                    () -> service.syncParticipantsForEvent(Event.builder().id(1L).emsEventId(42L).emsSource(source).build())).getStatusCode());
+        }
+        legacy.verify();
+        verifyNoInteractions(v2, participants, databases, emails, companies, activities);
+    }
+
+    @Test void isolatedIamChangelogIncludesCurrentEmsSourceWithoutAdminSeed() throws Exception {
+        String path = "db/changelog/db.changelog-tagtog-local.yaml";
+        try (var resources = new ClassLoaderResourceAccessor()) {
+            var log = ChangeLogParserFactory.getInstance().getParser(path, resources)
+                    .parse(path, new ChangeLogParameters(), resources);
+            assertEquals(1, log.getChangeSets().stream().filter(change -> change.getId().equals("add-ems-source-to-events")).count());
+            assertFalse(log.getChangeSets().stream().anyMatch(change -> change.getFilePath().contains("seed-admin")));
+        }
+    }
+
     @Test void originalOverloadsExplicitLegacyAndNullSourceUseOnlyTheLegacyTransport() {
         expectLegacyLogin(6);
         expectLegacyGet("/api/admin/v1/events_upcoming", 3, "[{\"id\":42}]");

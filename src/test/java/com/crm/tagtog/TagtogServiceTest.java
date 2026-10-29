@@ -164,6 +164,25 @@ class TagtogServiceTest {
         }
     }
 
+    @Test void flagReadsAndRemovalRequireMutationGrantsForTheirLegacySideEffects() throws Exception {
+        var readonly = access(true, true, "CRM", true, false, false, false);
+        var editOnly = access(true, true, "CRM", true, false, true, false);
+        var deleteOnly = access(true, true, "CRM", true, false, false, true);
+        var editDelete = access(true, true, "CRM", true, false, true, true);
+        for (String method : List.of("GET", "HEAD")) {
+            for (String path : List.of("/api/flagged-identities", "/api/flagged-identities/list")) {
+                status(403, () -> TagtogService.requirePermission(readonly, "41", method, path));
+                status(403, () -> TagtogService.requirePermission(editOnly, "41", method, path));
+                status(403, () -> TagtogService.requirePermission(deleteOnly, "41", method, path));
+                TagtogService.requirePermission(editDelete, "41", method, path);
+            }
+        }
+        TagtogService.requirePermission(readonly, "41", "GET", "/api/flagged-identities/filter-options");
+        status(403, () -> TagtogService.requirePermission(deleteOnly, "41", "DELETE", "/api/flagged-identities/17"));
+        status(403, () -> TagtogService.requirePermission(editOnly, "41", "DELETE", "/api/flagged-identities/17"));
+        TagtogService.requirePermission(editDelete, "41", "DELETE", "/api/flagged-identities/17");
+    }
+
     @Test void readOnlyPostPreviewsDoNotNeedMutationGrants() throws Exception {
         var readonly=access(true,true,"CRM",true,false,false,false);
         for(String path:List.of("/api/databases/import/preview","/api/databases/merge/preview","/api/events/17/participants/import/validate"))

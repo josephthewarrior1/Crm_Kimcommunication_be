@@ -8,6 +8,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 
@@ -78,6 +79,7 @@ public class EmsService {
     }
 
     public Object getUpcomingEvents(EmsSource source) {
+        requireEmsIntegrationEnabled();
         if (source == EmsSource.V2) return emsV2Client.getEvents();
         try {
             String token = getEmsAccessToken();
@@ -107,6 +109,7 @@ public class EmsService {
     }
 
     public Object getEventParticipants(Long emsEventId, EmsSource source) {
+        requireEmsIntegrationEnabled();
         if (source == EmsSource.V2) return emsV2Client.getEventParticipants(emsEventId);
         try {
             String token = getEmsAccessToken();
@@ -131,8 +134,15 @@ public class EmsService {
         }
     }
 
+    private void requireEmsIntegrationEnabled() {
+        if (!emsIntegrationEnabled) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "EMS integration is disabled in this environment");
+        }
+    }
+
     @Transactional
     public int syncParticipantsForEvent(com.crm.domain.Event event) {
+        requireEmsIntegrationEnabled();
         if (event == null || event.getEmsEventId() == null || event.getEmsEventId() <= 0) {
             return 0;
         }

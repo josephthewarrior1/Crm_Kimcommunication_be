@@ -48,8 +48,7 @@ public class SuspiciousIdentityService {
                     }
 
                     // If names are different
-                    if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
-                            !other.getLastName().equalsIgnoreCase(database.getLastName())) {
+                    if (!sameName(other, database)) {
 
                         // Flag the current database record
                         boolean databaseAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
@@ -106,8 +105,7 @@ public class SuspiciousIdentityService {
                             Database other = otherEmail.getDatabase();
 
                             // If names are different
-                            if (!other.getFirstName().equalsIgnoreCase(database.getFirstName()) ||
-                                    !other.getLastName().equalsIgnoreCase(database.getLastName())) {
+                            if (!sameName(other, database)) {
 
                                 // Flag the current database record
                                 boolean databaseAlreadyFlagged = flaggedIdentityRepository.existsByDatabaseIdAndFlagReasonAndStatusNot(
@@ -184,6 +182,10 @@ public class SuspiciousIdentityService {
         }
     }
 
+    private boolean sameName(Database first, Database second) {
+        return java.util.Objects.toString(first.getFirstName(), "").equalsIgnoreCase(java.util.Objects.toString(second.getFirstName(), ""))
+                && java.util.Objects.toString(first.getLastName(), "").equalsIgnoreCase(java.util.Objects.toString(second.getLastName(), ""));
+    }
     private boolean sameCompany(Database first, Database second) {
         return first.getCompany() != null && second.getCompany() != null
                 && first.getCompany().getId() != null

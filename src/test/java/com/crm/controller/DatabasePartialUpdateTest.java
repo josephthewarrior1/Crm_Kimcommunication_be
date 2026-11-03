@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class DatabasePartialUpdateTest {
-    @Test void incrementalEditsSaveUntilCompleteAndUnknownPositionStaysDirtyAcrossViews() {
+    @Test void incrementalEditsKeepMissingFieldsDirtyAndAcceptUnknownPositionAcrossViews() {
         var controller = new DatabaseController();
         var databases = mock(DatabaseRepository.class);
         var companies = mock(CompanyRepository.class);
@@ -63,10 +63,16 @@ class DatabasePartialUpdateTest {
         // The corporate email has its own endpoint; only its resulting stored row matters here.
         contact.setEmails(List.of(DatabaseEmail.builder().email("ayu@example.test").isCorporate(true).build()));
         assertEquals(200, controller.updateDatabase(42L, Database.builder().salutation("Ms")
-                .jobTitle("Officer").mobilePhone("08123456789").positionLevel(PositionLevel.UNKNOWN).build(),
+                .jobTitle("Officer").mobilePhone("08123456789").build(),
                 1L, null, false, "test").getStatusCode().value());
         assertSame(company, contact.getCompany());
+        assertNull(contact.getPositionLevel());
         assertQuality(controller, contact, true);
+
+        assertEquals(200, controller.updateDatabase(42L, Database.builder().positionLevel(PositionLevel.UNKNOWN).build(),
+                null, null, false, "test").getStatusCode().value());
+        assertEquals(PositionLevel.UNKNOWN, contact.getPositionLevel());
+        assertQuality(controller, contact, false);
 
         assertEquals(200, controller.updateDatabase(42L, Database.builder().positionLevel(PositionLevel.STAFF).build(),
                 null, null, false, "test").getStatusCode().value());

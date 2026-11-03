@@ -715,7 +715,7 @@ public class DatabaseController {
         if (isBlank(database.getSalutation())) return true;
         if (isBlank(database.getFirstName())) return true;
         if (isBlank(database.getLastName())) return true;
-        if (database.getPositionLevel() == null || database.getPositionLevel() == com.crm.domain.PositionLevel.UNKNOWN) return true;
+        if (isBlank(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null)) return true;
         if (isBlank(database.getJobTitle())) return true;
         if (isBlank(contactAddress(database))) return true;
         if (isBlank(contactOfficePhone(database))) return true;

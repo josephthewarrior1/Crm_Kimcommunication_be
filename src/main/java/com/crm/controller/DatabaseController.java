@@ -4,6 +4,7 @@ import com.crm.domain.Company;
 import com.crm.domain.CompanyBranch;
 import com.crm.domain.Database;
 import com.crm.domain.DatabaseEmail;
+import com.crm.domain.DatabaseDestination;
 import com.crm.domain.EventParticipant;
 import com.crm.domain.RemovalRequest;
 import com.crm.domain.FlaggedIdentity;
@@ -19,6 +20,7 @@ import com.crm.repository.RemovalRequestRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SuspiciousIdentityService;
 import com.crm.service.SecurityHelper;
+import com.crm.util.ContactEmailCategory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -85,6 +87,7 @@ public class DatabaseController {
             @RequestParam(required = false, defaultValue = "asc") String sortOrder,
             @RequestParam(required = false, defaultValue = "1") Integer page,
             @RequestParam(required = false, defaultValue = "10") Integer size,
+            @RequestParam(required = false, defaultValue = "all") String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -103,12 +106,18 @@ public class DatabaseController {
                 .filter(database -> !confirmedFlaggedDatabaseIds.contains(database.getId()))
                 .collect(Collectors.toList());
 
-        long totalVisible = visibleDatabases.size();
-        long cleanCount = visibleDatabases.stream().filter(database -> !isIncomplete(database)).count();
-        long dirtyCount = visibleDatabases.stream().filter(this::isIncomplete).count();
+        long participantCount = visibleDatabases.stream().filter(database ->
+                DatabaseDestination.effective(database.getDatabaseDestination()).includesParticipant()).count();
+        long companyCount = visibleDatabases.stream().filter(database ->
+                DatabaseDestination.effective(database.getDatabaseDestination()).includesCompany()).count();
+        List<Database> categoryDatabases = visibleDatabases.stream()
+                .filter(database -> matchesDestination(database, destination)).toList();
+        long totalVisible = categoryDatabases.size();
+        long cleanCount = categoryDatabases.stream().filter(database -> !isIncompleteForDestination(database, destination)).count();
+        long dirtyCount = categoryDatabases.stream().filter(database -> isIncompleteForDestination(database, destination)).count();
 
-        List<Database> filteredDatabases = visibleDatabases.stream()
-                .filter(database -> matchesTab(database, tab))
+        List<Database> filteredDatabases = categoryDatabases.stream()
+                .filter(database -> matchesTab(database, tab, destination))
                 .filter(database -> matchesSearch(database, search))
                 .filter(database -> matchesGroup(database, groupId))
                 .filter(database -> matchesCompany(database, companyId))
@@ -131,7 +140,8 @@ public class DatabaseController {
             put("total", total);
             put("totalPages", (int) Math.ceil(total / (double) safeSize));
             put("items", filteredDatabases.subList(fromIndex, toIndex));
-            put("analytics", databaseAnalytics(filteredDatabases));
+            put("analytics", databaseAnalytics(filteredDatabases, destination));
+            put("destinations", Map.of("company", companyCount, "participant", participantCount));
             put("summary", new LinkedHashMap<String, Long>() {{
                 put("all", totalVisible);
                 put("clean", cleanCount);
@@ -152,13 +162,14 @@ public class DatabaseController {
             @RequestParam(required = false, defaultValue = "all") String tab,
             @RequestParam(required = false, defaultValue = "id") String sortBy,
             @RequestParam(required = false, defaultValue = "asc") String sortOrder,
+            @RequestParam(required = false, defaultValue = "all") String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<Database> items = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, city, tab).stream()
+        List<Database> items = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, city, tab, destination).stream()
                 .sorted(buildComparator(sortBy, sortOrder))
                 .toList();
 
@@ -178,18 +189,19 @@ public class DatabaseController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String city,
             @RequestParam(required = false, defaultValue = "all") String tab,
+            @RequestParam(required = false, defaultValue = "all") String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
         }
 
-        List<Database> groupScopedDatabases = filterVisibleDatabases(search, null, companyId, branchId, positionLevel, industry, city, tab);
-        List<Database> companyScopedDatabases = filterVisibleDatabases(search, groupId, null, branchId, positionLevel, industry, city, tab);
-        List<Database> branchScopedDatabases = filterVisibleDatabases(search, groupId, companyId, null, positionLevel, industry, city, tab);
-        List<Database> cityScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, null, tab);
-        List<Database> industryScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, null, city, tab);
-        List<Database> positionScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, null, industry, city, tab);
+        List<Database> groupScopedDatabases = filterVisibleDatabases(search, null, companyId, branchId, positionLevel, industry, city, tab, destination);
+        List<Database> companyScopedDatabases = filterVisibleDatabases(search, groupId, null, branchId, positionLevel, industry, city, tab, destination);
+        List<Database> branchScopedDatabases = filterVisibleDatabases(search, groupId, companyId, null, positionLevel, industry, city, tab, destination);
+        List<Database> cityScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, industry, null, tab, destination);
+        List<Database> industryScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, positionLevel, null, city, tab, destination);
+        List<Database> positionScopedDatabases = filterVisibleDatabases(search, groupId, companyId, branchId, null, industry, city, tab, destination);
 
         List<Map<String, Object>> groups = groupScopedDatabases.stream()
                 .filter(database -> database.getCompany() != null && database.getCompany().getGroup() != null)
@@ -284,9 +296,11 @@ public class DatabaseController {
             String positionLevel,
             String industry,
             String city,
-            String tab) {
+            String tab,
+            String destination) {
         return getVisibleDatabases().stream()
-                .filter(database -> matchesTab(database, tab))
+                .filter(database -> matchesDestination(database, destination))
+                .filter(database -> matchesTab(database, tab, destination))
                 .filter(database -> matchesSearch(database, search))
                 .filter(database -> matchesGroup(database, groupId))
                 .filter(database -> matchesCompany(database, companyId))
@@ -324,13 +338,103 @@ public class DatabaseController {
         if (branchId != null && (branch == null || company == null || !branch.getCompanyId().equals(company.getId()))) {
             return ResponseEntity.badRequest().body("Cabang harus berasal dari perusahaan yang dipilih");
         }
+        database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()));
+        if (database.getDatabaseDestination() != DatabaseDestination.PARTICIPANT
+                && database.getEmails() != null && !database.getEmails().isEmpty()) {
+            return ResponseEntity.badRequest().body("Tambahkan email perusahaan melalui pengelolaan email setelah profil disimpan; email dalam body create hanya didukung untuk Database Peserta.");
+        }
+        String metadataError = participantMetadataError(database);
+        if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
         database.setCompany(company);
         database.setBranch(branch);
+        if (database.getDatabaseDestination() == DatabaseDestination.PARTICIPANT) {
+            return createParticipantProfile(database, currentUser);
+        }
         database.setCreatedByUserId(currentUser.getId());
         database.setEntryMethod("manual");
         Database saved = databaseRepository.save(database);
         suspiciousIdentityService.checkAndFlagDatabase(saved);
         return ResponseEntity.ok(saved);
+    }
+
+    // The surrounding create transaction owns both the profile and its email rows.
+    private ResponseEntity<?> createParticipantProfile(Database incoming, AppUser currentUser) {
+        if (isBlank(incoming.getFirstName()) || incoming.getEmails() == null || incoming.getEmails().isEmpty()) {
+            return ResponseEntity.badRequest().body("Nama dan email peserta yang valid wajib diisi");
+        }
+        Map<String, DatabaseEmail> requested = new LinkedHashMap<>();
+        Map<Long, Database> owners = new LinkedHashMap<>();
+        for (DatabaseEmail supplied : incoming.getEmails()) {
+            if (supplied == null || supplied.getId() != null || !ContactEmailCategory.isValidEmail(supplied.getEmail())) {
+                return ResponseEntity.badRequest().body("Email peserta tidak valid atau memuat ID email tersimpan");
+            }
+            String address = supplied.getEmail().trim().toLowerCase(Locale.ROOT);
+            if (requested.putIfAbsent(address, supplied) != null) {
+                return ResponseEntity.badRequest().body("Email peserta yang sama hanya boleh diisi sekali");
+            }
+            for (DatabaseEmail existing : databaseEmailRepository.findAllByEmailIgnoreCase(address)) {
+                Database owner = existing.getDatabase();
+                if (owner == null || owner.getId() == null) {
+                    return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; periksa kontak lama");
+                }
+                owners.putIfAbsent(owner.getId(), owner);
+            }
+        }
+        if (owners.size() > 1) {
+            return ResponseEntity.badRequest().body("Email cocok dengan beberapa profil; tinjau kontak lama sebelum menambahkan peserta");
+        }
+        Database target = owners.isEmpty() ? incoming : owners.values().iterator().next();
+        boolean reuse = target != incoming;
+        if (reuse) {
+            if (!normalizedContactName(incoming).equals(normalizedContactName(target))) {
+                return ResponseEntity.badRequest().body("Email sudah dipakai nama lain; periksa profil yang sudah ada");
+            }
+            if (Boolean.FALSE.equals(target.getIsActive())) {
+                return ResponseEntity.badRequest().body("Kontak lama nonaktif; tinjau profil sebelum menambahkan peserta");
+            }
+            boolean confirmed = flaggedIdentityRepository.findAll().stream().anyMatch(flag ->
+                    flag.getStatus() == FlagStatus.confirmed && flag.getDatabase() != null
+                            && target.getId().equals(flag.getDatabase().getId()));
+            if (confirmed) return ResponseEntity.badRequest().body("Kontak lama ditandai bermasalah; tinjau profil terlebih dahulu");
+        }
+
+        // Complete every conflict check before mutating a managed existing profile.
+        List<DatabaseEmail> retained = reuse && target.getEmails() != null
+                ? new java.util.ArrayList<>(target.getEmails()) : new java.util.ArrayList<>();
+        boolean primaryPersonal = retained.stream().anyMatch(email -> email != null
+                && "personal".equalsIgnoreCase(email.getEmailType()) && Boolean.TRUE.equals(email.getIsPrimary()));
+        for (Map.Entry<String, DatabaseEmail> requestedEmail : requested.entrySet()) {
+            boolean present = retained.stream().anyMatch(email -> email != null
+                    && requestedEmail.getKey().equalsIgnoreCase(safe(email.getEmail()).trim()));
+            if (present) continue;
+            retained.add(DatabaseEmail.builder().database(target).email(requestedEmail.getKey())
+                    .emailType("personal").isCorporate(false).isPrimary(!primaryPersonal)
+                    .isVerified(Boolean.TRUE.equals(requestedEmail.getValue().getIsVerified()))
+                    .domain(requestedEmail.getKey().substring(requestedEmail.getKey().indexOf('@') + 1)).build());
+            primaryPersonal = true;
+        }
+        target.setEmails(retained);
+        target.setDatabaseDestination(DatabaseDestination.effective(target.getDatabaseDestination()).add(DatabaseDestination.PARTICIPANT));
+        if (!reuse) {
+            target.setCreatedByUserId(currentUser.getId());
+            target.setEntryMethod("manual");
+        } else {
+            // Existing company, attribution, contact values, and email ownership stay authoritative.
+            if (isBlank(target.getInstitutionName()) && !isBlank(incoming.getInstitutionName())) target.setInstitutionName(incoming.getInstitutionName().trim());
+            if (isBlank(target.getParticipantCategory()) && !isBlank(incoming.getParticipantCategory())) target.setParticipantCategory(incoming.getParticipantCategory().trim());
+            if (isBlank(target.getMobilePhone()) && !isBlank(incoming.getMobilePhone())) {
+                target.setMobilePhone(incoming.getMobilePhone());
+                target.setNormalizedPhone(incoming.getNormalizedPhone());
+            }
+        }
+        Database saved = databaseRepository.save(target);
+        suspiciousIdentityService.checkAndFlagDatabase(saved);
+        return ResponseEntity.ok(saved);
+    }
+
+    private String normalizedContactName(Database database) {
+        return (safe(database.getFirstName()) + " " + safe(database.getLastName()))
+                .trim().replaceAll("(?U)\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
     @GetMapping("/{id}")
@@ -371,8 +475,13 @@ public class DatabaseController {
             if (branchId != null && (branch == null || company == null || !branch.getCompanyId().equals(company.getId()))) {
                 return ResponseEntity.badRequest().body("Cabang harus berasal dari perusahaan yang dipilih");
             }
+            String metadataError = participantMetadataError(databaseDetails);
+            if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
             // Validate the complete assignment before touching this managed contact.
             existing.setCompany(company);
+            if (databaseDetails.getDatabaseDestination() != null) existing.setDatabaseDestination(databaseDetails.getDatabaseDestination());
+            if (databaseDetails.getInstitutionName() != null) existing.setInstitutionName(databaseDetails.getInstitutionName().trim());
+            if (databaseDetails.getParticipantCategory() != null) existing.setParticipantCategory(databaseDetails.getParticipantCategory().trim());
             if (clearBranch || branchId != null) existing.setBranch(branch);
             if (databaseDetails.getSalutation() != null) existing.setSalutation(databaseDetails.getSalutation());
             if (databaseDetails.getFirstName() != null) existing.setFirstName(databaseDetails.getFirstName());
@@ -448,6 +557,15 @@ public class DatabaseController {
         }
 
         return databaseRepository.findById(databaseId).map(database -> {
+            if (!ContactEmailCategory.isValidEmail(cleanEmail)) {
+                return ResponseEntity.badRequest().body("Format email tidak valid");
+            }
+            boolean companyAddress = Boolean.TRUE.equals(databaseEmail.getIsCorporate())
+                    || "company".equalsIgnoreCase(databaseEmail.getEmailType());
+            if (DatabaseDestination.effective(database.getDatabaseDestination()).includesCompany()
+                    && companyAddress && ContactEmailCategory.isPublicPersonalEmail(cleanEmail)) {
+                return ResponseEntity.badRequest().body("Email pribadi masuk melalui Database Peserta; email perusahaan wajib memakai domain institusi/perusahaan.");
+            }
             databaseEmail.setDatabase(database);
             databaseEmail.setEmail(cleanEmail);
             DatabaseEmail savedEmail = databaseEmailRepository.save(databaseEmail);
@@ -504,7 +622,21 @@ public class DatabaseController {
             String cleanEmail = updated.getEmail() != null && !updated.getEmail().trim().isEmpty()
                     ? updated.getEmail().trim().toLowerCase()
                     : email.getEmail();
+            if (email.getDatabase() == null || !databaseId.equals(email.getDatabase().getId())) {
+                return ResponseEntity.notFound().build();
+            }
+            if (!ContactEmailCategory.isValidEmail(cleanEmail)) {
+                return ResponseEntity.badRequest().body("Format email tidak valid");
+            }
             String targetType = updated.getEmailType() != null ? updated.getEmailType() : email.getEmailType();
+            boolean targetCorporate = updated.getIsCorporate() != null ? updated.getIsCorporate()
+                    : updated.getEmailType() != null ? "company".equalsIgnoreCase(updated.getEmailType())
+                    : Boolean.TRUE.equals(email.getIsCorporate());
+            if (DatabaseDestination.effective(email.getDatabase().getDatabaseDestination()).includesCompany()
+                    && (targetCorporate || "company".equalsIgnoreCase(targetType))
+                    && ContactEmailCategory.isPublicPersonalEmail(cleanEmail)) {
+                return ResponseEntity.badRequest().body("Email pribadi masuk melalui Database Peserta; email perusahaan wajib memakai domain institusi/perusahaan.");
+            }
             boolean personalEmail = "personal".equalsIgnoreCase(targetType);
             boolean duplicate = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail).stream()
                     .filter(existing -> !existing.getId().equals(emailId))
@@ -554,9 +686,30 @@ public class DatabaseController {
         return ResponseEntity.notFound().build();
     }
 
-    private boolean matchesTab(Database database, String tab) {
+    private String participantMetadataError(Database database) {
+        if (database.getInstitutionName() != null && database.getInstitutionName().codePointCount(0, database.getInstitutionName().length()) > 255) {
+            return "Nama sekolah/kampus/instansi maksimal 255 karakter";
+        }
+        String category = database.getParticipantCategory();
+        if (category != null && !category.isBlank() && !Set.of("pelajar", "mahasiswa", "umum").contains(category)) {
+            return "Kategori peserta harus pelajar, mahasiswa, atau umum";
+        }
+        return null;
+    }
+
+    private boolean matchesDestination(Database database, String destination) {
+        DatabaseDestination assigned = DatabaseDestination.effective(database.getDatabaseDestination());
+        String selected = destination == null ? "all" : destination.trim().toLowerCase(Locale.ROOT);
+        return switch (selected) {
+            case "participant" -> assigned.includesParticipant();
+            case "company" -> assigned.includesCompany();
+            default -> true;
+        };
+    }
+
+    private boolean matchesTab(Database database, String tab, String destination) {
         String normalizedTab = tab == null ? "all" : tab.trim().toLowerCase(Locale.ROOT);
-        boolean incomplete = isIncomplete(database);
+        boolean incomplete = isIncompleteForDestination(database, destination);
         return switch (normalizedTab) {
             case "clean" -> !incomplete;
             case "dirty" -> incomplete;
@@ -583,6 +736,7 @@ public class DatabaseController {
         String searchable = String.join(" ", safe(database.getFirstName()), safe(database.getLastName()),
                 safe(database.getJobTitle()), safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null),
                 safe(database.getSpecialityDivision()), safe(database.getMobilePhone()),
+                safe(database.getInstitutionName()), safe(database.getParticipantCategory()),
                 safe(database.getSource() != null ? database.getSource().name() : null),
                 safe(company != null ? company.getName() : null), safe(company != null ? company.getBrandName() : null),
                 safe(company != null && company.getGroup() != null ? company.getGroup().getName() : null),
@@ -670,12 +824,12 @@ public class DatabaseController {
         };
     }
 
-    private Map<String, Object> databaseAnalytics(List<Database> databases) {
+    private Map<String, Object> databaseAnalytics(List<Database> databases, String destination) {
         long dirty = 0;
         Map<String, Long> counts = new LinkedHashMap<>();
         Map<String, String> labels = new LinkedHashMap<>();
         for (Database database : databases) {
-            if (isIncomplete(database)) dirty++;
+            if (isIncompleteForDestination(database, destination)) dirty++;
             String label = industryFilterLabel(database.getCompany() != null ? database.getCompany().getIndustry() : null);
             if (label.isBlank()) label = "Belum diisi";
             String key = label.toLowerCase(Locale.ROOT);
@@ -707,8 +861,18 @@ public class DatabaseController {
                 "industries", industries, "otherIndustries", otherIndustries);
     }
 
+    private boolean participantIncomplete(Database database) {
+        return database == null || isBlank(database.getFirstName()) || !ContactEmailCategory.hasValidEmail(database);
+    }
+
+    private boolean isIncompleteForDestination(Database database, String destination) {
+        return "participant".equalsIgnoreCase(safe(destination).trim())
+                ? participantIncomplete(database) : isIncomplete(database);
+    }
+
     private boolean isIncomplete(Database database) {
         if (database == null) return true;
+        if (ContactEmailCategory.isParticipantOnly(database)) return participantIncomplete(database);
         if (isBlank(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null)) return true;
         if (isBlank(database.getCompany() != null ? database.getCompany().getBrandName() : null)) return true;
         if (isBlank(database.getCompany() != null ? database.getCompany().getName() : null)) return true;
@@ -721,7 +885,7 @@ public class DatabaseController {
         if (isBlank(contactOfficePhone(database))) return true;
         if (isBlank(database.getMobilePhone())) return true;
         boolean hasCompanyEmail = database.getEmails() != null && database.getEmails().stream()
-                .anyMatch(email -> Boolean.TRUE.equals(email.getIsCorporate()) || "company".equalsIgnoreCase(safe(email.getEmailType())));
+                .anyMatch(ContactEmailCategory::isCompanyEmail);
         if (!hasCompanyEmail) return true;
         if (isBlank(database.getCompany() != null ? database.getCompany().getIndustry() : null)) return true;
         if (isBlank(contactCity(database))) return true;

@@ -38,3 +38,5 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-company-branches.yml
   - include:
       file: db/changelog/changes/changelog-crm-ems-source.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-database-destinations.yml

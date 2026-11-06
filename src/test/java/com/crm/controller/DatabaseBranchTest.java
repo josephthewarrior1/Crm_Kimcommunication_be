@@ -61,6 +61,7 @@ class DatabaseBranchTest {
     @Test void createAssignsAndUpdatePreservesClearsOrMovesWithoutBreakingOldClients() {
         Database existing = contact(1L, branch);
         existing.setId(null);
+        existing.setEmails(null); // Corporate email rows are added through the guarded email endpoint.
         assertEquals(200, controller.createDatabase(existing, 1L, 10L, false, "test").getStatusCode().value());
         assertSame(branch, existing.getBranch());
         existing.setId(1L);
@@ -87,13 +88,13 @@ class DatabaseBranchTest {
         Database assigned = contact(1L, branch), headquarters = contact(2L, null);
         when(databases.findAll()).thenReturn(List.of(assigned, headquarters));
         Map<?, ?> page = (Map<?, ?>) controller.getDatabasesList("BCA Pademangan", null, null, null, null, null,
-                null, "all", "id", "asc", 1, 10, "test").getBody();
+                null, "all", "id", "asc", 1, 10, "all", "test").getBody();
         assertEquals(List.of(assigned), page.get("items"));
         Map<?, ?> exported = (Map<?, ?>) controller.exportDatabases("BCA 022200 Cabang", null, null, 10L,
-                null, null, "Bandung", "all", "id", "asc", "test").getBody();
+                null, null, "Bandung", "all", "id", "asc", "all", "test").getBody();
         assertEquals(List.of(assigned), exported.get("items"));
         Map<?, ?> options = (Map<?, ?>) controller.getDatabaseFilterOptions("BCA Pademangan", null, null, null,
-                null, null, null, "all", "test").getBody();
+                null, null, null, "all", "all", "test").getBody();
         assertEquals(List.of(Map.of("value", "BANDUNG", "label", "Bandung")), options.get("cities"));
         assertEquals(List.of(Map.of("id", 10L, "companyId", 1L, "name", "Pademangan")), options.get("branches"));
         assertEquals(false, ReflectionTestUtils.invokeMethod(controller, "isIncomplete", assigned));

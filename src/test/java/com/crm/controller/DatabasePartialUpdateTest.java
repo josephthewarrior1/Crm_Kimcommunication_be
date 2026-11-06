@@ -100,15 +100,15 @@ class DatabasePartialUpdateTest {
         assertEquals(List.of(contact), list(controller, matchingTab).get("items"));
         assertEquals(List.of(), list(controller, dirty ? "clean" : "dirty").get("items"));
         Map<?, ?> exported = (Map<?, ?>) controller.exportDatabases(null, null, null, null,
-                null, null, null, matchingTab, "id", "asc", "test").getBody();
+                null, null, null, matchingTab, "id", "asc", "all", "test").getBody();
         assertEquals(List.of(contact), exported.get("items"));
         Map<?, ?> oppositeExport = (Map<?, ?>) controller.exportDatabases(null, null, null, null,
-                null, null, null, dirty ? "clean" : "dirty", "id", "asc", "test").getBody();
+                null, null, null, dirty ? "clean" : "dirty", "id", "asc", "all", "test").getBody();
         assertEquals(List.of(), oppositeExport.get("items"));
     }
 
     private static Map<?, ?> list(DatabaseController controller, String tab) {
         return (Map<?, ?>) controller.getDatabasesList(null, null, null, null, null, null,
-                null, tab, "id", "asc", 1, 10, "test").getBody();
+                null, tab, "id", "asc", 1, 10, "all", "test").getBody();
     }
 }

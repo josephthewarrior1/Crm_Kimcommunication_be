@@ -2,6 +2,7 @@ package com.crm.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.crm.domain.EmsSource;
+import com.crm.domain.DatabaseDestination;
 import com.crm.domain.Event;
 import com.crm.domain.Company;
 import com.crm.domain.Database;
@@ -93,28 +94,29 @@ class EmsServiceRoutingTest {
         when(v2.getEventParticipants(42L)).thenThrow(failure);
         assertSame(failure, assertThrows(ResponseStatusException.class, () -> service.getUpcomingEvents(EmsSource.V2)));
         assertSame(failure, assertThrows(ResponseStatusException.class, () -> service.getEventParticipants(42L, EmsSource.V2)));
-        assertSame(failure, assertThrows(ResponseStatusException.class, () -> service.syncParticipantsForEvent(
-                Event.builder().id(1L).emsEventId(42L).emsSource(EmsSource.V2).build())));
+        assertSame(failure, assertThrows(ResponseStatusException.class, () -> sync(
+                Event.builder().syncDestination(DatabaseDestination.COMPANY).id(1L).emsEventId(42L).emsSource(EmsSource.V2).build())));
         legacy.verify();
         verifyNoInteractions(participants, databases, emails, companies, activities);
     }
 
     @Test void syncUsesEachRecordsSourceAndItsCrmIdWhenLegacyAndV2ExternalIdsMatch() {
-        expectLegacyLogin(1);
-        expectLegacyGet("/api/admin/v1/events/42/registers", 1, "[]");
+        expectLegacyLogin(2);
+        expectLegacyGet("/api/admin/v1/events/42/registers", 2, "[]");
         when(v2.getEventParticipants(42L)).thenReturn(List.of());
-        assertEquals(0, service.syncParticipantsForEvent(Event.builder().id(1L).emsEventId(42L).build()));
-        assertEquals(0, service.syncParticipantsForEvent(Event.builder().id(2L).emsEventId(42L).emsSource(EmsSource.V2).build()));
+        assertEquals(0, sync(Event.builder().syncDestination(DatabaseDestination.COMPANY).id(1L).emsEventId(42L).build()));
+        assertEquals(0, sync(Event.builder().syncDestination(DatabaseDestination.COMPANY).id(2L).emsEventId(42L).emsSource(EmsSource.V2).build()));
         legacy.verify();
-        verify(v2).getEventParticipants(42L);
-        verify(participants).findByEventId(1L);
-        verify(participants).findByEventId(2L);
-        verifyNoMoreInteractions(v2, participants);
-        verifyNoInteractions(databases, emails, companies, activities);
+        verify(v2, times(2)).getEventParticipants(42L);
+        verify(participants, times(3)).findByEventId(1L);
+        verify(participants, times(3)).findByEventId(2L);
+        verify(databases, times(4)).findAll();
+        verifyNoMoreInteractions(v2, participants, databases);
+        verifyNoInteractions(emails, companies, activities);
     }
 
     @Test void repeatedCorporateRegistrationInOneBatchReusesTheNewContactAndParticipant() {
-        var event = Event.builder().id(1L).emsEventId(42L).emsSource(EmsSource.V2).build();
+        var event = Event.builder().syncDestination(DatabaseDestination.COMPANY).id(1L).emsEventId(42L).emsSource(EmsSource.V2).build();
         var company = Company.builder().id(50L).name("Fixture Company").industry("Technology").build();
         Map<String, Object> registration = Map.of("id", 70L, "created_at", "2026-10-22T03:04:05Z",
                 "registration_code", "FIXTURE", "user_profile", Map.of(
@@ -166,7 +168,7 @@ class EmsServiceRoutingTest {
             return activity == null ? List.of() : List.of(activity);
         });
 
-        assertEquals(2, service.syncParticipantsForEvent(event));
+        assertEquals(2, sync(event));
 
         assertEquals(1, createdDatabases.size());
         assertEquals(1, createdParticipants.get());
@@ -207,31 +209,39 @@ class EmsServiceRoutingTest {
         assertCompanyIndustryAfterSync(EmsSource.V2, "", "technology", "Technology");
     }
 
+    private int sync(Event event) {
+        Map<String, Object> preview = service.previewParticipantsForEvent(event);
+        return ((Number) service.syncParticipantsForEvent(event, (String) preview.get("previewToken")).get("count")).intValue();
+    }
+
     private void assertCompanyIndustryAfterSync(EmsSource source, String current, String raw, String expected) throws Exception {
-        var event = Event.builder().id(1L).emsEventId(42L).emsSource(source).build();
+        var event = Event.builder().syncDestination(DatabaseDestination.COMPANY).id(1L).emsEventId(42L).emsSource(source).build();
         var company = Company.builder().id(50L).name("Fixture Company").industry(current).build();
         var database = Database.builder().id(101L).firstName("Fixture").lastName("Contact").company(company).build();
         var participant = EventParticipant.builder().id(201L).database(database).event(event).build();
         Map<String, Object> profile = new HashMap<>(Map.of("registered_name", "Fixture", "registered_last_name", "Contact",
-                "company", "Fixture Company", "industry", "Technology"));
+                "company", "Fixture Company", "industry", "Technology", "registered_email", "member@fixture.example"));
         if (raw != null) profile.put("ems_v2_industry_raw", raw);
         List<Map<String, Object>> rows = List.of(Map.of("id", 70L, "user_profile", profile));
         if (source == EmsSource.V2) {
             when(v2.getEventParticipants(42L)).thenReturn(rows);
         } else {
-            expectLegacyLogin(2);
-            expectLegacyGet("/api/admin/v1/events/42/registers", 2, new ObjectMapper().writeValueAsString(rows));
+            expectLegacyLogin(4);
+            expectLegacyGet("/api/admin/v1/events/42/registers", 4, new ObjectMapper().writeValueAsString(rows));
         }
         when(companies.findByNameIgnoreCase("Fixture Company")).thenReturn(Optional.of(company));
         when(companies.save(company)).thenReturn(company);
+        database.setEmails(new ArrayList<>(List.of(DatabaseEmail.builder().email("member@fixture.example").isCorporate(true).build())));
+        when(databases.findAll()).thenReturn(List.of(database));
+        when(emails.existsByDatabaseIdAndEmailIgnoreCase(101L, "member@fixture.example")).thenReturn(true);
         when(participants.findByEventId(1L)).thenReturn(List.of(participant));
         when(participants.findByEventIdAndDatabaseId(1L, 101L)).thenReturn(Optional.of(participant));
         when(activities.findByEventParticipantIdOrderByCreatedAtDesc(201L))
                 .thenReturn(List.of(EventParticipantActivity.builder().id(301L).build()));
 
-        assertEquals(1, service.syncParticipantsForEvent(event));
+        assertEquals(1, sync(event));
         assertEquals(expected, company.getIndustry());
-        assertEquals(1, service.syncParticipantsForEvent(event));
+        assertEquals(1, sync(event));
         assertEquals(expected, company.getIndustry());
         verify(companies, times(current.equals(expected) ? 0 : 1)).save(company);
         verify(databases, never()).save(any());

@@ -99,7 +99,7 @@ class ExcelImportControllerTest {
         var upload = file(rows.toArray(String[][]::new));
         assertEquals(60, preview(upload).getNewCount());
         assertEquals(40, preview(upload).getIncompleteCount());
-        var response = controller.importDatabases(upload, "test");
+        var response = controller.importDatabases(upload, "company", "test");
         assertEquals(200, response.getStatusCode().value());
         var body = (java.util.Map<?, ?>) response.getBody();
         assertEquals(100, body.get("totalRows"));
@@ -127,7 +127,7 @@ class ExcelImportControllerTest {
         clean[3] = "Other Company PT";
         var upload = file(first, second, third, clean);
         assertEquals(3, preview(upload).getConflictCount());
-        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "test").getBody();
+        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "company", "test").getBody();
         assertEquals(1, body.get("newCount"));
         assertEquals(3, body.get("skippedCount"));
         verify(databases).save(argThat(d -> "Clean".equals(d.getFirstName())));
@@ -139,7 +139,7 @@ class ExcelImportControllerTest {
         var upload = file(row("First", "081234567890", "office@example.com", "same@gmail.com"),
                 row("Second", "081234567890", "office@example.com", "same@gmail.com"),
                 row("Clean", "081234567891", "office@example.com", ""));
-        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "test").getBody();
+        var body = (java.util.Map<?, ?>) controller.importDatabases(upload, "company", "test").getBody();
         assertEquals(1, body.get("count"));
         assertEquals(2, body.get("skippedCount"));
         verify(databases).save(argThat(d -> "Clean".equals(d.getFirstName())));
@@ -161,7 +161,7 @@ class ExcelImportControllerTest {
         company.setCity("Jakarta");
         String[] dirty = row("Dirty", "081234567892", "office@example.com", "bad-email");
         var body = (java.util.Map<?, ?>) controller.importDatabases(file(update,
-                row("New", "081234567891", "office@example.com", ""), dirty), "test").getBody();
+                row("New", "081234567891", "office@example.com", ""), dirty), "company", "test").getBody();
         assertEquals(2, body.get("count"));
         assertEquals(1, body.get("newCount"));
         assertEquals(1, body.get("updatedCount"));
@@ -175,7 +175,7 @@ class ExcelImportControllerTest {
         var upload = file(row("Clean", "081234567890", "office@example.com", ""));
         assertEquals(1, preview(upload).getNewCount());
         when(databases.findAll()).thenReturn(List.of(contact(1L, "Other", "Person", "081234567890")));
-        var response = controller.importDatabases(upload, "test");
+        var response = controller.importDatabases(upload, "company", "test");
         assertEquals(400, response.getStatusCode().value());
         var body = (java.util.Map<?, ?>) response.getBody();
         assertEquals(0, body.get("count"));
@@ -187,21 +187,22 @@ class ExcelImportControllerTest {
     }
 
     @Test
-    void movingTheOnlyCompanyEmailToPersonalCannotMakeAnUpdateDirty() throws Exception {
+    void companyDestinationStillRequiresInstitutionalEmailForPublicEmailOnlyUpdate() throws Exception {
         Database existing = contact(1L, "Andi", "Person", "081234567890");
         existing.getEmails().add(email(existing, "andi@gmail.com", true, true));
         when(databases.findAll()).thenReturn(List.of(existing));
+        when(databases.findById(1L)).thenReturn(Optional.of(existing));
         var upload = file(row("Andi", "081234567890", "", "andi@gmail.com"));
         var result = preview(upload);
         assertEquals(1, result.getIncompleteCount());
-        assertTrue(result.getRows().get(0).getMessage().contains("Company Email"));
-        assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value());
-        verify(databases, never()).save(any());
+        assertEquals(0, result.getDuplicateCount());
+        assertEquals(400, controller.importDatabases(upload, "company", "test").getStatusCode().value());
+        assertTrue(existing.getEmails().get(0).getIsCorporate(), "Rejected company import preserves stored data");
     }
 
     @Test
     void onlyNewImportedContactsGetUploadAttribution() throws Exception {
-        assertEquals(200, controller.importDatabases(file(row("New", "081234567899", "office@example.com", "")), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(row("New", "081234567899", "office@example.com", "")), "company", "test").getStatusCode().value());
         verify(databases).save(argThat(saved -> "New".equals(saved.getFirstName())
                 && Long.valueOf(1L).equals(saved.getCreatedByUserId()) && "excel_import".equals(saved.getEntryMethod())));
         clearInvocations(databases);
@@ -210,18 +211,18 @@ class ExcelImportControllerTest {
         existing.setEntryMethod("manual");
         when(databases.findAll()).thenReturn(List.of(existing));
         when(databases.findById(1L)).thenReturn(Optional.of(existing));
-        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test").getStatusCode().value());
         assertEquals(9L, existing.getCreatedByUserId());
         assertEquals("manual", existing.getEntryMethod());
         // Legacy contacts remain unattributed even when imported again.
         existing.setCreatedByUserId(null); existing.setEntryMethod(null);
-        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test").getStatusCode().value());
         assertNull(existing.getCreatedByUserId());assertNull(existing.getEntryMethod());
     }
 
     @Test
-    void sharedCompanyEmailAndOfficePhoneAreAllowedIncludingPublicDomains() throws Exception {
-        for (String shared : List.of("sales@example.com", "office@gmail.com")) {
+    void sharedInstitutionalCompanyEmailAndOfficePhoneAreAllowed() throws Exception {
+        for (String shared : List.of("sales@example.com", "support@campus.ac.id")) {
             String[] a = row("Andi", "081234567890", shared, "andi@gmail.com");
             String[] b = row("Budi", "081234567891", shared, "budi@gmail.com");
             var preview = preview(file(a, b));
@@ -239,7 +240,7 @@ class ExcelImportControllerTest {
             b[11] = equivalent;
             var upload = file(a, b);
             assertEquals(0, preview(upload).getConflictCount(), equivalent);
-            assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value(), equivalent);
+            assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value(), equivalent);
         }
         assertEquals("62226030798", company.getOfficePhone());
     }
@@ -250,11 +251,11 @@ class ExcelImportControllerTest {
         data[11] = "22 6030798";
         for (String existing : List.of("22 6030798", "(022) 6030798", "+62 22 6030798", "62226030798")) {
             company.setOfficePhone(existing);
-            assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+            assertEquals(200, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
             assertEquals("62226030798", company.getOfficePhone());
         }
         company.setOfficePhone("(021) 123456");
-        assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         assertEquals("(021) 123456", company.getOfficePhone());
     }
 
@@ -263,7 +264,7 @@ class ExcelImportControllerTest {
         when(companies.findAll()).thenReturn(new ArrayList<>());
         String[] data = row("Andi", "081234567890", "office@example.com", "");
         data[11] = "22 6030798";
-        assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         verify(companies).save(argThat(saved -> "62226030798".equals(saved.getOfficePhone())));
     }
 
@@ -276,7 +277,7 @@ class ExcelImportControllerTest {
             b[11] = different;
             var upload = file(a, b);
             assertEquals(2, preview(upload).getConflictCount(), different);
-            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value(), different);
+            assertEquals(400, controller.importDatabases(upload, "company", "test").getStatusCode().value(), different);
         }
         b[11] = "(022) 6030798";
         a[15] = "Education - K12";
@@ -296,7 +297,7 @@ class ExcelImportControllerTest {
         assertEquals(2, preview.getConflictCount());
         assertTrue(preview.getRows().get(0).getMessage().contains("Mobile Phone"));
         assertTrue(preview.getRows().get(0).getMessage().contains("Personal Email"));
-        assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(file, "company", "test").getStatusCode().value());
         verify(databases, never()).save(any());
         verify(companies, never()).save(any());
         verify(groups, never()).save(any());
@@ -372,7 +373,7 @@ class ExcelImportControllerTest {
         company.setGroup(existingGroup);
         String[] data = row("Andi", "081234567890", "office@example.com", "");
         data[3] = "PT. Example";
-        assertEquals(200, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         verify(companies).save(company);
         verify(groups, never()).save(any());
         assertSame(existingGroup, company.getGroup());
@@ -384,11 +385,11 @@ class ExcelImportControllerTest {
     @Test
     void movingAnEmailToAnotherTypeRepairsTheRemainingPrimary() throws Exception {
         Database target = contact(1L, "Andi", "Person", "081234567890");
-        target.getEmails().add(email(target, "office@gmail.com", false, true));
+        target.getEmails().add(email(target, "office@company.example", false, true));
         target.getEmails().add(email(target, "retained@gmail.com", false, false));
         when(databases.findAll()).thenReturn(List.of(target));
         when(databases.findById(1L)).thenReturn(Optional.of(target));
-        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@gmail.com", "")), "test")
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@company.example", "")), "company", "test")
                 .getStatusCode().value());
         assertEquals(1, target.getEmails().stream().filter(e -> e.getIsCorporate() && e.getIsPrimary()).count());
         assertEquals(1, target.getEmails().stream().filter(e -> !e.getIsCorporate() && e.getIsPrimary()).count());
@@ -407,7 +408,7 @@ class ExcelImportControllerTest {
         data[9] = "";
         var file = file(data);
         assertEquals(1, preview(file).getDuplicateCount());
-        assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file, "company", "test").getStatusCode().value());
         assertEquals("Manager lama", target.getJobTitle());
         assertEquals("081234567890", target.getMobilePhone());
         assertFalse(target.getIsActive());
@@ -424,7 +425,7 @@ class ExcelImportControllerTest {
         assertEquals(1, preview(file(data)).getIncompleteCount());
         try (Workbook workbook = new XSSFWorkbook()) {
             workbook.createSheet().createRow(0).createCell(0).setCellValue("Wrong header");
-            assertEquals(400, controller.previewImport(upload(workbook)).getStatusCode().value());
+            assertEquals(400, controller.previewImport(upload(workbook), "company").getStatusCode().value());
         }
     }
 
@@ -449,7 +450,7 @@ class ExcelImportControllerTest {
             return contact;
         }).when(databases).save(any());
         var result = proxy.importDatabases(file(row("Andi", "081234567890", "office@example.com", ""),
-                row("Budi", "081234567891", "office@example.com", "")), "test");
+                row("Budi", "081234567891", "office@example.com", "")), "company", "test");
         assertEquals(500, result.getStatusCode().value());
         assertTrue(manager.rolledBack);
         assertFalse(manager.committed);
@@ -481,7 +482,7 @@ class ExcelImportControllerTest {
         assertEquals(89L, result.getRows().get(0).getExistingDatabaseId());
         verify(databases, never()).save(any());
         assertSame(company, yogita.getCompany());
-        var response = controller.importDatabases(upload, "test");
+        var response = controller.importDatabases(upload, "company", "test");
         assertEquals(200, response.getStatusCode().value());
         var body = (java.util.Map<?, ?>) response.getBody();
         assertEquals(1, body.get("updatedCount"));
@@ -513,7 +514,7 @@ class ExcelImportControllerTest {
         var result = preview(file(data));
         assertEquals(1, result.getConflictCount());
         assertTrue(result.getRows().get(0).getMessage().contains("Target update ambigu"));
-        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         verify(databases, never()).save(any());
     }
 
@@ -524,12 +525,12 @@ class ExcelImportControllerTest {
         String[] data = row("Budi", "081234567890", "office@example.com", "");
         data[3] = "New Employer PT";
         assertEquals(1, preview(file(data)).getConflictCount());
-        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         target.setMobilePhone(null);
         data[5] = "Andi";
         data[12] = "";
         assertNull(preview(file(data)).getRows().get(0).getExistingDatabaseId());
-        assertEquals(400, controller.importDatabases(file(data), "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(file(data), "company", "test").getStatusCode().value());
         verify(databases, never()).save(any());
     }
 
@@ -542,7 +543,7 @@ class ExcelImportControllerTest {
         assertEquals(1, result.getConflictCount());
         assertEquals(2, result.getRows().get(0).getRowNum());
         assertTrue(result.getRows().get(0).getMessage().contains("Company Name berisi 330 karakter; maksimal 255"));
-        var response = controller.importDatabases(upload, "test");
+        var response = controller.importDatabases(upload, "company", "test");
         assertEquals(200, response.getStatusCode().value());
         var body = (java.util.Map<?, ?>) response.getBody();
         assertEquals(1, body.get("count"));
@@ -577,7 +578,7 @@ class ExcelImportControllerTest {
         var upload = file(data);
         assertEquals(0, preview(upload).getConflictCount());
         assertEquals(1, preview(upload).getNewCount());
-        var response = controller.importDatabases(upload, "test");
+        var response = controller.importDatabases(upload, "company", "test");
         assertEquals(200, response.getStatusCode().value());
         verify(companies).save(argThat(c -> data[3].equals(c.getName()) && data[22].equals(c.getWebsite())));
         verify(databases).save(argThat(c -> data[22].equals(c.getCompany().getWebsite())));
@@ -608,7 +609,7 @@ class ExcelImportControllerTest {
             assertTrue(same.getMessage().startsWith("Ikut tertahan karena perbedaan data perusahaan: Postal Code baris ini '12920'"));
             assertTrue(same.getMessage().contains("'12920' dipakai 47 baris"));
             assertTrue(same.getMessage().contains("#" + different.getRowNum() + " Nurul Pratiwi"));
-            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value());
+            assertEquals(400, controller.importDatabases(upload, "company", "test").getStatusCode().value());
         }
         verify(databases, never()).save(any());
         verify(companies, never()).save(any());
@@ -663,7 +664,7 @@ class ExcelImportControllerTest {
                 assertTrue(same.getMessage().contains("'" + common + "' dipakai 2 baris"), header);
                 assertTrue(same.getMessage().contains("'" + different + "' dipakai 1 baris: #4 Nurul Pratiwi"), header);
             }
-            assertEquals(400, controller.importDatabases(upload, "test").getStatusCode().value(), header);
+            assertEquals(400, controller.importDatabases(upload, "company", "test").getStatusCode().value(), header);
         }
         verify(databases, never()).save(any());
         verify(companies, never()).save(any());
@@ -682,7 +683,7 @@ class ExcelImportControllerTest {
                 var file = upload(workbook);
                 assertEquals(1, preview(file).getNewCount());
                 assertEquals("Pademangan", preview(file).getRows().get(0).getBranchName());
-                assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+                assertEquals(200, controller.importDatabases(file, "company", "test").getStatusCode().value());
                 assertEquals(1, storedBranches.size());
                 CompanyBranch branch = storedBranches.get(0);
                 assertEquals("Pademangan", branch.getName());
@@ -705,7 +706,7 @@ class ExcelImportControllerTest {
         var file = branchAfterLinkedinFile(data);
         assertEquals(1, preview(file).getNewCount());
         assertEquals("", preview(file).getRows().get(0).getBranchName());
-        assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file, "company", "test").getStatusCode().value());
         assertEquals("Bandung", company.getCity());
         assertEquals("40111", company.getPostalCode());
         assertEquals("https://example.com/bandung", company.getWebsite());
@@ -721,7 +722,7 @@ class ExcelImportControllerTest {
             var file = branchAfterLinkedinFile(data);
             assertEquals(1, preview(file).getIncompleteCount());
             assertTrue(preview(file).getRows().get(0).getMessage().contains(column == 20 ? "City" : "Company Website"));
-            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+            assertEquals(400, controller.importDatabases(file, "company", "test").getStatusCode().value());
         }
         for (int column : List.of(20, 21)) {
             String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat Cabang", "021111", "Jakarta");
@@ -744,7 +745,7 @@ class ExcelImportControllerTest {
             var file = branchAfterLinkedinFile(data);
             assertEquals(1, preview(file).getConflictCount());
             assertTrue(preview(file).getRows().get(0).getMessage().contains(column == 20 ? "City" : "Postal Code"));
-            assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+            assertEquals(400, controller.importDatabases(file, "company", "test").getStatusCode().value());
         }
         verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
     }
@@ -766,11 +767,11 @@ class ExcelImportControllerTest {
                     case "unknown branch" -> headers.getCell(20).setCellValue("Cabang typo");
                 }
                 var file = upload(workbook);
-                var response = controller.previewImport(file);
+                var response = controller.previewImport(file, "company");
                 assertEquals(400, response.getStatusCode().value(), issue);
                 if (issue.equals("duplicate")) assertTrue(response.getBody().toString().contains("hanya boleh satu"));
                 if (issue.equals("missing city")) assertTrue(response.getBody().toString().contains("Kolom 22 harus 'City'"));
-                assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value(), issue);
+                assertEquals(400, controller.importDatabases(file, "company", "test").getStatusCode().value(), issue);
             }
         }
         verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
@@ -797,7 +798,7 @@ class ExcelImportControllerTest {
             var file = upload(workbook);
             assertEquals(1, preview(file).getNewCount());
             assertEquals("Pademangan", preview(file).getRows().get(0).getBranchName());
-            assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+            assertEquals(200, controller.importDatabases(file, "company", "test").getStatusCode().value());
             assertEquals(1, storedBranches.size());
             assertEquals("Alamat Excel", storedBranches.get(0).getAddress());
             assertEquals("Bandung", storedBranches.get(0).getCity());
@@ -830,7 +831,7 @@ class ExcelImportControllerTest {
         var file = branchFile(first, second);
         assertEquals(2, preview(file).getNewCount());
         assertEquals(0, preview(file).getConflictCount());
-        assertEquals(200, controller.importDatabases(file, "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(file, "company", "test").getStatusCode().value());
         assertEquals(2, storedBranches.size()); assertEquals(2, savedContacts.size());
         assertSame(company, savedContacts.get(0).getCompany()); assertSame(company, savedContacts.get(1).getCompany());
         assertNotEquals(savedContacts.get(0).getBranch().getId(), savedContacts.get(1).getBranch().getId());
@@ -839,7 +840,7 @@ class ExcelImportControllerTest {
         first[23] = "pAdEmAnGaN";
         var repeated = branchFile(first, second);
         assertEquals(2, preview(repeated).getDuplicateCount());
-        assertEquals(200, controller.importDatabases(repeated, "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(repeated, "company", "test").getStatusCode().value());
         assertEquals(2, storedBranches.size()); assertEquals(2, savedContacts.size());
         assertEquals("Alamat lama", company.getAddress()); assertEquals("021900", company.getOfficePhone());
         assertEquals("Jakarta", company.getCity()); assertEquals("10000", company.getPostalCode());
@@ -855,7 +856,7 @@ class ExcelImportControllerTest {
             for (var file : List.of(branchFile(first, second), branchAfterLinkedinFile(first, second))) {
                 assertEquals(2, preview(file).getConflictCount(), "column " + column);
                 assertTrue(preview(file).getRows().get(0).getMessage().contains("Semua 2 baris cabang Pademangan ditahan"));
-                assertEquals(400, controller.importDatabases(file, "test").getStatusCode().value());
+                assertEquals(400, controller.importDatabases(file, "company", "test").getStatusCode().value());
             }
         }
         String[] first = branchRow("Andi", "081234567890", "Pademangan", "Alamat Satu", "021111", "Jakarta");
@@ -872,7 +873,7 @@ class ExcelImportControllerTest {
         String[] third = branchRow("Cici", "081234567892", "Bandung", "Alamat Bandung", "022222", "Bandung");
         var upload = branchFile(first, second, third);
         assertEquals(2, preview(upload).getConflictCount()); assertEquals(1, preview(upload).getNewCount());
-        assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value());
         assertEquals(1, storedBranches.size()); assertEquals("Bandung", storedBranches.get(0).getName());
         verify(databases).save(argThat(contact -> "Cici".equals(contact.getFirstName())));
     }
@@ -889,7 +890,7 @@ class ExcelImportControllerTest {
                 branchAfterLinkedinFile(Arrays.copyOf(data, 24)))) {
             assertEquals(1, preview(upload).getDuplicateCount());
             assertEquals("Pademangan", preview(upload).getRows().get(0).getBranchName());
-            assertEquals(200, controller.importDatabases(upload, "test").getStatusCode().value());
+            assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value());
             assertSame(branch, target.getBranch());
             assertEquals("Alamat Cabang", branch.getAddress()); assertEquals("Bandung", branch.getCity());
             assertEquals("Alamat lama", company.getAddress()); assertEquals("021999", company.getOfficePhone());
@@ -909,7 +910,7 @@ class ExcelImportControllerTest {
         assertEquals(1, preview(branchFile(data)).getNewCount(), "New contact can reuse the branch's location");
         data[10] = "Alamat Lain";
         assertEquals(1, preview(branchFile(data)).getConflictCount());
-        assertEquals(400, controller.importDatabases(branchFile(data), "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(branchFile(data), "company", "test").getStatusCode().value());
         Database target = contact(77L, "Andi", "Person", "081234567890"); target.setBranch(branch);
         when(databases.findAll()).thenReturn(List.of(target));
         data[23] = "Bandung";
@@ -929,7 +930,7 @@ class ExcelImportControllerTest {
         });
         String[] data = branchRow("Budi", "081234567890", "Pademangan", "Alamat BCA", "022222", "Bandung"); data[3] = "BCA";
         assertEquals(1, preview(branchFile(data)).getNewCount());
-        assertEquals(200, controller.importDatabases(branchFile(data), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(branchFile(data), "company", "test").getStatusCode().value());
         assertEquals(2, storedBranches.size());
         assertEquals(20L, storedBranches.get(1).getCompanyId()); assertEquals("Alamat BCA", storedBranches.get(1).getAddress());
         verify(companies).save(argThat(saved -> saved.getId() == 20L && saved.getAddress() == null
@@ -948,7 +949,7 @@ class ExcelImportControllerTest {
             populate(workbook, data);
             workbook.getSheetAt(0).getRow(0).createCell(23).setCellValue("Cabang/Kantor");
             workbook.getSheetAt(0).getRow(0).createCell(24).setCellValue("Branch");
-            assertEquals(400, controller.previewImport(upload(workbook)).getStatusCode().value());
+            assertEquals(400, controller.previewImport(upload(workbook), "company").getStatusCode().value());
         }
         verify(branches, never()).save(any()); verify(companies, never()).save(any()); verify(databases, never()).save(any());
     }
@@ -961,14 +962,14 @@ class ExcelImportControllerTest {
         var upload = branchAfterLinkedinFile(first, second);
         assertEquals(2, preview(upload).getNewCount());
         assertEquals("(+62)227303049", branch.getOfficePhone(), "Preview must not mutate the branch");
-        var result = controller.importDatabases(upload, "test");
+        var result = controller.importDatabases(upload, "company", "test");
         assertEquals(200, result.getStatusCode().value());
         assertEquals(2, ((java.util.Map<?, ?>) result.getBody()).get("newCount"));
         assertEquals(0, ((java.util.Map<?, ?>) result.getBody()).get("skippedCount"));
         assertEquals("628111317193", branch.getOfficePhone());
         verify(databases, times(2)).save(argThat(contact -> contact.getBranch() == branch));
         first[11] = "";
-        assertEquals(200, controller.importDatabases(branchAfterLinkedinFile(first), "test").getStatusCode().value());
+        assertEquals(200, controller.importDatabases(branchAfterLinkedinFile(first), "company", "test").getStatusCode().value());
         assertEquals("628111317193", branch.getOfficePhone());
         first[11] = "022999999";
         assertEquals(2, preview(branchAfterLinkedinFile(first, second)).getConflictCount(),
@@ -1058,7 +1059,7 @@ class ExcelImportControllerTest {
     }
 
     private ExcelImportController.ImportPreviewResponse preview(MockMultipartFile file) {
-        var response = controller.previewImport(file);
+        var response = controller.previewImport(file, "company");
         assertEquals(200, response.getStatusCode().value(), () -> String.valueOf(response.getBody()));
         return (ExcelImportController.ImportPreviewResponse) response.getBody();
     }

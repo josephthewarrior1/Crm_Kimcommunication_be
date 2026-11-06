@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-explicit-database-destinations
+      author: codex
+      changes:
+        - addColumn:
+            tableName: databases
+            columns:
+              - column:
+                  name: database_destination
+                  type: VARCHAR(16)
+                  defaultValue: COMPANY
+                  constraints:
+                    nullable: false
+              - column:
+                  name: institution_name
+                  type: VARCHAR(255)
+              - column:
+                  name: participant_category
+                  type: VARCHAR(32)
+        - addColumn:
+            tableName: events
+            columns:
+              - column:
+                  name: sync_destination
+                  type: VARCHAR(16)
+      rollback:
+        - dropColumn:
+            tableName: events
+            columnName: sync_destination
+        - dropColumn:
+            tableName: databases
+            columnName: participant_category
+        - dropColumn:
+            tableName: databases
+            columnName: institution_name
+        - dropColumn:
+            tableName: databases
+            columnName: database_destination

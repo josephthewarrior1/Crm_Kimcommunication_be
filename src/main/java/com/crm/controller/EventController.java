@@ -8,6 +8,8 @@ import com.crm.domain.AttendanceStatus;
 import com.crm.domain.Company;
 import com.crm.domain.Database;
 import com.crm.domain.DatabaseEmail;
+import com.crm.domain.DatabaseDestination;
+import com.crm.util.ContactEmailCategory;
 import com.crm.domain.DatabaseSource;
 import com.crm.domain.DatabaseType;
 import com.crm.domain.EventParticipant;
@@ -503,212 +505,64 @@ public class EventController {
 
     @PostMapping("/{id}/participants/import/validate")
     public ResponseEntity<?> validateEventParticipantsImport(
-            @PathVariable Long id,
-            @RequestParam("file") MultipartFile file,
+            @PathVariable Long id, @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String tab,
+            @RequestParam(value = "destination", required = false) String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
-        if (currentUser == null) {
-            return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+        if (currentUser == null) return ResponseEntity.status(401).body(Map.of("message", "Unauthorized"));
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER) || !canAccessEvent(currentUser, id)) {
+            return ResponseEntity.status(403).body(Map.of("message", "Forbidden"));
         }
-        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
-            return ResponseEntity.status(403).body(Map.of("message", "Forbidden: Only ADMIN or MANAGER can validate imports"));
-        }
-        if (!canAccessEvent(currentUser, id)) {
-            return ResponseEntity.status(403).body(Map.of("message", "Forbidden: You don't have access to this event"));
-        }
-        if (file == null || file.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
-        }
-
         Event event = eventRepository.findById(id).orElse(null);
-        if (event == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        List<EventParticipant> existingParticipants = eventParticipantRepository.findByEventId(id);
-        List<Database> allDatabases = databaseRepository.findAll();
-
-        try (InputStream is = file.getInputStream(); Workbook workbook = new XSSFWorkbook(is)) {
-            Sheet sheet = workbook.getSheetAt(0);
-            Row headerRow = sheet.getRow(0);
-            if (headerRow == null) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("message", "Header row not found"));
-            }
-
-            Map<String, Integer> headerMap = buildHeaderMap(headerRow);
-            boolean hasImportHeader = hasAnyHeader(headerMap, "first name", "company name", "company", "company email address");
-            List<ImportValidationRowDraft> drafts = new ArrayList<>();
-            Map<String, List<EventImportEmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
-            int validCount = 0;
-            int duplicateCount = 0;
-            int errorCount = 0;
-            int blankCount = 0;
-
-            for (int rowIndex = hasImportHeader ? 1 : 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
-                Row row = sheet.getRow(rowIndex);
-                if (row == null) {
-                    continue;
-                }
-
-                String firstName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 5, "first name", "firstname", "first_name", "nama depan", "name", "nama"));
-                String lastName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 6, "last name", "lastname", "last_name", "nama belakang"));
-                String groupName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 1, "nama group", "group name", "group", "nama group holding", "nama group/holding company", "group holding company", "group/holding company"));
-                String brandName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 2, "nama brand", "brand name", "brand"));
-                String companyName = cleanCompanyName(normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 3, "company name", "companyname", "company", "perusahaan")));
-                String mobilePhone = cleanImportPhone(getImportCell(row, headerMap, hasImportHeader, 12, "mobile phone", "phone", "no hp", "whatsapp"));
-                String companyEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 13, "company email address", "company email", "email"));
-                String personalEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 14, "personal email address", "personal email"));
-                String salutation = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 4, "salutation"));
-                String position = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 7, "position", "postition", "position level"));
-                String specialityDivision = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 8, "division", "speciality/division", "speciality"));
-                String jobTitle = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 9, "jobtitle", "job title", "jabatan"));
-                String address = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 10, "address", "company address", "alamat"));
-                String officePhone = cleanImportPhone(getImportCell(row, headerMap, hasImportHeader, 11, "office phone", "company phone", "telepon kantor"));
-                String industry = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 15, "industry", "industri"));
-                String sizeRevenue = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 16, "company size (revenue)"));
-                String sizeEmployee = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 17, "company size (employee)"));
-                String hardware = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 18, "company hardware"));
-                String linkedinUrl = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 19, "linkedin link", "linkedin"));
-                String city = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 20, "city", "kota"));
-                String postalCode = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 21, "postal code"));
-                String website = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 22, "company website", "website"));
-
-                if (firstName.isBlank() && lastName.isBlank() && companyName.isBlank() && mobilePhone.isBlank() && companyEmail.isBlank() && personalEmail.isBlank()) {
-                    blankCount++;
-                    continue;
-                }
-
-                List<String> issues = getEventImportMissingMandatoryFields(
-                        groupName, brandName, companyName, salutation, firstName, lastName,
-                        position, jobTitle, address, officePhone, mobilePhone, companyEmail,
-                        industry, city, website
-                );
-
-                Database personalEmailOwner = findPersonalEmailOwner(allDatabases, personalEmail);
-                if (personalEmailOwner != null && !sameName(personalEmailOwner, firstName, lastName)) {
-                    issues.add("Personal Email sudah dipakai kontak lain: "
-                            + safe(personalEmailOwner.getFirstName()) + " " + safe(personalEmailOwner.getLastName())
-                            + " (ID " + personalEmailOwner.getId() + ")");
-                }
-
-                EventParticipant existingEventParticipant = findExistingEventParticipant(existingParticipants, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
-                Database existingDatabase = findExistingDatabase(allDatabases, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
-
-                registerEventImportEmails(
-                        emailOwnersInFile,
-                        "Baris " + (rowIndex + 1),
-                        buildImportFullName(firstName, lastName),
-                        companyEmail,
-                        personalEmail,
-                        rowIndex + 1
-                );
-
-                drafts.add(new ImportValidationRowDraft(
-                        rowIndex + 1,
-                        firstName,
-                        lastName,
-                        companyName,
-                        mobilePhone,
-                        companyEmail,
-                        personalEmail,
-                        groupName,
-                        brandName,
-                        salutation,
-                        position,
-                        specialityDivision,
-                        jobTitle,
-                        address,
-                        officePhone,
-                        industry,
-                        sizeRevenue,
-                        sizeEmployee,
-                        hardware,
-                        linkedinUrl,
-                        city,
-                        postalCode,
-                        website,
-                        existingDatabase != null ? existingDatabase.getId() : null,
-                        existingEventParticipant != null ? existingEventParticipant.getId() : null,
-                        issues,
-                        existingEventParticipant != null
-                ));
-            }
-
-            Map<Integer, List<String>> intraFileConflictsByRow = buildEventImportConflictMessages(emailOwnersInFile);
+        if (event == null) return ResponseEntity.notFound().build();
+        ResponseEntity<?> destinationError = eventImportDestinationError(event, destination);
+        if (destinationError != null) return destinationError;
+        destination = event.getSyncDestination().value();
+        if (file == null || file.isEmpty()) return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
+        try {
+            EventImportBatch batch = readEventImportDrafts(file, eventParticipantRepository.findByEventId(id), databaseRepository.findAll(), destination);
+            List<ImportValidationRowDraft> drafts = batch.rows();
+            Map<String, List<EventImportEmailOwnerInfo>> owners = new LinkedHashMap<>();
+            for (ImportValidationRowDraft draft : drafts) registerImportDraftEmails(owners, draft, destination);
+            Map<Integer, List<String>> conflicts = buildEventImportConflictMessages(owners);
             List<Map<String, Object>> rows = new ArrayList<>();
-
+            int valid = 0, duplicate = 0, errors = 0;
             for (ImportValidationRowDraft draft : drafts) {
                 List<String> issues = new ArrayList<>(draft.issues());
-                List<String> conflictMessages = intraFileConflictsByRow.getOrDefault(draft.rowNumber(), List.of());
-                String status = "valid";
-
-                if (!conflictMessages.isEmpty()) {
-                    issues.addAll(conflictMessages);
-                }
-
-                if (!draft.issues().isEmpty()) {
-                    status = "error";
-                } else if (!conflictMessages.isEmpty()) {
-                    status = "conflict";
-                } else if (draft.existingEventParticipant()) {
-                    status = "duplicate";
-                    issues.add("Already registered in this event");
-                }
-
-                if ("valid".equals(status)) {
-                    validCount++;
-                } else if ("duplicate".equals(status)) {
-                    duplicateCount++;
-                } else {
-                    errorCount++;
-                }
-
-                Map<String, Object> rowResult = new LinkedHashMap<>();
-                rowResult.put("rowNumber", draft.rowNumber());
-                rowResult.put("status", status);
-                rowResult.put("firstName", draft.firstName());
-                rowResult.put("lastName", draft.lastName());
-                rowResult.put("companyName", draft.companyName());
-                rowResult.put("mobilePhone", draft.mobilePhone());
-                rowResult.put("companyEmail", draft.companyEmail());
-                rowResult.put("personalEmail", draft.personalEmail());
-                rowResult.put("salutation", draft.salutation());
-                rowResult.put("position", draft.position());
-                rowResult.put("jobTitle", draft.jobTitle());
-                rowResult.put("existingDatabaseId", draft.existingDatabaseId());
-                rowResult.put("existingParticipantId", draft.existingParticipantId());
-                rowResult.put("issues", issues);
-                rows.add(rowResult);
+                List<String> fileConflicts = conflicts.getOrDefault(draft.rowNumber(), List.of());
+                issues.addAll(fileConflicts);
+                String status = !draft.issues().isEmpty() ? "error" : !fileConflicts.isEmpty() ? "conflict"
+                        : draft.existingEventParticipant() ? "duplicate" : "valid";
+                if (status.equals("duplicate")) { duplicate++; issues.add("Already registered in this event"); }
+                else if (status.equals("valid")) valid++;
+                else errors++;
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("rowNumber", draft.rowNumber()); row.put("status", status);
+                row.put("firstName", draft.firstName()); row.put("lastName", draft.lastName());
+                row.put("companyName", draft.companyName()); row.put("mobilePhone", draft.mobilePhone());
+                row.put("companyEmail", draft.companyEmail()); row.put("personalEmail", draft.personalEmail());
+                row.put("salutation", draft.salutation()); row.put("position", draft.position()); row.put("jobTitle", draft.jobTitle());
+                row.put("existingDatabaseId", draft.existingDatabaseId()); row.put("existingParticipantId", draft.existingParticipantId());
+                row.put("issues", issues); row.put("missingFields", draft.missingFields());
+                row.put("warnings", draft.warnings()); rows.add(row);
             }
-
-            return ResponseEntity.ok(Map.of(
-                    "eventId", id,
-                    "eventName", event.getName(),
-                    "tab", safe(tab),
-                    "fileName", safe(file.getOriginalFilename()),
-                    "summary", Map.of(
-                            "validCount", validCount,
-                            "duplicateCount", duplicateCount,
-                            "errorCount", errorCount,
-                            "blankCount", blankCount,
-                            "conflictCount", intraFileConflictsByRow.size(),
-                            "totalRows", rows.size()
-                    ),
-                    "rows", rows
-            ));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                    "message", "Failed to validate import file: " + e.getMessage()
-            ));
+            return ResponseEntity.ok(Map.of("eventId", id, "eventName", safe(event.getName()), "destination", destination,
+                    "tab", safe(tab), "fileName", safe(file.getOriginalFilename()), "rows", rows,
+                    "summary", Map.of("validCount", valid, "duplicateCount", duplicate, "errorCount", errors,
+                            "blankCount", batch.blankCount(), "conflictCount", conflicts.size(), "totalRows", rows.size())));
+        } catch (Exception failure) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Failed to validate import file: " + failure.getMessage()));
         }
     }
 
     @PostMapping("/{id}/participants/import")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> importEventParticipants(
             @PathVariable Long id,
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String tab,
+            @RequestParam(value = "destination", required = false) String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -720,21 +574,20 @@ public class EventController {
         if (!canAccessEvent(currentUser, id)) {
             return ResponseEntity.status(403).body(Map.of("message", "Forbidden: You don't have access to this event"));
         }
-        if (file == null || file.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
-        }
+        Event event = eventRepository.findForSyncById(id).orElse(null);
+        if (event == null) return ResponseEntity.notFound().build();
+        ResponseEntity<?> destinationError = eventImportDestinationError(event, destination);
+        if (destinationError != null) return destinationError;
+        destination = event.getSyncDestination().value();
+        boolean participantImport = "participant".equals(destination);
+        if (file == null || file.isEmpty()) return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
 
-        Event event = eventRepository.findById(id).orElse(null);
-        if (event == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        List<EventParticipant> existingParticipants = eventParticipantRepository.findByEventId(id);
+        List<EventParticipant> existingParticipants = new ArrayList<>(eventParticipantRepository.findByEventId(id));
         List<Database> allDatabases = new ArrayList<>(databaseRepository.findAll());
         List<ImportValidationRowDraft> drafts;
 
         try {
-            drafts = readEventImportDrafts(file, existingParticipants, allDatabases);
+            drafts = readEventImportDrafts(file, existingParticipants, allDatabases, destination).rows();
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                     "message", "Failed to parse import file: " + e.getMessage()
@@ -743,14 +596,7 @@ public class EventController {
 
         Map<String, List<EventImportEmailOwnerInfo>> emailOwnersInFile = new LinkedHashMap<>();
         for (ImportValidationRowDraft draft : drafts) {
-            registerEventImportEmails(
-                    emailOwnersInFile,
-                    "Baris " + draft.rowNumber(),
-                    buildImportFullName(draft.firstName(), draft.lastName()),
-                    draft.companyEmail(),
-                    draft.personalEmail(),
-                    draft.rowNumber()
-            );
+            registerImportDraftEmails(emailOwnersInFile, draft, destination);
         }
         Map<Integer, List<String>> conflictsByRow = buildEventImportConflictMessages(emailOwnersInFile);
         long invalidCount = drafts.stream()
@@ -769,10 +615,29 @@ public class EventController {
 
         for (ImportValidationRowDraft draft : drafts) {
             Database database = draft.existingDatabaseId() != null
-                    ? databaseRepository.findById(draft.existingDatabaseId()).orElse(null)
-                    : findExistingDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.companyName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail());
+                    ? databaseRepository.findById(draft.existingDatabaseId()).orElseThrow(() -> new IllegalStateException("Kontak berubah; preview ulang sebelum import"))
+                    : findEventImportDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail(), participantImport);
             boolean isNewContact = database == null;
 
+            if (participantImport) {
+                if (database == null) {
+                    database = Database.builder().firstName(draft.firstName()).lastName(draft.lastName())
+                            .databaseDestination(DatabaseDestination.PARTICIPANT).source(DatabaseSource.excel_import)
+                            .createdByUserId(currentUser.getId()).entryMethod("excel_import").isActive(true).build();
+                } else {
+                    database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(DatabaseDestination.PARTICIPANT));
+                }
+                if (!draft.companyName().isBlank()) database.setInstitutionName(draft.companyName());
+                if (!draft.participantCategory().isBlank()) database.setParticipantCategory(draft.participantCategory());
+                if (!draft.mobilePhone().isBlank()) {
+                    database.setMobilePhone(draft.mobilePhone()); database.setNormalizedPhone(normalizeEventImportPhone(draft.mobilePhone()));
+                }
+                database = databaseRepository.save(database);
+                for (String email : eventImportEmails(draft.companyEmail(), draft.personalEmail())) saveParticipantImportEmail(database, email);
+            } else {
+                if (database != null && !DatabaseDestination.effective(database.getDatabaseDestination()).includesCompany()) {
+                    throw new IllegalStateException("Kontak berada di Database Peserta; tinjau tujuan sebelum import perusahaan");
+                }
             Group group = null;
             if (!draft.groupName().isBlank()) {
                 group = groupRepository.findByNameIgnoreCase(draft.groupName())
@@ -802,6 +667,8 @@ public class EventController {
             PositionLevel positionLevel = PositionLevel.fromValue(draft.position());
             if (database == null) {
                 database = Database.builder()
+                        .databaseDestination(DatabaseDestination.COMPANY)
+                        .createdByUserId(currentUser.getId()).entryMethod("excel_import")
                         .firstName(draft.firstName())
                         .lastName(draft.lastName().isBlank() ? null : draft.lastName())
                         .databaseType(DatabaseType.unknown)
@@ -815,16 +682,19 @@ public class EventController {
             if (!draft.position().isBlank()) database.setPositionLevel(positionLevel);
             if (!draft.specialityDivision().isBlank()) database.setSpecialityDivision(draft.specialityDivision());
             if (!draft.jobTitle().isBlank()) database.setJobTitle(draft.jobTitle());
-            if (!draft.mobilePhone().isBlank()) database.setMobilePhone(draft.mobilePhone());
+            if (!draft.mobilePhone().isBlank()) {
+                database.setMobilePhone(draft.mobilePhone()); database.setNormalizedPhone(normalizeEventImportPhone(draft.mobilePhone()));
+            }
             if (!draft.linkedinUrl().isBlank()) database.setLinkedinUrl(draft.linkedinUrl());
             if (company != null) database.setCompany(company);
             database = databaseRepository.save(database);
-            allDatabases.add(database);
-
-            saveImportEmail(database, draft.companyEmail(), "company", true);
-            saveImportEmail(database, draft.personalEmail(), "personal", false);
-
-            if (eventParticipantRepository.findByEventIdAndDatabaseId(id, database.getId()).isPresent()) {
+            for (String email : eventImportEmails(draft.companyEmail())) saveImportEmail(database, email, "company", true);
+            for (String email : eventImportEmails(draft.personalEmail())) saveImportEmail(database, email, "personal", false);
+            }
+            Database savedContact = database;
+            if (allDatabases.stream().noneMatch(existing -> Objects.equals(existing.getId(), savedContact.getId()))) allDatabases.add(database);
+            if (existingParticipants.stream().anyMatch(existing -> existing.getDatabase() != null && Objects.equals(existing.getDatabase().getId(), savedContact.getId()))
+                    || eventParticipantRepository.findByEventIdAndDatabaseId(id, database.getId()).isPresent()) {
                 skippedParticipants++;
                 continue;
             }
@@ -838,7 +708,7 @@ public class EventController {
                     .preEventApprovalStatus("pending")
                     .notes("request".equalsIgnoreCase(safe(tab)) ? "[Origin: Request]" : null)
                     .build();
-            eventParticipantRepository.save(participant);
+            existingParticipants.add(eventParticipantRepository.save(participant));
             addedParticipants++;
 
             if (isNewContact) {
@@ -859,6 +729,7 @@ public class EventController {
         );
 
         return ResponseEntity.ok(Map.of(
+                "destination", destination,
                 "message", "Excel participants imported successfully",
                 "eventId", id,
                 "eventName", eventName,
@@ -1150,6 +1021,7 @@ public class EventController {
             return ResponseEntity.notFound().build();
         }
 
+        if (!isEventDestination(event.getSyncDestination())) return unclassifiedEvent();
         List<EventParticipant> allParticipants = eventParticipantRepository.findAll();
         Set<Long> currentEventDatabaseIds = allParticipants.stream()
                 .filter(participant -> participant.getEvent() != null && Objects.equals(participant.getEvent().getId(), id))
@@ -1168,6 +1040,7 @@ public class EventController {
         Set<Long> visibleEventIds = visibleEvents.stream().map(Event::getId).collect(Collectors.toSet());
 
         List<Database> availableDatabases = databaseRepository.findAll().stream()
+                .filter(database -> DatabaseDestination.effective(database.getDatabaseDestination()).includes(event.getSyncDestination()))
                 .filter(database -> Boolean.TRUE.equals(database.getIsActive()))
                 .filter(database -> !currentEventDatabaseIds.contains(database.getId()))
                 .filter(database -> matchesAvailableDatabaseSearch(database, search))
@@ -1346,6 +1219,9 @@ public class EventController {
             return ResponseEntity.badRequest().body("Event name already exists");
         }
 
+        if (!isEventDestination(event.getSyncDestination())) {
+            return ResponseEntity.badRequest().body("Pilih tipe event Korporat atau Peserta saat membuat event.");
+        }
         event.setName(cleanName);
         return ResponseEntity.ok(eventRepository.save(event));
     }
@@ -1368,6 +1244,7 @@ public class EventController {
     }
 
     @PutMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> updateEvent(
             @PathVariable Long id, 
             @RequestBody Event eventDetails,
@@ -1385,11 +1262,15 @@ public class EventController {
         }
         String cleanName = eventDetails.getName().trim();
 
-        Event existing = eventRepository.findById(id).orElse(null);
+        Event existing = eventRepository.findForSyncById(id).orElse(null);
         if (existing == null) {
             return ResponseEntity.notFound().build();
         }
 
+        if (!canAccessEvent(currentUser, id)) return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        ResponseEntity<?> destinationError = eventDestinationChangeError(existing, eventDetails.getSyncDestination());
+        if (destinationError != null) return destinationError;
+        if (eventDetails.getSyncDestination() != null) existing.setSyncDestination(eventDetails.getSyncDestination());
         existing.setName(cleanName);
         existing.setEventType(eventDetails.getEventType());
         existing.setClientName(eventDetails.getClientName());
@@ -1406,23 +1287,54 @@ public class EventController {
         return ResponseEntity.ok(saved);
     }
 
-    @PostMapping("/{id}/sync-ems")
-    public ResponseEntity<?> syncEmsParticipants(
-            @PathVariable Long id,
+    @PatchMapping("/{id}/sync-destination")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> setSyncDestination(@PathVariable Long id, @RequestBody Map<String, String> request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
-        if (currentUser == null) {
-            return ResponseEntity.status(401).body("Unauthorized");
+        if (currentUser == null) return ResponseEntity.status(401).body("Unauthorized");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) return ResponseEntity.status(403).body("Forbidden");
+        Event event = eventRepository.findForSyncById(id).orElse(null);
+        if (event == null) return ResponseEntity.notFound().build();
+        if (!canAccessEvent(currentUser, id)) return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        String destination = request.get("destination");
+        if (!"company".equals(destination) && !"participant".equals(destination)) {
+            return ResponseEntity.badRequest().body("Pilih tujuan sync Database Perusahaan atau Database Peserta.");
         }
-        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
-            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can sync EMS participants");
-        }
+        DatabaseDestination selected = DatabaseDestination.fromValue(destination);
+        ResponseEntity<?> destinationError = eventDestinationChangeError(event, selected);
+        if (destinationError != null) return destinationError;
+        event.setSyncDestination(selected);
+        return ResponseEntity.ok(eventRepository.save(event));
+    }
+
+    @PostMapping("/{id}/sync-ems/preview")
+    public ResponseEntity<?> previewEmsParticipants(@PathVariable Long id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) return ResponseEntity.status(401).body("Unauthorized");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) return ResponseEntity.status(403).body("Forbidden");
         Event event = eventRepository.findById(id).orElse(null);
-        if (event == null) {
-            return ResponseEntity.notFound().build();
+        if (event == null) return ResponseEntity.notFound().build();
+        if (!canAccessEvent(currentUser, id)) return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        return ResponseEntity.ok(emsService.previewParticipantsForEvent(event));
+    }
+
+    @PostMapping("/{id}/sync-ems")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> syncEmsParticipants(@PathVariable Long id,
+            @RequestBody(required = false) Map<String, String> request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) return ResponseEntity.status(401).body("Unauthorized");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) return ResponseEntity.status(403).body("Forbidden");
+        Event event = eventRepository.findForSyncById(id).orElse(null);
+        if (event == null) return ResponseEntity.notFound().build();
+        if (!canAccessEvent(currentUser, id)) return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        if (request == null || request.get("previewToken") == null || request.get("previewToken").isBlank()) {
+            return ResponseEntity.badRequest().body("Preview ulang dan konfirmasi tujuan sebelum sync.");
         }
-        int count = emsService.syncParticipantsForEvent(event);
-        return ResponseEntity.ok(java.util.Map.of("message", "Synced EMS participants", "count", count));
+        return ResponseEntity.ok(emsService.syncParticipantsForEvent(event, request.get("previewToken")));
     }
 
     @DeleteMapping("/{id}")
@@ -2040,21 +1952,23 @@ public class EventController {
         return sanitized.isBlank() ? "export" : sanitized;
     }
 
-    private List<ImportValidationRowDraft> readEventImportDrafts(
+    private EventImportBatch readEventImportDrafts(
             MultipartFile file,
             List<EventParticipant> existingParticipants,
-            List<Database> allDatabases) throws Exception {
+            List<Database> allDatabases, String destination) throws Exception {
+        boolean participantImport = "participant".equals(destination);
+        int blankCount = 0;
         List<ImportValidationRowDraft> drafts = new ArrayList<>();
 
         try (InputStream is = file.getInputStream(); Workbook workbook = new XSSFWorkbook(is)) {
             Sheet sheet = workbook.getSheetAt(0);
             Row headerRow = sheet.getRow(0);
             if (headerRow == null) {
-                return drafts;
+                throw new IllegalArgumentException("Header row not found");
             }
 
             Map<String, Integer> headerMap = buildHeaderMap(headerRow);
-            boolean hasImportHeader = hasAnyHeader(headerMap, "first name", "company name", "company", "company email address");
+            boolean hasImportHeader = hasAnyHeader(headerMap, "first name", "firts name", "nama", "company name", "company", "company email address", "email peserta");
 
             for (int rowIndex = hasImportHeader ? 1 : 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
                 Row row = sheet.getRow(rowIndex);
@@ -2062,20 +1976,22 @@ public class EventController {
                     continue;
                 }
 
-                String firstName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 5, "first name", "firstname", "first_name", "nama depan", "name", "nama"));
+                String firstName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 5, "first name", "firts name", "firstname", "first_name", "nama depan", "name", "nama"));
                 String lastName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 6, "last name", "lastname", "last_name", "nama belakang"));
                 String groupName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 1, "nama group", "group name", "group", "nama group holding", "nama group/holding company", "group holding company", "group/holding company"));
                 String brandName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 2, "nama brand", "brand name", "brand"));
                 String companyName = cleanCompanyName(normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 3, "company name", "companyname", "company", "perusahaan")));
-                String mobilePhone = cleanImportPhone(getImportCell(row, headerMap, hasImportHeader, 12, "mobile phone", "phone", "no hp", "whatsapp"));
-                String companyEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 13, "company email address", "company email", "email"));
+                String rawMobilePhone = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 12, "mobile phone", "phone", "no hp", "whatsapp"));
+                String mobilePhone = cleanImportPhone(rawMobilePhone);
+                String companyEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 13, "company email address", "company email", "email", "email peserta"));
                 String personalEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 14, "personal email address", "personal email"));
                 String salutation = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 4, "salutation"));
                 String position = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 7, "position", "postition", "position level"));
                 String specialityDivision = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 8, "division", "speciality/division", "speciality"));
                 String jobTitle = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 9, "jobtitle", "job title", "jabatan"));
                 String address = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 10, "address", "company address", "alamat"));
-                String officePhone = cleanImportPhone(getImportCell(row, headerMap, hasImportHeader, 11, "office phone", "company phone", "telepon kantor"));
+                String rawOfficePhone = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 11, "office phone", "company phone", "telepon kantor"));
+                String officePhone = cleanImportPhone(rawOfficePhone);
                 String industry = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 15, "industry", "industri"));
                 String sizeRevenue = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 16, "company size (revenue)"));
                 String sizeEmployee = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 17, "company size (employee)"));
@@ -2084,19 +2000,56 @@ public class EventController {
                 String city = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 20, "city", "kota"));
                 String postalCode = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 21, "postal code"));
                 String website = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 22, "company website", "website"));
+                String category = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, -1, "kategori peserta")).toLowerCase(Locale.ROOT);
+                if (participantImport) {
+                    String institution = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, -1, "sekolah/kampus/instansi", "institution name", "instansi"));
+                    if (!institution.isBlank()) companyName = institution;
+                }
 
-                if (firstName.isBlank() && lastName.isBlank() && companyName.isBlank() && mobilePhone.isBlank() && companyEmail.isBlank() && personalEmail.isBlank()) {
+                if (firstName.isBlank() && lastName.isBlank() && companyName.isBlank() && rawMobilePhone.isBlank() && companyEmail.isBlank() && personalEmail.isBlank()) {
+                    blankCount++;
                     continue;
                 }
 
-                List<String> issues = getEventImportMissingMandatoryFields(
-                        groupName, brandName, companyName, salutation, firstName, lastName,
-                        position, jobTitle, address, officePhone, mobilePhone, companyEmail,
-                        industry, city, website
-                );
-
-                EventParticipant existingEventParticipant = findExistingEventParticipant(existingParticipants, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
-                Database existingDatabase = findExistingDatabase(allDatabases, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
+                List<String> suppliedEmails = eventImportEmails(companyEmail, personalEmail);
+                List<String> missingFields = participantImport
+                        ? new ArrayList<>(suppliedEmails.isEmpty() ? List.of("Email Peserta") : List.of())
+                        : getEventImportMissingMandatoryFields(groupName, brandName, companyName, salutation, firstName, lastName,
+                                position, jobTitle, address, officePhone, mobilePhone, companyEmail, industry, city, website);
+                List<String> warnings = mobilePhone.isBlank()
+                        ? List.of("Nomor HP/WhatsApp belum diisi; peserta belum bisa ditelepon.") : List.of();
+                List<String> issues = new ArrayList<>();
+                if (firstName.isBlank()) issues.add("First Name wajib diisi");
+                if (suppliedEmails.isEmpty() && rawMobilePhone.isBlank()) issues.add("Isi minimal satu kontak: email atau nomor HP/WhatsApp.");
+                if (!rawMobilePhone.isBlank() && !isUsableEventImportPhone(rawMobilePhone)) issues.add("Mobile Phone tidak valid; isi nomor yang benar atau kosongkan jika ada email.");
+                if (!rawOfficePhone.isBlank() && !isUsableEventImportPhone(rawOfficePhone)) issues.add("Office Phone tidak valid.");
+                if (!participantImport) for (String personalAddress : eventImportEmails(personalEmail)) {
+                    Database owner = findPersonalEmailOwner(allDatabases, personalAddress);
+                    if (owner != null && !sameName(owner, firstName, lastName)) issues.add("Personal Email sudah dipakai kontak lain: " + owner.getId());
+                }
+                if (suppliedEmails.stream().anyMatch(email -> !ContactEmailCategory.isValidEmail(email))) issues.add("Format email tidak valid");
+                if (!participantImport && eventImportEmails(companyEmail).stream().anyMatch(ContactEmailCategory::isPublicPersonalEmail)) {
+                    issues.add("Email pribadi masuk melalui Database Peserta; Company Email harus memakai domain perusahaan/institusi.");
+                }
+                if (participantImport && (!Set.of("", "pelajar", "mahasiswa", "umum").contains(category))) issues.add("Kategori Peserta tidak valid");
+                if (firstName.length() > 255 || lastName.length() > 255 || companyName.length() > 255) issues.add("Nama dan instansi maksimal 255 karakter");
+                Database existingDatabase = null;
+                try {
+                    existingDatabase = findEventImportDatabase(allDatabases, firstName, lastName, mobilePhone, companyEmail, personalEmail, participantImport);
+                    if (existingDatabase != null && Boolean.FALSE.equals(existingDatabase.getIsActive())) issues.add("Kontak nonaktif; tinjau profil sebelum import");
+                    if (!participantImport && existingDatabase != null && existingDatabase.getCompany() != null && !companyName.isBlank()
+                            && !normalizedEventImportName(cleanCompanyName(existingDatabase.getCompany().getName()), "")
+                                    .equals(normalizedEventImportName(companyName, ""))) {
+                        issues.add("Kontak sudah terdaftar di perusahaan lain; pindahkan perusahaan/cabang melalui Edit kontak sebelum import.");
+                    }
+                    if (!participantImport && existingDatabase != null && !DatabaseDestination.effective(existingDatabase.getDatabaseDestination()).includesCompany()) {
+                        issues.add("Kontak berada di Database Peserta. Tinjau dan tambahkan ke Database Perusahaan melalui Edit kontak terlebih dahulu.");
+                    }
+                } catch (IllegalArgumentException conflict) { issues.add(conflict.getMessage()); }
+                Database matched = existingDatabase;
+                EventParticipant existingEventParticipant = existingParticipants.stream()
+                        .filter(participant -> matched != null && participant.getDatabase() != null
+                                && Objects.equals(participant.getDatabase().getId(), matched.getId())).findFirst().orElse(null);
 
                 drafts.add(new ImportValidationRowDraft(
                         rowIndex + 1,
@@ -2125,13 +2078,120 @@ public class EventController {
                         existingDatabase != null ? existingDatabase.getId() : null,
                         existingEventParticipant != null ? existingEventParticipant.getId() : null,
                         issues,
-                        existingEventParticipant != null
+                        existingEventParticipant != null,
+                        category,
+                        missingFields,
+                        warnings
                 ));
             }
         }
 
-        return drafts;
+        return new EventImportBatch(drafts, blankCount);
     }
+
+    private boolean isEventDestination(DatabaseDestination destination) {
+        return destination == DatabaseDestination.COMPANY || destination == DatabaseDestination.PARTICIPANT;
+    }
+
+    private ResponseEntity<?> unclassifiedEvent() {
+        return ResponseEntity.status(409).body(Map.of("message", "Tipe event belum dipilih. Pilih Korporat atau Peserta melalui Edit Event terlebih dahulu."));
+    }
+
+    private ResponseEntity<?> eventImportDestinationError(Event event, String requested) {
+        if (!isEventDestination(event.getSyncDestination())) return unclassifiedEvent();
+        if (requested != null && !requested.equals(event.getSyncDestination().value())) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Tujuan import harus mengikuti tipe event; tujuan tidak dapat diganti saat import."));
+        }
+        return null;
+    }
+
+    private ResponseEntity<?> eventDestinationChangeError(Event event, DatabaseDestination selected) {
+        if (selected == null) return null; // An omitted edit field preserves an existing or legacy type.
+        if (!isEventDestination(selected)) return ResponseEntity.badRequest().body("Pilih tipe event Korporat atau Peserta.");
+        if (selected == event.getSyncDestination()) return null;
+        List<EventParticipant> participants = eventParticipantRepository.findByEventId(event.getId());
+        if (participants.isEmpty()) return null;
+        if (event.getSyncDestination() != null) {
+            return ResponseEntity.status(409).body("Tipe event sudah terkunci karena event memiliki peserta; buat event lain untuk tipe berbeda.");
+        }
+        if (participants.stream().anyMatch(row -> row.getDatabase() == null
+                || !DatabaseDestination.effective(row.getDatabase().getDatabaseDestination()).includes(selected))) {
+            return ResponseEntity.status(409).body("Peserta lama tidak sesuai tipe yang dipilih. Tinjau data peserta sebelum menentukan tipe event.");
+        }
+        return null;
+    }
+
+    private List<String> eventImportEmails(String... values) {
+        return ExcelImportController.splitEmailTokens(String.join(";", values));
+    }
+
+    private void registerImportDraftEmails(Map<String, List<EventImportEmailOwnerInfo>> owners,
+            ImportValidationRowDraft draft, String destination) {
+        registerEventImportEmails(owners, "Baris " + draft.rowNumber(), buildImportFullName(draft.firstName(), draft.lastName()),
+                "participant".equals(destination) ? "" : draft.companyEmail(),
+                "participant".equals(destination) ? String.join(";", draft.companyEmail(), draft.personalEmail()) : draft.personalEmail(), draft.rowNumber());
+    }
+
+    private Database findEventImportDatabase(List<Database> databases, String firstName, String lastName,
+            String phone, String companyEmail, String personalEmail, boolean participantImport) {
+        Set<String> addresses = new LinkedHashSet<>(eventImportEmails(companyEmail, personalEmail));
+        Set<String> individualAddresses = participantImport ? addresses : new LinkedHashSet<>(eventImportEmails(personalEmail));
+        String name = normalizedEventImportName(firstName, lastName);
+        String normalizedPhone = normalizeEventImportPhone(phone);
+        List<Database> owners = new ArrayList<>();
+        for (Database database : databases) {
+            boolean samePersonName = normalizedEventImportName(database.getFirstName(), database.getLastName()).equals(name);
+            boolean emailMatch = false;
+            if (database.getEmails() != null) for (DatabaseEmail email : database.getEmails()) {
+                String address = safe(email.getEmail()).trim().toLowerCase(Locale.ROOT);
+                if (!samePersonName && individualAddresses.contains(address)) {
+                    throw new IllegalArgumentException("Email sudah dipakai nama lain; tinjau profil lama sebelum import");
+                }
+                if (addresses.contains(address)) emailMatch = true;
+            }
+            boolean phoneMatch = !normalizedPhone.isBlank() && (normalizedPhone.equals(normalizeEventImportPhone(database.getMobilePhone()))
+                    || normalizedPhone.equals(normalizeEventImportPhone(database.getNormalizedPhone())));
+            if (samePersonName && (emailMatch || phoneMatch)) owners.add(database);
+        }
+        if (owners.size() > 1) throw new IllegalArgumentException("Identitas peserta cocok dengan beberapa profil; rapikan duplikat sebelum import");
+        return owners.isEmpty() ? null : owners.get(0);
+    }
+
+    private String normalizedEventImportName(String firstName, String lastName) {
+        return buildImportFullName(firstName, lastName).replaceAll("(?U)\\s+", " ").trim();
+    }
+
+    private boolean isUsableEventImportPhone(String value) {
+        String digits = safe(value).replaceAll("[^0-9]", "");
+        return safe(value).matches("\\+?[0-9() .\\-]+") && digits.length() >= 6 && digits.length() <= 15
+                && !normalizeEventImportPhone(value).isBlank();
+    }
+
+    private String normalizeEventImportPhone(String value) {
+        String original = safe(value).trim();
+        String digits = original.replaceAll("[^0-9]", "");
+        if (digits.isEmpty() || digits.matches("0+") || digits.equals("62")) return "";
+        if (original.startsWith("+")) return digits;
+        if (original.startsWith("00")) return digits.substring(2);
+        if (digits.startsWith("0")) return "62" + digits.substring(1);
+        if (digits.startsWith("8")) return "62" + digits;
+        return digits;
+    }
+
+    private void saveParticipantImportEmail(Database database, String address) {
+        List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(address);
+        if (owners.stream().anyMatch(email -> email.getDatabase() == null || !Objects.equals(email.getDatabase().getId(), database.getId()))) {
+            throw new IllegalStateException("Pemilik email berubah; preview ulang sebelum import peserta");
+        }
+        if (owners.stream().anyMatch(email -> Objects.equals(email.getDatabase().getId(), database.getId()))) return;
+        DatabaseEmail saved = databaseEmailRepository.save(DatabaseEmail.builder().database(database).email(address)
+                .emailType("personal").isCorporate(false).isVerified(true)
+                .isPrimary(database.getEmails() == null || database.getEmails().isEmpty()).build());
+        List<DatabaseEmail> addresses = database.getEmails() == null ? new ArrayList<>() : new ArrayList<>(database.getEmails());
+        addresses.add(saved); database.setEmails(addresses);
+    }
+
+    private record EventImportBatch(List<ImportValidationRowDraft> rows, int blankCount) {}
 
     private void saveImportEmail(Database database, String email, String emailType, boolean corporate) {
         String normalizedEmail = safe(email).trim().toLowerCase(Locale.ROOT);
@@ -2147,7 +2207,7 @@ public class EventController {
             return;
         }
 
-        databaseEmailRepository.save(DatabaseEmail.builder()
+        DatabaseEmail saved = databaseEmailRepository.save(DatabaseEmail.builder()
                 .database(database)
                 .email(normalizedEmail)
                 .emailType(emailType)
@@ -2155,6 +2215,8 @@ public class EventController {
                 .isVerified(true)
                 .isCorporate(corporate)
                 .build());
+        List<DatabaseEmail> addresses = database.getEmails() == null ? new ArrayList<>() : new ArrayList<>(database.getEmails());
+        addresses.add(saved); database.setEmails(addresses);
     }
 
     private Map<String, Integer> buildHeaderMap(Row headerRow) {
@@ -2188,7 +2250,7 @@ public class EventController {
         if (hasImportHeader) {
             return getCellByAliases(row, headerMap, aliases);
         }
-        return getCellValue(row.getCell(fallbackIndex));
+        return fallbackIndex < 0 ? "" : getCellValue(row.getCell(fallbackIndex));
     }
 
     private String getCellValue(Cell cell) {
@@ -2266,9 +2328,7 @@ public class EventController {
             String personalEmail,
             int excelRowNumber) {
         Set<String> emailsInRow = new LinkedHashSet<>();
-        if (!safe(personalEmail).isBlank()) {
-            emailsInRow.add(personalEmail.trim().toLowerCase(Locale.ROOT));
-        }
+        emailsInRow.addAll(eventImportEmails(personalEmail));
 
         for (String email : emailsInRow) {
             emailOwnersInFile
@@ -2323,68 +2383,6 @@ public class EventController {
         return name;
     }
 
-    private EventParticipant findExistingEventParticipant(
-            List<EventParticipant> participants,
-            String firstName,
-            String lastName,
-            String companyName,
-            String mobilePhone,
-            String companyEmail,
-            String personalEmail) {
-        return participants.stream()
-                .filter(participant -> matchesParticipantIdentity(participant, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private Database findExistingDatabase(
-            List<Database> databases,
-            String firstName,
-            String lastName,
-            String companyName,
-            String mobilePhone,
-            String companyEmail,
-            String personalEmail) {
-        return databases.stream()
-                .filter(database -> matchesDatabaseIdentity(database, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private boolean matchesParticipantIdentity(
-            EventParticipant participant,
-            String firstName,
-            String lastName,
-            String companyName,
-            String mobilePhone,
-            String companyEmail,
-            String personalEmail) {
-        return participant.getDatabase() != null
-                && matchesDatabaseIdentity(participant.getDatabase(), firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail);
-    }
-
-    private boolean matchesDatabaseIdentity(
-            Database database,
-            String firstName,
-            String lastName,
-            String companyName,
-            String mobilePhone,
-            String companyEmail,
-            String personalEmail) {
-        String dbFirstName = safe(database.getFirstName()).trim();
-        String dbLastName = safe(database.getLastName()).trim();
-        String dbCompanyName = database.getCompany() != null ? safe(database.getCompany().getName()).trim() : "";
-        boolean nameMatch = !firstName.isBlank() && dbFirstName.equalsIgnoreCase(firstName)
-                && (lastName.isBlank() || dbLastName.equalsIgnoreCase(lastName));
-        boolean companyMatch = companyName.isBlank() || dbCompanyName.equalsIgnoreCase(companyName);
-        boolean emailMatch = !personalEmail.isBlank() && database.getEmails() != null
-                && database.getEmails().stream().anyMatch(email ->
-                        "personal".equalsIgnoreCase(email.getEmailType())
-                                && safe(email.getEmail()).equalsIgnoreCase(personalEmail));
-
-        return nameMatch && (companyMatch || emailMatch);
-    }
-
     private Database findPersonalEmailOwner(List<Database> databases, String personalEmail) {
         if (personalEmail.isBlank()) return null;
         return databases.stream()
@@ -2430,7 +2428,10 @@ public class EventController {
             Long existingDatabaseId,
             Long existingParticipantId,
             List<String> issues,
-            boolean existingEventParticipant) {
+            boolean existingEventParticipant,
+            String participantCategory,
+            List<String> missingFields,
+            List<String> warnings) {
     }
 
     private record EventImportEmailOwnerInfo(

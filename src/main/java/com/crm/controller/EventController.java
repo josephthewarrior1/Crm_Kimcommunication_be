@@ -36,6 +36,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.util.HashSet;
+import java.util.Arrays;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -619,6 +620,8 @@ public class EventController {
                     ? databaseRepository.findById(draft.existingDatabaseId()).orElseThrow(() -> new IllegalStateException("Kontak berubah; preview ulang sebelum import"))
                     : findEventImportDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail());
             boolean isNewContact = database == null;
+            String mobilePhone = draft.mobilePhone().isBlank() ? ""
+                    : mergeEventImportPhones(database != null ? database.getMobilePhone() : "", draft.mobilePhone());
 
             Group group = null;
             if (!draft.groupName().isBlank()) {
@@ -663,8 +666,8 @@ public class EventController {
             if (!draft.position().isBlank()) database.setPositionLevel(positionLevel);
             if (!draft.specialityDivision().isBlank()) database.setSpecialityDivision(draft.specialityDivision());
             if (!draft.jobTitle().isBlank()) database.setJobTitle(draft.jobTitle());
-            if (!draft.mobilePhone().isBlank()) {
-                database.setMobilePhone(draft.mobilePhone()); database.setNormalizedPhone(normalizeEventImportPhone(draft.mobilePhone()));
+            if (!mobilePhone.isBlank()) {
+                database.setMobilePhone(mobilePhone); database.setNormalizedPhone(normalizeEventImportPhone(mobilePhone));
             }
             if (!draft.linkedinUrl().isBlank()) database.setLinkedinUrl(draft.linkedinUrl());
             if (company != null) database.setCompany(company);
@@ -1952,16 +1955,19 @@ public class EventController {
 
                 List<String> issues = new ArrayList<>();
                 List<String> emails = eventImportEmails(companyEmail, personalEmail);
-                if (firstName.isBlank()) issues.add("First Name wajib diisi");
                 if (emails.isEmpty() && rawMobilePhone.isBlank()) issues.add("Isi minimal satu kontak: email atau nomor HP/WhatsApp.");
                 if (emails.stream().anyMatch(email -> !EVENT_IMPORT_EMAIL.matcher(email).matches())) issues.add("Format email tidak valid");
                 if (!rawMobilePhone.isBlank() && !isUsableEventImportPhone(rawMobilePhone)) issues.add("Mobile Phone tidak valid; isi nomor yang benar atau kosongkan jika ada email.");
                 if (!rawOfficePhone.isBlank() && !isUsableEventImportPhone(rawOfficePhone)) issues.add("Office Phone tidak valid.");
+                if (officePhone.length() > 50) issues.add("Office Phone maksimal 50 karakter setelah format nomor dirapikan.");
                 if (firstName.length() > 255 || lastName.length() > 255 || companyName.length() > 255) issues.add("Nama dan perusahaan maksimal 255 karakter");
                 List<String> warnings = mobilePhone.isBlank() ? List.of("Nomor HP/WhatsApp belum diisi; peserta belum bisa ditelepon.") : List.of();
                 Database existingDatabase = null;
                 try {
                     existingDatabase = findEventImportDatabase(allDatabases, firstName, lastName, mobilePhone, companyEmail, personalEmail);
+                    if (!rawMobilePhone.isBlank() && isUsableEventImportPhone(rawMobilePhone)) {
+                        mobilePhone = mergeEventImportPhones(existingDatabase != null ? existingDatabase.getMobilePhone() : "", rawMobilePhone);
+                    }
                     if (existingDatabase != null && Boolean.FALSE.equals(existingDatabase.getIsActive())) issues.add("Kontak nonaktif; tinjau profil sebelum import");
                     if (existingDatabase != null && existingDatabase.getCompany() != null && !companyName.isBlank()
                             && !normalizedEventImportName(cleanCompanyName(existingDatabase.getCompany().getName()), "")
@@ -2007,6 +2013,24 @@ public class EventController {
             }
         }
 
+        // ponytail: compare unnamed rows within this file directly; index contact keys if imports become large.
+        for (ImportValidationRowDraft draft : drafts) {
+            if (!normalizedEventImportName(draft.firstName(), draft.lastName()).isBlank()) continue;
+            Set<String> candidateNames = new HashSet<>();
+            allDatabases.stream().filter(database -> Objects.equals(database.getId(), draft.existingDatabaseId()))
+                    .map(database -> normalizedEventImportName(database.getFirstName(), database.getLastName()))
+                    .filter(name -> !name.isBlank()).forEach(candidateNames::add);
+            Set<String> addresses = new HashSet<>(eventImportEmails(draft.companyEmail(), draft.personalEmail()));
+            Set<String> phones = normalizedEventImportPhones(draft.mobilePhone());
+            for (ImportValidationRowDraft candidate : drafts) {
+                String name = normalizedEventImportName(candidate.firstName(), candidate.lastName());
+                if (name.isBlank()) continue;
+                boolean emailMatch = eventImportEmails(candidate.companyEmail(), candidate.personalEmail()).stream().anyMatch(addresses::contains);
+                boolean phoneMatch = normalizedEventImportPhones(candidate.mobilePhone()).stream().anyMatch(phones::contains);
+                if (emailMatch || phoneMatch) candidateNames.add(name);
+            }
+            if (candidateNames.size() > 1) draft.issues().add("Identitas peserta cocok dengan beberapa profil di file ini; rapikan duplikat sebelum import.");
+        }
         return new EventImportBatch(drafts, blankCount);
     }
 
@@ -2021,23 +2045,32 @@ public class EventController {
         Set<String> addresses = new LinkedHashSet<>(eventImportEmails(companyEmail, personalEmail));
         Set<String> individualAddresses = new LinkedHashSet<>(eventImportEmails(personalEmail));
         String name = normalizedEventImportName(firstName, lastName);
-        String normalizedPhone = normalizeEventImportPhone(phone);
+        Set<String> normalizedPhones = normalizedEventImportPhones(phone);
         List<Database> owners = new ArrayList<>();
+        List<Database> contactOwners = new ArrayList<>();
         for (Database database : databases) {
-            boolean samePersonName = normalizedEventImportName(database.getFirstName(), database.getLastName()).equals(name);
+            String existingName = normalizedEventImportName(database.getFirstName(), database.getLastName());
+            boolean samePersonName = existingName.equals(name);
             boolean emailMatch = false;
             if (database.getEmails() != null) for (DatabaseEmail email : database.getEmails()) {
                 String address = safe(email.getEmail()).trim().toLowerCase(Locale.ROOT);
-                if (!samePersonName && individualAddresses.contains(address)) {
+                if (!name.isBlank() && !existingName.isBlank() && !samePersonName && individualAddresses.contains(address)) {
                     throw new IllegalArgumentException("Email sudah dipakai nama lain; tinjau profil lama sebelum import");
                 }
                 if (addresses.contains(address)) emailMatch = true;
             }
-            boolean phoneMatch = !normalizedPhone.isBlank() && (normalizedPhone.equals(normalizeEventImportPhone(database.getMobilePhone()))
-                    || normalizedPhone.equals(normalizeEventImportPhone(database.getNormalizedPhone())));
-            if (samePersonName && (emailMatch || phoneMatch)) owners.add(database);
+            Set<String> existingPhones = normalizedEventImportPhones(database.getMobilePhone());
+            existingPhones.addAll(normalizedEventImportPhones(database.getNormalizedPhone()));
+            boolean phoneMatch = normalizedPhones.stream().anyMatch(existingPhones::contains);
+            if (emailMatch || phoneMatch) {
+                contactOwners.add(database);
+                if (name.isBlank() || existingName.isBlank() || samePersonName) owners.add(database);
+            }
         }
-        if (owners.size() > 1) throw new IllegalArgumentException("Identitas peserta cocok dengan beberapa profil; rapikan duplikat sebelum import");
+        if (owners.size() > 1 || owners.size() == 1 && contactOwners.size() > 1
+                && normalizedEventImportName(owners.get(0).getFirstName(), owners.get(0).getLastName()).isBlank()) {
+            throw new IllegalArgumentException("Identitas peserta cocok dengan beberapa profil; rapikan duplikat sebelum import");
+        }
         return owners.isEmpty() ? null : owners.get(0);
     }
 
@@ -2045,14 +2078,42 @@ public class EventController {
         return buildImportFullName(firstName, lastName).replaceAll("(?U)\\s+", " ").trim();
     }
 
+    private List<String> eventImportPhoneTokens(String value) {
+        return safe(value).isBlank() ? List.of()
+                : Arrays.stream(value.trim().split("[,;/|\\r\\n]+", -1)).map(String::trim).toList();
+    }
+
     private boolean isUsableEventImportPhone(String value) {
-        String digits = safe(value).replaceAll("[^0-9]", "");
-        return safe(value).matches("\\+?[0-9() .\\-]+") && digits.length() >= 6 && digits.length() <= 15
-                && !normalizeEventImportPhone(value).isBlank();
+        List<String> phones = eventImportPhoneTokens(value);
+        return !phones.isEmpty() && phones.stream().allMatch(phone -> {
+            String digits = phone.replaceAll("[^0-9]", "");
+            return phone.matches("\\+?[0-9() .\\-]+") && digits.length() >= 6 && digits.length() <= 15
+                    && !normalizeEventImportPhone(phone).isBlank();
+        });
+    }
+
+    private Set<String> normalizedEventImportPhones(String value) {
+        return !isUsableEventImportPhone(value) ? new LinkedHashSet<>()
+                : eventImportPhoneTokens(value).stream().map(this::normalizeEventImportPhone)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private String mergeEventImportPhones(String existing, String incoming) {
+        if (!safe(existing).isBlank() && !isUsableEventImportPhone(existing)) {
+            throw new IllegalArgumentException("Nomor HP tersimpan tidak valid; rapikan profil melalui Edit kontak sebelum import.");
+        }
+        if (!isUsableEventImportPhone(incoming)) throw new IllegalArgumentException("Mobile Phone tidak valid.");
+        Map<String, String> phones = new LinkedHashMap<>();
+        for (String value : List.of(safe(existing), incoming)) for (String phone : eventImportPhoneTokens(value)) {
+            phones.putIfAbsent(normalizeEventImportPhone(phone), phone.replaceAll("[^0-9+]", ""));
+        }
+        String merged = String.join(", ", phones.values());
+        if (merged.length() > 50) throw new IllegalArgumentException("Mobile Phone maksimal 50 karakter setelah nomor digabungkan.");
+        return merged;
     }
 
     private String normalizeEventImportPhone(String value) {
-        String original = safe(value).trim();
+        String original = eventImportPhoneTokens(value).stream().findFirst().orElse("");
         String digits = original.replaceAll("[^0-9]", "");
         if (digits.isEmpty() || digits.matches("0+") || digits.equals("62")) return "";
         if (original.startsWith("+")) return digits;
@@ -2157,7 +2218,8 @@ public class EventController {
     }
 
     private String cleanImportPhone(String value) {
-        return safe(value).replaceAll("[^0-9+]", "").trim();
+        return eventImportPhoneTokens(value).stream().map(phone -> phone.replaceAll("[^0-9+]", ""))
+                .collect(Collectors.joining(", "));
     }
 
     private String buildImportFullName(String firstName, String lastName) {

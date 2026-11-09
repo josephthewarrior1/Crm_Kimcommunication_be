@@ -22,7 +22,7 @@ public class SuspiciousIdentityService {
     private DatabaseEmailRepository databaseEmailRepository;
 
     public void checkAndFlagDatabase(Database database) {
-        if (database == null || database.getId() == null) {
+        if (database == null || database.getId() == null || database.getDatabaseDestination() == DatabaseDestination.BOTH) {
             return;
         }
 
@@ -40,6 +40,7 @@ public class SuspiciousIdentityService {
                 List<Database> matchedDatabases = databaseRepository.findByNormalizedPhone(normalized);
 
                 for (Database other : matchedDatabases) {
+                    if (!DatabaseDestination.isExact(other.getDatabaseDestination(), DatabaseDestination.effective(database.getDatabaseDestination()))) continue;
                     if (other.getId().equals(database.getId())) {
                         continue;
                     }
@@ -98,6 +99,7 @@ public class SuspiciousIdentityService {
                 if (!emailStr.isEmpty() && "personal".equalsIgnoreCase(ce.getEmailType())) {
                     databaseEmailRepository.findAllByEmailIgnoreCase(emailStr).stream()
                             .filter(otherEmail -> otherEmail.getDatabase() != null
+                                    && DatabaseDestination.isExact(otherEmail.getDatabase().getDatabaseDestination(), DatabaseDestination.effective(database.getDatabaseDestination()))
                                     && !otherEmail.getDatabase().getId().equals(database.getId()))
                             .findFirst()
                             .ifPresent(otherEmail -> {
@@ -154,6 +156,9 @@ public class SuspiciousIdentityService {
         String dbPhoneDigits = extractSubscriberDigits(database.getMobilePhone());
 
         for (FlaggedIdentity flag : allFlags) {
+            DatabaseDestination flagKind = flag.getDatabase() != null ? flag.getDatabase().getDatabaseDestination()
+                    : flag.getEvent() != null ? flag.getEvent().getSyncDestination() : DatabaseDestination.COMPANY;
+            if (!DatabaseDestination.isExact(flagKind, DatabaseDestination.effective(database.getDatabaseDestination()))) continue;
             if (flag.getStatus() == FlagStatus.cleared) {
                 continue;
             }

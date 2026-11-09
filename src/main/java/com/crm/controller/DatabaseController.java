@@ -332,6 +332,11 @@ public class DatabaseController {
             return ResponseEntity.badRequest().body("Use the update endpoint for an existing database record");
         }
         if (branchId != null && clearBranch) return ResponseEntity.badRequest().body("Choose branchId or clearBranch, not both");
+        DatabaseDestination selected = DatabaseDestination.effective(database.getDatabaseDestination());
+        if (selected == DatabaseDestination.BOTH) return ResponseEntity.badRequest().body("Pilih satu database: Perusahaan atau Peserta.");
+        if (selected == DatabaseDestination.PARTICIPANT && (companyId != null || branchId != null || database.getCompany() != null || database.getBranch() != null)) {
+            return ResponseEntity.badRequest().body("Profil Peserta memakai instansi sendiri; perusahaan/cabang master tidak boleh ditautkan.");
+        }
         Long resolvedCompanyId = companyId != null ? companyId : database.getCompany() != null ? database.getCompany().getId() : null;
         Company company = resolvedCompanyId == null ? null : companyRepository.findById(resolvedCompanyId).orElse(null);
         if (resolvedCompanyId != null && company == null) return ResponseEntity.badRequest().body("Company not found");
@@ -381,6 +386,7 @@ public class DatabaseController {
             }
             for (DatabaseEmail existing : databaseEmailRepository.findAllByEmailIgnoreCase(address)) {
                 Database owner = existing.getDatabase();
+                if (owner != null && !DatabaseDestination.isExact(owner.getDatabaseDestination(), DatabaseDestination.PARTICIPANT)) continue;
                 if (owner == null || owner.getId() == null) {
                     return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; periksa kontak lama");
                 }
@@ -390,6 +396,7 @@ public class DatabaseController {
         if (!isBlank(incoming.getMobilePhone())) {
             Set<String> numbers = ContactPhone.normalizedNumbers(incoming.getMobilePhone());
             for (Database candidate : databaseRepository.findAll()) {
+                if (!DatabaseDestination.isExact(candidate.getDatabaseDestination(), DatabaseDestination.PARTICIPANT)) continue;
                 Set<String> retainedNumbers = ContactPhone.normalizedNumbers(candidate.getMobilePhone());
                 retainedNumbers.addAll(ContactPhone.normalizedNumbers(candidate.getNormalizedPhone()));
                 if (numbers.stream().anyMatch(retainedNumbers::contains)) owners.putIfAbsent(candidate.getId(), candidate);
@@ -438,7 +445,7 @@ public class DatabaseController {
         if (!isBlank(incoming.getLastName())) target.setLastName(incoming.getLastName());
         if (!mergedPhone.isBlank()) { target.setMobilePhone(mergedPhone); target.setNormalizedPhone(ContactPhone.primary(mergedPhone)); }
         target.setEmails(retained);
-        target.setDatabaseDestination(DatabaseDestination.effective(target.getDatabaseDestination()).add(DatabaseDestination.PARTICIPANT));
+        target.setDatabaseDestination(DatabaseDestination.PARTICIPANT);
         if (!reuse) {
             target.setCreatedByUserId(currentUser.getId());
             target.setEntryMethod("manual");
@@ -487,6 +494,14 @@ public class DatabaseController {
         }
 
         return databaseRepository.findById(id).map(existing -> {
+            DatabaseDestination kind = DatabaseDestination.effective(existing.getDatabaseDestination());
+            if (kind == DatabaseDestination.BOTH) return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+            if (databaseDetails.getDatabaseDestination() != null && !DatabaseDestination.isExact(databaseDetails.getDatabaseDestination(), kind)) {
+                return ResponseEntity.status(409).body("Jenis database tidak dapat diganti; buat profil terpisah di database tujuan.");
+            }
+            if (kind == DatabaseDestination.PARTICIPANT && (companyId != null || branchId != null || databaseDetails.getCompany() != null || databaseDetails.getBranch() != null)) {
+                return ResponseEntity.badRequest().body("Profil Peserta tidak boleh ditautkan ke perusahaan/cabang master.");
+            }
             if (branchId != null && clearBranch) return ResponseEntity.badRequest().body("Choose branchId or clearBranch, not both");
             Long requestedCompanyId = companyId != null ? companyId : databaseDetails.getCompany() != null ? databaseDetails.getCompany().getId() : null;
             Company company = requestedCompanyId == null ? existing.getCompany() : companyRepository.findById(requestedCompanyId).orElse(null);
@@ -499,7 +514,7 @@ public class DatabaseController {
             if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
             // Validate the complete assignment before touching this managed contact.
             existing.setCompany(company);
-            if (databaseDetails.getDatabaseDestination() != null) existing.setDatabaseDestination(databaseDetails.getDatabaseDestination());
+
             if (databaseDetails.getInstitutionName() != null) existing.setInstitutionName(databaseDetails.getInstitutionName().trim());
             if (databaseDetails.getParticipantCategory() != null) existing.setParticipantCategory(databaseDetails.getParticipantCategory().trim());
             if (clearBranch || branchId != null) existing.setBranch(branch);
@@ -568,15 +583,17 @@ public class DatabaseController {
 
         String cleanEmail = databaseEmail.getEmail().trim().toLowerCase();
         boolean personalEmail = "personal".equalsIgnoreCase(databaseEmail.getEmailType());
-        List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail);
-        boolean duplicate = personalEmail
-                ? !existingEmails.isEmpty()
-                : existingEmails.stream().anyMatch(email -> email.getDatabase() != null && email.getDatabase().getId().equals(databaseId));
-        if (duplicate) {
-            return ResponseEntity.badRequest().body("Email address is already in use");
-        }
-
+        if (databaseEmail.getId() != null) return ResponseEntity.badRequest().body("Email baru tidak boleh memuat ID email tersimpan.");
+        if (!ContactEmailCategory.isValidEmail(cleanEmail)) return ResponseEntity.badRequest().body("Format email tidak valid.");
         return databaseRepository.findById(databaseId).map(database -> {
+            DatabaseDestination kind = DatabaseDestination.effective(database.getDatabaseDestination());
+            if (kind == DatabaseDestination.BOTH) return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+            List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail);
+            if (owners.stream().anyMatch(email -> email.getDatabase() == null)) return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; tinjau data lama.");
+            boolean duplicate = owners.stream()
+                    .filter(email -> DatabaseDestination.isExact(email.getDatabase().getDatabaseDestination(), kind))
+                    .anyMatch(email -> personalEmail || kind == DatabaseDestination.PARTICIPANT || email.getDatabase().getId().equals(databaseId));
+            if (duplicate) return ResponseEntity.badRequest().body("Email address is already in use in this database.");
             if (!ContactEmailCategory.isValidEmail(cleanEmail)) {
                 return ResponseEntity.badRequest().body("Format email tidak valid");
             }
@@ -658,9 +675,15 @@ public class DatabaseController {
                 return ResponseEntity.badRequest().body("Email pribadi masuk melalui Database Peserta; email perusahaan wajib memakai domain institusi/perusahaan.");
             }
             boolean personalEmail = "personal".equalsIgnoreCase(targetType);
-            boolean duplicate = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail).stream()
+            DatabaseDestination kind = DatabaseDestination.effective(email.getDatabase().getDatabaseDestination());
+            if (kind == DatabaseDestination.BOTH) return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+            if (!ContactEmailCategory.isValidEmail(cleanEmail)) return ResponseEntity.badRequest().body("Format email tidak valid.");
+            List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(cleanEmail);
+            if (owners.stream().anyMatch(existing -> existing.getDatabase() == null)) return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; tinjau data lama.");
+            boolean duplicate = owners.stream()
+                    .filter(existing -> DatabaseDestination.isExact(existing.getDatabase().getDatabaseDestination(), kind))
                     .filter(existing -> !existing.getId().equals(emailId))
-                    .anyMatch(existing -> personalEmail || (existing.getDatabase() != null && existing.getDatabase().getId().equals(databaseId)));
+                    .anyMatch(existing -> personalEmail || kind == DatabaseDestination.PARTICIPANT || existing.getDatabase().getId().equals(databaseId));
             if (duplicate) {
                 return ResponseEntity.badRequest().body("Email address is already in use");
             }
@@ -699,11 +722,11 @@ public class DatabaseController {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can delete emails");
         }
 
-        if (databaseEmailRepository.existsById(emailId)) {
-            databaseEmailRepository.deleteById(emailId);
-            return ResponseEntity.noContent().build();
-        }
-        return ResponseEntity.notFound().build();
+        DatabaseEmail email = databaseEmailRepository.findById(emailId).orElse(null);
+        if (email == null || email.getDatabase() == null || !databaseId.equals(email.getDatabase().getId())) return ResponseEntity.notFound().build();
+        if (email.getDatabase().getDatabaseDestination() == DatabaseDestination.BOTH) return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+        databaseEmailRepository.deleteById(emailId);
+        return ResponseEntity.noContent().build();
     }
 
     private String participantMetadataError(Database database) {
@@ -723,7 +746,7 @@ public class DatabaseController {
         return switch (selected) {
             case "participant" -> assigned.includesParticipant();
             case "company" -> assigned.includesCompany();
-            default -> true;
+            default -> assigned != DatabaseDestination.BOTH;
         };
     }
 

@@ -100,13 +100,14 @@ public class EventParticipantController {
         for (Long databaseId : new java.util.LinkedHashSet<>(databasesToProcess)) {
             Database database = databaseRepository.findById(databaseId).orElse(null);
             if (database == null) continue;
+            if (!DatabaseDestination.isExact(database.getDatabaseDestination(), event.getSyncDestination())) {
+                return ResponseEntity.status(409).body("Jenis data kontak harus sama dengan jenis data event. Pilih profil dari database tujuan event.");
+            }
             if (Boolean.FALSE.equals(database.getIsActive())) return ResponseEntity.badRequest().body("Kontak nonaktif; tinjau profil sebelum menambahkan ke event.");
             selectedDatabases.add(database);
         }
         java.util.List<EventParticipant> savedParticipants = new java.util.ArrayList<>();
         for (Database database : selectedDatabases) {
-            database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(event.getSyncDestination()));
-            databaseRepository.save(database);
             if (eventParticipantRepository.findByEventIdAndDatabaseId(request.getEventId(), database.getId()).isPresent()) {
                 continue;
             }

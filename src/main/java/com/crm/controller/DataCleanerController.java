@@ -27,7 +27,8 @@ public class DataCleanerController {
     private SecurityHelper securityHelper;
 
     @GetMapping("/preview")
-    public ResponseEntity<?> preview(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<?> preview(@RequestParam(defaultValue = "company") String destination,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
@@ -35,7 +36,7 @@ public class DataCleanerController {
         if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN can run data cleaner");
         }
-        return ResponseEntity.ok(dataCleanerService.preview());
+        return ResponseEntity.ok(dataCleanerService.preview(destination));
     }
 
     @GetMapping("/group-audit")
@@ -53,7 +54,9 @@ public class DataCleanerController {
     }
 
     @PostMapping("/apply")
-    public ResponseEntity<?> apply(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<?> apply(@RequestParam(defaultValue = "company") String destination,
+            @RequestParam String previewToken,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
             return ResponseEntity.status(401).body("Unauthorized");
@@ -61,7 +64,7 @@ public class DataCleanerController {
         if (!securityHelper.hasRole(currentUser, Role.ADMIN)) {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN can run data cleaner");
         }
-        return ResponseEntity.ok(dataCleanerService.apply());
+        return ResponseEntity.ok(dataCleanerService.apply(destination, previewToken));
     }
 
     @PostMapping("/merge-groups")

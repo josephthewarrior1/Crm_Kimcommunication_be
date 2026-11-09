@@ -14,7 +14,9 @@ import com.crm.util.ContactEmailCategory;
 import com.crm.domain.DatabaseSource;
 import com.crm.domain.DatabaseType;
 import com.crm.domain.EventParticipant;
+import com.crm.domain.FlaggedIdentity;
 import com.crm.domain.Group;
+import com.crm.domain.RemovalRequest;
 import com.crm.domain.ParticipantStatus;
 import com.crm.domain.PositionLevel;
 import com.crm.repository.CompanyRepository;
@@ -22,7 +24,9 @@ import com.crm.repository.DatabaseEmailRepository;
 import com.crm.repository.DatabaseRepository;
 import com.crm.repository.EventRepository;
 import com.crm.repository.EventParticipantRepository;
+import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.repository.GroupRepository;
+import com.crm.repository.RemovalRequestRepository;
 import com.crm.repository.UserRepository;
 import com.crm.service.AuditLogService;
 import com.crm.service.SecurityHelper;
@@ -77,6 +81,12 @@ public class EventController {
 
     @Autowired
     private EventParticipantRepository eventParticipantRepository;
+
+    @Autowired
+    private FlaggedIdentityRepository flaggedIdentityRepository;
+
+    @Autowired
+    private RemovalRequestRepository removalRequestRepository;
 
     @Autowired
     private UserRepository userRepository;
@@ -620,6 +630,9 @@ public class EventController {
             Database database = draft.existingDatabaseId() != null
                     ? databaseRepository.findById(draft.existingDatabaseId()).orElseThrow(() -> new IllegalStateException("Kontak berubah; preview ulang sebelum import"))
                     : findEventImportDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail(), participantImport);
+            if (database != null && !DatabaseDestination.isExact(database.getDatabaseDestination(), event.getSyncDestination())) {
+                throw new IllegalStateException("Jenis data kontak berubah; preview ulang sebelum import.");
+            }
             boolean isNewContact = database == null;
             String mobilePhone = draft.mobilePhone().isBlank() ? ""
                     : mergeEventImportPhones(database != null ? database.getMobilePhone() : "", draft.mobilePhone());
@@ -629,9 +642,8 @@ public class EventController {
                     database = Database.builder().firstName(draft.firstName()).lastName(draft.lastName())
                             .databaseDestination(DatabaseDestination.PARTICIPANT).source(DatabaseSource.excel_import)
                             .createdByUserId(currentUser.getId()).entryMethod("excel_import").isActive(true).build();
-                } else {
-                    database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(DatabaseDestination.PARTICIPANT));
                 }
+                database.setCompany(null); database.setBranch(null);
                 if (!draft.firstName().isBlank()) database.setFirstName(draft.firstName());
                 if (!draft.lastName().isBlank()) database.setLastName(draft.lastName());
                 if (!draft.companyName().isBlank()) database.setInstitutionName(draft.companyName());
@@ -642,7 +654,6 @@ public class EventController {
                 database = databaseRepository.save(database);
                 for (String email : eventImportEmails(draft.companyEmail(), draft.personalEmail())) saveParticipantImportEmail(database, email);
             } else {
-                if (database != null) database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(DatabaseDestination.COMPANY));
             Group group = null;
             if (!draft.groupName().isBlank()) {
                 group = groupRepository.findByNameIgnoreCase(draft.groupName())
@@ -1045,7 +1056,7 @@ public class EventController {
         Set<Long> visibleEventIds = visibleEvents.stream().map(Event::getId).collect(Collectors.toSet());
 
         List<Database> availableDatabases = databaseRepository.findAll().stream()
-                .filter(database -> DatabaseDestination.effective(database.getDatabaseDestination()).includes(event.getSyncDestination()))
+                .filter(database -> DatabaseDestination.isExact(database.getDatabaseDestination(), event.getSyncDestination()))
                 .filter(database -> Boolean.TRUE.equals(database.getIsActive()))
                 .filter(database -> !currentEventDatabaseIds.contains(database.getId()))
                 .filter(database -> matchesAvailableDatabaseSearch(database, search))
@@ -1281,7 +1292,7 @@ public class EventController {
         if (pmsError != null) return pmsError;
         if (eventDetails.getPmsEventId() != null) existing.setPmsEventId(eventDetails.getPmsEventId());
         if (eventDetails.getSyncDestination() != null) {
-            addLegacyEventMembership(existing, eventDetails.getSyncDestination());
+            classifyLegacyEventProfiles(existing, eventDetails.getSyncDestination());
             existing.setSyncDestination(eventDetails.getSyncDestination());
         }
         existing.setName(cleanName);
@@ -1317,7 +1328,7 @@ public class EventController {
         DatabaseDestination selected = DatabaseDestination.fromValue(destination);
         ResponseEntity<?> destinationError = eventDestinationChangeError(event, selected);
         if (destinationError != null) return destinationError;
-        addLegacyEventMembership(event, selected);
+        classifyLegacyEventProfiles(event, selected);
         event.setSyncDestination(selected);
         return ResponseEntity.ok(eventRepository.save(event));
     }
@@ -2128,6 +2139,7 @@ public class EventController {
         List<Database> owners = new ArrayList<>();
         List<Database> contactOwners = new ArrayList<>();
         for (Database database : databases) {
+            if (!DatabaseDestination.isExact(database.getDatabaseDestination(), participantImport ? DatabaseDestination.PARTICIPANT : DatabaseDestination.COMPANY)) continue;
             String existingName = normalizedEventImportName(database.getFirstName(), database.getLastName());
             boolean samePersonName = existingName.equals(name);
             boolean emailMatch = false;
@@ -2177,12 +2189,115 @@ public class EventController {
         return ContactPhone.primary(value);
     }
 
-    private void addLegacyEventMembership(Event event, DatabaseDestination selected) {
+    private void classifyLegacyEventProfiles(Event event, DatabaseDestination selected) {
         if (event.getSyncDestination() != null) return;
-        for (EventParticipant link : eventParticipantRepository.findByEventId(event.getId())) {
+        List<EventParticipant> links = eventParticipantRepository.findByEventId(event.getId());
+        if (links.isEmpty()) return;
+        List<Database> profiles = databaseRepository.findAll();
+        Map<Long, Database> targets = new LinkedHashMap<>();
+        Set<Long> targetIds = new HashSet<>();
+        List<Database> pendingCopies = new ArrayList<>();
+        for (EventParticipant link : links) {
             Database contact = link.getDatabase();
-            contact.setDatabaseDestination(DatabaseDestination.effective(contact.getDatabaseDestination()).add(selected));
-            databaseRepository.save(contact);
+            Database target = DatabaseDestination.isExact(contact.getDatabaseDestination(), selected)
+                    ? contact : findLegacyEventProfile(profiles, contact, selected);
+            if (target != null && !targetIds.add(target.getId())
+                    || target == null && pendingCopies.stream().anyMatch(pending -> legacyContactKeysOverlap(pending, contact))) {
+                throw legacyClassificationConflict("Beberapa peserta lama cocok dengan profil yang sama. Rapikan duplikat event sebelum menentukan jenis data.");
+            }
+            if (target == null) pendingCopies.add(contact);
+            targets.put(contact.getId(), target);
+        }
+        for (EventParticipant link : links) {
+            Database contact = link.getDatabase();
+            if (DatabaseDestination.isExact(contact.getDatabaseDestination(), selected)) continue;
+            Database copy = targets.get(contact.getId());
+            if (copy == null) copy = copyLegacyEventProfile(contact, selected);
+            copyLegacyRestrictions(contact, copy);
+            // Keep the event-participant ID, notes, status and activity references unchanged.
+            link.setDatabase(copy);
+            eventParticipantRepository.save(link);
+        }
+    }
+
+    private Database findLegacyEventProfile(List<Database> profiles, Database original, DatabaseDestination selected) {
+        List<Database> matches = profiles.stream()
+                .filter(profile -> DatabaseDestination.isExact(profile.getDatabaseDestination(), selected))
+                .filter(profile -> legacyContactKeysOverlap(original, profile)).toList();
+        String originalName = normalizedEventImportName(original.getFirstName(), original.getLastName());
+        if (matches.size() > 1 || matches.stream().anyMatch(profile -> {
+            String name = normalizedEventImportName(profile.getFirstName(), profile.getLastName());
+            return !originalName.isBlank() && !name.isBlank() && !originalName.equals(name);
+        })) {
+            throw legacyClassificationConflict("Identitas peserta lama cocok dengan profil tujuan yang ambigu atau berbeda nama. Tinjau profil sebelum menentukan jenis data event.");
+        }
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private boolean legacyContactKeysOverlap(Database first, Database second) {
+        Set<String> addresses = (first.getEmails() == null ? List.<DatabaseEmail>of() : first.getEmails()).stream()
+                .map(email -> safe(email.getEmail()).trim().toLowerCase(Locale.ROOT)).filter(email -> !email.isBlank()).collect(Collectors.toSet());
+        if ((second.getEmails() == null ? List.<DatabaseEmail>of() : second.getEmails()).stream()
+                .map(email -> safe(email.getEmail()).trim().toLowerCase(Locale.ROOT)).anyMatch(addresses::contains)) return true;
+        Set<String> numbers = normalizedEventImportPhones(first.getMobilePhone());
+        numbers.addAll(normalizedEventImportPhones(first.getNormalizedPhone()));
+        Set<String> secondNumbers = normalizedEventImportPhones(second.getMobilePhone());
+        secondNumbers.addAll(normalizedEventImportPhones(second.getNormalizedPhone()));
+        return secondNumbers.stream().anyMatch(numbers::contains);
+    }
+
+    private org.springframework.web.server.ResponseStatusException legacyClassificationConflict(String message) {
+        return new org.springframework.web.server.ResponseStatusException(HttpStatus.CONFLICT, message);
+    }
+
+    private Database copyLegacyEventProfile(Database original, DatabaseDestination selected) {
+        Database copy = new Database();
+        org.springframework.beans.BeanUtils.copyProperties(original, copy,
+                "id", "emails", "company", "branch", "databaseDestination", "createdAt", "updatedAt");
+        copy.setDatabaseDestination(selected);
+        if (selected == DatabaseDestination.PARTICIPANT) {
+            if (safe(copy.getInstitutionName()).isBlank() && original.getCompany() != null) {
+                copy.setInstitutionName(original.getCompany().getName());
+            }
+        } else {
+            copy.setCompany(original.getCompany());
+            copy.setBranch(original.getBranch());
+        }
+        copy = databaseRepository.save(copy);
+        List<DatabaseEmail> copiedEmails = new ArrayList<>();
+        for (DatabaseEmail email : original.getEmails() == null ? List.<DatabaseEmail>of() : original.getEmails()) {
+            DatabaseEmail copiedEmail = new DatabaseEmail();
+            org.springframework.beans.BeanUtils.copyProperties(email, copiedEmail, "id", "database", "createdAt");
+            copiedEmail.setDatabase(copy);
+            if (selected == DatabaseDestination.PARTICIPANT) {
+                copiedEmail.setEmailType("personal"); copiedEmail.setIsCorporate(false);
+                copiedEmail.setIsPrimary(copiedEmails.isEmpty());
+            }
+            copiedEmails.add(databaseEmailRepository.save(copiedEmail));
+        }
+        copy.setEmails(copiedEmails);
+        return copy;
+    }
+
+    private void copyLegacyRestrictions(Database original, Database copy) {
+        if (Boolean.FALSE.equals(original.getIsActive()) && !Boolean.FALSE.equals(copy.getIsActive())) {
+            copy.setIsActive(false);
+            databaseRepository.save(copy);
+        }
+        for (FlaggedIdentity flag : flaggedIdentityRepository.findAll()) {
+            if (flag.getDatabase() == null || !Objects.equals(flag.getDatabase().getId(), original.getId())) continue;
+            FlaggedIdentity copiedFlag = new FlaggedIdentity();
+            org.springframework.beans.BeanUtils.copyProperties(flag, copiedFlag, "id", "database", "createdAt", "updatedAt");
+            copiedFlag.setDatabase(copy);
+            copiedFlag.setLinkedFlag(null);
+            flaggedIdentityRepository.save(copiedFlag);
+        }
+        for (RemovalRequest removal : removalRequestRepository.findAll()) {
+            if (removal.getDatabase() == null || !Objects.equals(removal.getDatabase().getId(), original.getId())) continue;
+            RemovalRequest copiedRemoval = new RemovalRequest();
+            org.springframework.beans.BeanUtils.copyProperties(removal, copiedRemoval, "id", "database", "createdAt");
+            copiedRemoval.setDatabase(copy);
+            removalRequestRepository.save(copiedRemoval);
         }
     }
 
@@ -2238,7 +2353,10 @@ public class EventController {
     }
 
     private void saveParticipantImportEmail(Database database, String address) {
-        List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(address);
+        List<DatabaseEmail> owners = databaseEmailRepository.findAllByEmailIgnoreCase(address).stream()
+                .filter(email -> email.getDatabase() == null
+                        || DatabaseDestination.isExact(email.getDatabase().getDatabaseDestination(), DatabaseDestination.PARTICIPANT))
+                .toList();
         if (owners.stream().anyMatch(email -> email.getDatabase() == null || !Objects.equals(email.getDatabase().getId(), database.getId()))) {
             throw new IllegalStateException("Pemilik email berubah; preview ulang sebelum import peserta");
         }
@@ -2257,7 +2375,13 @@ public class EventController {
             return;
         }
 
-        List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(normalizedEmail);
+        List<DatabaseEmail> existingEmails = databaseEmailRepository.findAllByEmailIgnoreCase(normalizedEmail).stream()
+                .filter(existing -> existing.getDatabase() == null
+                        || DatabaseDestination.isExact(existing.getDatabase().getDatabaseDestination(), DatabaseDestination.COMPANY))
+                .toList();
+        if (existingEmails.stream().anyMatch(existing -> existing.getDatabase() == null)) {
+            throw new IllegalStateException("Pemilik email tidak tersedia; tinjau data sebelum import.");
+        }
         boolean personal = "personal".equalsIgnoreCase(emailType);
         if ((personal && !existingEmails.isEmpty())
                 || existingEmails.stream().anyMatch(existing -> existing.getDatabase() != null

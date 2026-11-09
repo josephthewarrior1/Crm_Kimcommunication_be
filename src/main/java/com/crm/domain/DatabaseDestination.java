@@ -20,14 +20,19 @@ public enum DatabaseDestination {
         return value == null ? COMPANY : value;
     }
 
-    public boolean includesCompany() { return this != PARTICIPANT; }
-    public boolean includesParticipant() { return this != COMPANY; }
+    public static boolean isExact(DatabaseDestination actual, DatabaseDestination selected) {
+        return selected != null && selected != BOTH && effective(actual) == selected;
+    }
+
+    public boolean includesCompany() { return this == COMPANY; }
+    public boolean includesParticipant() { return this == PARTICIPANT; }
 
     public boolean includes(DatabaseDestination destination) {
-        return destination == COMPANY ? includesCompany() : destination == PARTICIPANT && includesParticipant();
+        return isExact(this, destination);
     }
 
     public DatabaseDestination add(DatabaseDestination other) {
-        return this == effective(other) ? this : BOTH;
+        if (!isExact(this, effective(other))) throw new IllegalArgumentException("Database Perusahaan dan Peserta harus memakai profil terpisah.");
+        return this;
     }
 }

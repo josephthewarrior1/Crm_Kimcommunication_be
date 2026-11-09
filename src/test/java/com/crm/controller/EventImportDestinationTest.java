@@ -113,27 +113,34 @@ class EventImportDestinationTest {
         verify(companies, never()).save(any()); verify(groups, never()).save(any());
     }
 
-    @Test void sameProfileCanJoinTwoEventsAndRepeatImportDoesNotCreateAnotherProfileOrAttendance() throws Exception {
+    @Test void participantImportsCreateSeparateProfileFromCompanyAndReuseItAcrossEvents() throws Exception {
         Database old = oldContact("Alex", "Example", "alex@campus.ac.id", DatabaseDestination.COMPANY);
         Company company = Company.builder().id(20L).name("Existing employer").build();
         CompanyBranch branch = CompanyBranch.builder().id(21L).companyId(20L).name("Existing office").build();
         old.setCompany(company); old.setBranch(branch); old.setCreatedByUserId(99L); old.setEntryMethod("manual");
+        old.setMobilePhone("081234567890, 081300001111");
         DatabaseEmail original = old.getEmails().get(0); original.setIsCorporate(true); original.setEmailType("company");
-        var file = participantFile(new String[]{"Alex", "Example", "alex@campus.ac.id", "", "Example Campus", "mahasiswa"});
+        var file = participantFile(new String[]{"Alex", "Example", "alex@campus.ac.id", "081234567890, 081300001111", "Example Campus", "mahasiswa"});
         for (long eventId : List.of(1L, 2L, 1L)) {
             assertEquals(200, controller.importEventParticipants(eventId, file, "request", "participant", "test").getStatusCode().value());
         }
-        assertEquals(1, contacts.size()); assertEquals(2, attendance.size());
-        assertSame(old, attendance.get(0).getDatabase()); assertSame(old, attendance.get(1).getDatabase());
-        assertEquals(DatabaseDestination.BOTH, old.getDatabaseDestination());
+        assertEquals(2, contacts.size()); assertEquals(2, attendance.size());
+        Database participant = contacts.get(1);
+        assertNotEquals(old.getId(), participant.getId());
+        assertSame(participant, attendance.get(0).getDatabase()); assertSame(participant, attendance.get(1).getDatabase());
+        assertEquals(DatabaseDestination.COMPANY, old.getDatabaseDestination());
+        assertEquals(DatabaseDestination.PARTICIPANT, participant.getDatabaseDestination());
+        assertNull(participant.getCompany()); assertNull(participant.getBranch());
+        assertEquals("081234567890, 081300001111", participant.getMobilePhone());
         assertSame(company, old.getCompany()); assertSame(branch, old.getBranch());
         assertEquals(99L, old.getCreatedByUserId()); assertEquals("manual", old.getEntryMethod());
-        assertEquals(1, addresses.size()); assertSame(original, addresses.get(0));
+        assertEquals(2, addresses.size()); assertSame(original, addresses.get(0));
         assertEquals("company", original.getEmailType()); assertTrue(original.getIsCorporate());
+        assertEquals("personal", participant.getEmails().get(0).getEmailType());
         verify(companies, never()).save(any()); verify(groups, never()).save(any());
     }
 
-    @Test void companyEventKeepsIncompleteRequestsAndExplicitlyAddsCompanyMembership() throws Exception {
+    @Test void companyEventKeepsIncompleteRequestsAndCreatesSeparateCompanyProfile() throws Exception {
         typeEvent(1L, DatabaseDestination.COMPANY);
         var gmail = companyFile("alex@gmail.com");
         assertEquals(200, controller.importEventParticipants(1L, gmail, "request", "company", "test").getStatusCode().value());
@@ -142,8 +149,31 @@ class EventImportDestinationTest {
         Database old = oldContact("Alex", "Example", "alex@campus.ac.id", DatabaseDestination.PARTICIPANT);
         var campus = simpleFile(new String[]{"Alex", "Example", "alex@campus.ac.id", "", "Example Employer"});
         assertEquals(200, controller.importEventParticipants(1L, campus, "request", "company", "test").getStatusCode().value());
-        assertEquals(DatabaseDestination.BOTH, old.getDatabaseDestination());
-        assertEquals(2, contacts.size()); assertEquals(2, attendance.size());
+        assertEquals(DatabaseDestination.PARTICIPANT, old.getDatabaseDestination());
+        assertNull(old.getCompany()); assertNull(old.getBranch());
+        assertEquals(3, contacts.size()); assertEquals(2, attendance.size());
+        assertEquals(DatabaseDestination.COMPANY, attendance.get(1).getDatabase().getDatabaseDestination());
+        assertNotEquals(old.getId(), attendance.get(1).getDatabase().getId());
+    }
+
+    @Test void oppositeDestinationNamesAndAmbiguousContactOwnersDoNotBlockSelectedDestination() throws Exception {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            contacts.clear(); addresses.clear(); attendance.clear();
+            DatabaseDestination opposite = destination == DatabaseDestination.COMPANY ? DatabaseDestination.PARTICIPANT : DatabaseDestination.COMPANY;
+            for (String name : List.of("Other", "Another")) {
+                Database old = oldContact(name, "Person", "shared@gmail.com", opposite);
+                old.setMobilePhone("081234567890, 081300001111");
+            }
+            typeEvent(1L, destination);
+            var upload = simpleFile(new String[]{"", "", "shared@gmail.com", "081234567890, 081300001111", ""});
+            assertEquals("valid", previewRow(upload, destination.value()).get("status"));
+            assertEquals(200, controller.importEventParticipants(1L, upload, "request", destination.value(), "test").getStatusCode().value());
+            assertEquals(3, contacts.size()); assertEquals(1, attendance.size());
+            assertEquals(destination, attendance.get(0).getDatabase().getDatabaseDestination());
+            assertEquals(3, addresses.size());
+            assertEquals(200, controller.importEventParticipants(1L, upload, "request", destination.value(), "test").getStatusCode().value());
+            assertEquals(3, contacts.size()); assertEquals(1, attendance.size());
+        }
     }
 
     @Test void nameConflictAndInactiveParticipantAreRejectedBeforeWrites() throws Exception {
@@ -238,6 +268,8 @@ class EventImportDestinationTest {
         contacts.add(first); contacts.add(other);
         var phoneOnly = simpleFile(new String[]{"Alex", "", "", "81234567890", ""});
         for (String destination : List.of("company", "participant")) {
+            first.setDatabaseDestination(DatabaseDestination.fromValue(destination));
+            other.setDatabaseDestination(DatabaseDestination.fromValue(destination));
             typeEvent(1L, DatabaseDestination.fromValue(destination));
             assertTrue(previewRow(phoneOnly, destination).get("issues").toString().contains("beberapa profil"));
             assertEquals(400, controller.importEventParticipants(1L, phoneOnly, "request", destination, "test").getStatusCode().value());

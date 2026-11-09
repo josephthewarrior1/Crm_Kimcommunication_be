@@ -2,6 +2,9 @@ package com.crm.service;
 
 import com.crm.domain.Company;
 import com.crm.domain.DatabaseEmail;
+import com.crm.domain.DatabaseDestination;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import com.crm.domain.Group;
 import com.crm.repository.CompanyRepository;
 import com.crm.repository.DatabaseEmailRepository;
@@ -72,7 +75,11 @@ public class DataCleanerService {
     private DatabaseEmailRepository databaseEmailRepository;
 
     public Map<String, Object> preview() {
-        return clean(false);
+        return clean(false, DatabaseDestination.COMPANY, null);
+    }
+
+    public Map<String, Object> preview(String destination) {
+        return clean(false, selectedDestination(destination), null);
     }
 
     @Transactional(readOnly = true)
@@ -132,7 +139,12 @@ public class DataCleanerService {
 
     @Transactional
     public Map<String, Object> apply() {
-        return clean(true);
+        return apply("company", null);
+    }
+
+    @Transactional
+    public Map<String, Object> apply(String destination, String previewToken) {
+        return clean(true, selectedDestination(destination), previewToken);
     }
 
     @Transactional
@@ -170,13 +182,18 @@ public class DataCleanerService {
         return result;
     }
 
-    private Map<String, Object> clean(boolean apply) {
+    private Map<String, Object> clean(boolean apply, DatabaseDestination destination, String previewToken) {
         List<Map<String, Object>> fixes = new ArrayList<>();
         List<Map<String, Object>> reviews = new ArrayList<>();
 
-        List<Group> groups = groupRepository.findAll();
-        List<Company> companies = companyRepository.findAll();
-        List<DatabaseEmail> emails = databaseEmailRepository.findAll();
+        List<Group> groups = destination == DatabaseDestination.COMPANY ? groupRepository.findAll() : List.of();
+        List<Company> companies = destination == DatabaseDestination.COMPANY ? companyRepository.findAll() : List.of();
+        List<DatabaseEmail> emails = databaseEmailRepository.findAll().stream()
+                .filter(email -> email.getDatabase() != null && DatabaseDestination.isExact(email.getDatabase().getDatabaseDestination(), destination)).toList();
+        String token = snapshotToken(destination, groups, companies, emails);
+        if (apply && (previewToken == null || !previewToken.equals(token))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Preview data cleaner berubah atau tujuan berbeda; preview ulang sebelum apply.");
+        }
         Map<String, List<DatabaseEmail>> emailsByCleanValue = emails.stream()
                 .filter(email -> !cleanEmail(email.getEmail()).isBlank())
                 .collect(Collectors.groupingBy(email -> cleanEmail(email.getEmail())));
@@ -224,6 +241,7 @@ public class DataCleanerService {
                 if (apply) email.setDomain(domain);
             }
 
+            if (destination == DatabaseDestination.PARTICIPANT) continue;
             if (PERSONAL_DOMAINS.contains(domain)) {
                 if (!"personal".equalsIgnoreCase(safe(email.getEmailType()))) {
                     fixes.add(change("public_email_type_personal", email.getId(), email.getEmailType(), "personal"));
@@ -245,7 +263,7 @@ public class DataCleanerService {
             }
         }
 
-        if (apply) {
+        if (apply && destination == DatabaseDestination.COMPANY) {
             fixes.addAll(applyCompanyGroupFixes(companies));
             groupRepository.saveAll(groups);
             companyRepository.saveAll(companies);
@@ -255,16 +273,36 @@ public class DataCleanerService {
             companies = companyRepository.findAll();
         }
 
+        if (apply && destination == DatabaseDestination.PARTICIPANT) databaseEmailRepository.saveAll(emails);
         duplicateGroupReviews(groups, reviews);
         placeholderGroupReviews(groups, companies, reviews);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("mode", apply ? "apply" : "preview");
+        result.put("destination", destination.value()); result.put("previewToken", token);
         result.put("fixCount", fixes.size());
         result.put("reviewCount", reviews.size());
         result.put("fixes", fixes.stream().limit(200).toList());
         result.put("reviews", reviews.stream().limit(200).toList());
         return result;
+    }
+
+    private DatabaseDestination selectedDestination(String value) {
+        if (!"company".equals(value) && !"participant".equals(value)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Pilih satu database untuk data cleaner.");
+        return DatabaseDestination.fromValue(value);
+    }
+
+    private String snapshotToken(DatabaseDestination destination, List<Group> groups, List<Company> companies, List<DatabaseEmail> emails) {
+        List<Object> state = new ArrayList<>(); state.add(destination.name());
+        groups.stream().sorted(java.util.Comparator.comparing(Group::getId)).forEach(group -> state.add(java.util.Arrays.asList(group.getId(), group.getName())));
+        companies.stream().sorted(java.util.Comparator.comparing(Company::getId)).forEach(company -> state.add(java.util.Arrays.asList(company.getId(), company.getName(),
+                company.getBrandName(), company.getIndustry(), company.getCity(), company.getWebsite(), company.getGroup() == null ? null : company.getGroup().getId())));
+        emails.stream().sorted(java.util.Comparator.comparing(DatabaseEmail::getId)).forEach(email -> state.add(java.util.Arrays.asList(email.getId(), email.getDatabase().getId(),
+                email.getEmail(), email.getEmailType(), email.getDomain(), email.getIsCorporate())));
+        try {
+            byte[] bytes = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(state);
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (Exception failure) { throw new IllegalStateException("Cannot fingerprint scoped cleaner preview", failure); }
     }
 
     private List<Map<String, Object>> applyCompanyGroupFixes(List<Company> companies) {

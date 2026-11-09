@@ -42,3 +42,5 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-database-destinations.yml
   - include:
       file: db/changelog/changes/changelog-crm-pms-event-binding.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-strict-database-destinations.yml

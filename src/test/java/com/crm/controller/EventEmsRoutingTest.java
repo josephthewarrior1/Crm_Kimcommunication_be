@@ -135,6 +135,8 @@ class EventEmsRoutingTest {
 
     @Test void explicitDestinationCanBeSavedAndPreviewedWithoutApplyingSync() {
         authenticate(Role.MANAGER);
+        var databases = mock(com.crm.repository.DatabaseRepository.class);
+        ReflectionTestUtils.setField(controller, "databaseRepository", databases);
         Event event = Event.builder().id(1L).name("Original name").emsEventId(42L).emsSource(EmsSource.V2).build();
         when(events.findById(1L)).thenReturn(Optional.of(event));
         when(events.findForSyncById(1L)).thenReturn(Optional.of(event));
@@ -147,6 +149,7 @@ class EventEmsRoutingTest {
         verify(events).save(event);
         verify(ems).previewParticipantsForEvent(event);
         verify(ems, never()).syncParticipantsForEvent(any(), any());
+        verifyNoInteractions(databases);
     }
 
     @Test void previewAndApplyRespectEventAccessAndApplyRequiresPreviewToken() {

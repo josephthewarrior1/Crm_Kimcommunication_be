@@ -2,6 +2,8 @@ package com.crm.service;
 
 import com.crm.domain.AppUser;
 import com.crm.domain.Role;
+import com.crm.domain.DatabaseDestination;
+import com.crm.util.ContactPhone;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -22,7 +24,8 @@ public class DatabaseMergeService {
     public record MergeRequest(Long targetId, Long sourceId, Map<String, String> fieldChoices,
                                Map<String, String> emailTypes, String previewToken) {}
     private static final List<String> FIELDS = List.of("company_id", "salutation", "first_name", "last_name",
-            "position_level", "speciality_division", "job_title", "mobile_phone", "linkedin_url", "database_type", "source");
+            "position_level", "speciality_division", "job_title", "mobile_phone", "linkedin_url", "database_type", "source",
+            "institution_name", "participant_category");
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+$");
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
@@ -67,6 +70,10 @@ public class DatabaseMergeService {
         require(contacts.size() == 2, HttpStatus.NOT_FOUND, "Source or target contact no longer exists");
         Map<String, Object> target = contacts.stream().filter(c -> number(c.get("id")) == targetId).findFirst().orElseThrow();
         Map<String, Object> source = contacts.stream().filter(c -> number(c.get("id")) == sourceId).findFirst().orElseThrow();
+        DatabaseDestination destination = DatabaseDestination.effective(target.get("database_destination") == null ? null : DatabaseDestination.fromValue(text(target.get("database_destination"))));
+        DatabaseDestination sourceDestination = DatabaseDestination.effective(source.get("database_destination") == null ? null : DatabaseDestination.fromValue(text(source.get("database_destination"))));
+        require(DatabaseDestination.isExact(sourceDestination, destination), HttpStatus.CONFLICT,
+                "Contacts in different databases cannot be merged; keep Company and Participant profiles separate");
         Map<String, Object> before = new LinkedHashMap<>();
         before.put("contacts", contacts);
         List<Map<String, Object>> companies = rows("SELECT * FROM companies WHERE id IN (SELECT company_id FROM databases WHERE id IN (?,?)) ORDER BY id", targetId, sourceId);
@@ -120,14 +127,15 @@ public class DatabaseMergeService {
                 && flags.stream().noneMatch(f -> "confirmed".equals(f.get("status")))
                 && removals.stream().noneMatch(r -> !"rejected".equals(r.get("status")));
         merged.put("is_active", active);
-        String phone = phone(merged.get("mobile_phone"));
+        String phone = ContactPhone.primary(text(merged.get("mobile_phone")));
         merged.put("normalized_phone", phone.isEmpty() ? null : "+" + phone);
         List<Map<String, Object>> plannedEmails = mergeEmails(emails, targetId, types);
         for (Map<String, Object> email : plannedEmails) {
             if ("personal".equals(email.get("email_type"))) {
                 // Read tokenized legacy values too; a third contact must not silently retain this personal address.
-                List<Map<String, Object>> others = rows("SELECT * FROM database_emails WHERE database_id NOT IN (?,?) AND position(? in lower(email)) > 0 ORDER BY id",
-                        targetId, sourceId, email.get("email"));
+                List<Map<String, Object>> others = rows("SELECT e.* FROM database_emails e JOIN databases d ON d.id=e.database_id "
+                                + "WHERE e.database_id NOT IN (?,?) AND COALESCE(d.database_destination,'COMPANY')=? AND position(? in lower(e.email)) > 0 ORDER BY e.id",
+                        targetId, sourceId, destination.name(), email.get("email"));
                 require(others.stream().noneMatch(e -> tokens(e).contains(email.get("email"))), HttpStatus.CONFLICT,
                         "Personal email also belongs to another contact: " + email.get("email"));
             }
@@ -230,8 +238,11 @@ public class DatabaseMergeService {
     static boolean samePerson(Map<String, Object> a, Map<String, Object> b, List<Map<String, Object>> emails) {
         String name = nameKey(text(a.get("first_name")) + " " + text(a.get("last_name")));
         if (name.isEmpty() || !name.equals(nameKey(text(b.get("first_name")) + " " + text(b.get("last_name"))))) return false;
-        String phone = phone(a.get("mobile_phone"));
-        if (!phone.isEmpty() && phone.equals(phone(b.get("mobile_phone")))) return true;
+        Set<String> firstPhones = ContactPhone.normalizedNumbers(text(a.get("mobile_phone")));
+        Set<String> secondPhones = ContactPhone.normalizedNumbers(text(b.get("mobile_phone")));
+        firstPhones.addAll(ContactPhone.normalizedNumbers(text(a.get("normalized_phone"))));
+        secondPhones.addAll(ContactPhone.normalizedNumbers(text(b.get("normalized_phone"))));
+        if (firstPhones.stream().anyMatch(secondPhones::contains)) return true;
         String linked = linkedIn(a.get("linkedin_url"));
         if (!linked.isEmpty() && linked.equals(linkedIn(b.get("linkedin_url")))) return true;
         Set<String> personal = new HashSet<>();
@@ -265,7 +276,8 @@ public class DatabaseMergeService {
         return Set.of("", "-", "--", "unknown", "n/a", "null", "tidak ada linked", "tidak ada").contains(text(value).trim().toLowerCase(Locale.ROOT));
     }
     private static boolean equivalent(String field, Object a, Object b) {
-        if (field.equals("mobile_phone")) return !phone(a).isEmpty() && phone(a).equals(phone(b));
+        if (field.equals("mobile_phone")) return !ContactPhone.normalizedNumbers(text(a)).isEmpty()
+                && ContactPhone.normalizedNumbers(text(a)).equals(ContactPhone.normalizedNumbers(text(b)));
         if (field.equals("linkedin_url")) return !linkedIn(a).isEmpty() && linkedIn(a).equals(linkedIn(b));
         return text(a).trim().equalsIgnoreCase(text(b).trim());
     }

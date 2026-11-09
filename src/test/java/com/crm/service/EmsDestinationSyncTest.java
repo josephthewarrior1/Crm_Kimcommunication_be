@@ -75,22 +75,90 @@ class EmsDestinationSyncTest {
         verifyNoInteractions(companies);
     }
 
-    @Test void existingCompanyProfileAddsParticipantMembershipWithoutChangingCompanyMaster() {
+    @Test void participantSyncCreatesIndependentProfileForTheSameCompanyEmailAndPhone() {
         Company company=Company.builder().id(77L).name("Original Company").industry("Technology").build();
-        Database contact=contact(5,"Member","Example","member@company.example",DatabaseDestination.COMPANY);contact.setCompany(company);contacts.add(contact);
-        doReturn(List.of(row("Member","Example","member@company.example","Different Institute"))).when(service).getEventParticipants(1L,EmsSource.V2);
-        Event event=event(1,DatabaseDestination.PARTICIPANT);apply(event,service.previewParticipantsForEvent(event));
-        assertEquals(1,contacts.size());assertEquals(DatabaseDestination.BOTH,contact.getDatabaseDestination());assertSame(company,contact.getCompany());
-        assertEquals("Original Company",company.getName());verifyNoInteractions(companies);
+        Database contact=contact(5,"Member","Example","member@company.example",DatabaseDestination.COMPANY);
+        contact.setCompany(company);contact.setMobilePhone("08123456789");contact.setJobTitle("Manager");contacts.add(contact);
+        Map<String,Object> registration=row("Member","Example","member@company.example","Different Institute");
+        ((Map<String,Object>)registration.get("user_profile")).put("phone","+62 8123456789, 08139999999");
+        doReturn(List.of(registration)).when(service).getEventParticipants(anyLong(),eq(EmsSource.V2));
+        Event event=event(1,DatabaseDestination.PARTICIPANT);
+        Map<String,Object> preview=service.previewParticipantsForEvent(event);
+        assertEquals(1,preview.get("newCount"));assertEquals(0,preview.get("existingCount"));assertEquals(0,preview.get("rejectedCount"));
+        assertEquals(1,apply(event,preview).get("count"));assertEquals(2,contacts.size());
+        Database participant=links.get(0).getDatabase();assertNotSame(contact,participant);assertNotEquals(contact.getId(),participant.getId());
+        assertEquals(DatabaseDestination.PARTICIPANT,participant.getDatabaseDestination());assertNull(participant.getCompany());assertNull(participant.getJobTitle());
+        assertEquals("Different Institute",participant.getInstitutionName());assertEquals("+628123456789, 08139999999",participant.getMobilePhone());
+        assertEquals(DatabaseDestination.COMPANY,contact.getDatabaseDestination());assertSame(company,contact.getCompany());
+        assertEquals("08123456789",contact.getMobilePhone());assertEquals("Manager",contact.getJobTitle());assertEquals(1,contact.getEmails().size());
+        preview=service.previewParticipantsForEvent(event);assertEquals(0,preview.get("newCount"));assertEquals(1,preview.get("existingCount"));apply(event,preview);
+        Event second=event(2,DatabaseDestination.PARTICIPANT);apply(second,service.previewParticipantsForEvent(second));
+        assertEquals(2,contacts.size());assertEquals(2,links.size());assertTrue(links.stream().allMatch(link -> link.getDatabase()==participant));
+        assertEquals("Original Company",company.getName());assertEquals("Technology",company.getIndustry());verifyNoInteractions(companies);
     }
 
-    @Test void explicitCompanyDestinationKeepsGmailDirtyAndAddsMembershipToParticipantIdentity() {
-        Database existing = contact(5,"Student","Example","student@campus.ac.id",DatabaseDestination.PARTICIPANT); contacts.add(existing);
-        doReturn(List.of(row("Gmail","Person","member@gmail.com","School"),row("Student","Example","student@campus.ac.id","School")))
+    @Test void companySyncCreatesIndependentProfilesRegardlessOfEmailDomainAndExistingParticipantIdentity() {
+        Database existing = contact(5,"Student","Example","student@campus.ac.id",DatabaseDestination.PARTICIPANT);
+        existing.setMobilePhone("08123456789");existing.setInstitutionName("Original Campus");contacts.add(existing);
+        Company company=Company.builder().id(77L).name("School").industry("Education").build();
+        when(companies.findByNameIgnoreCase("School")).thenReturn(Optional.of(company));
+        Map<String,Object> registration=row("Student","Example","student@campus.ac.id","School");
+        ((Map<String,Object>)registration.get("user_profile")).put("phone","+62 8123456789");
+        doReturn(List.of(row("Gmail","Person","member@gmail.com","School"),registration))
                 .when(service).getEventParticipants(1L,EmsSource.V2);
         Event event=event(1,DatabaseDestination.COMPANY);Map<String,Object> preview=service.previewParticipantsForEvent(event);
-        assertEquals(0,preview.get("rejectedCount"));assertEquals(1,preview.get("newCount"));assertEquals(2,apply(event,preview).get("count"));
-        assertEquals(DatabaseDestination.BOTH,existing.getDatabaseDestination()); assertEquals(2,contacts.size());
+        assertEquals(0,preview.get("rejectedCount"));assertEquals(2,preview.get("newCount"));assertEquals(0,preview.get("existingCount"));assertEquals(2,apply(event,preview).get("count"));
+        assertEquals(3,contacts.size());assertEquals(DatabaseDestination.PARTICIPANT,existing.getDatabaseDestination());
+        assertNull(existing.getCompany());assertEquals("Original Campus",existing.getInstitutionName());assertEquals("08123456789",existing.getMobilePhone());
+        assertTrue(links.stream().allMatch(link -> link.getDatabase()!=existing && link.getDatabase().getDatabaseDestination()==DatabaseDestination.COMPANY && link.getDatabase().getCompany()==company));
+        preview=service.previewParticipantsForEvent(event);assertEquals(0,preview.get("newCount"));assertEquals(2,preview.get("existingCount"));apply(event,preview);
+        assertEquals(3,contacts.size());assertEquals(2,links.size());
+    }
+
+    @Test void otherDestinationOwnersIncludingInactiveDuplicateAndLegacyBothProfilesDoNotBlockParticipantSync() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY,DatabaseDestination.COMPANY,DatabaseDestination.BOTH)) {
+            Database other=contact(ids.incrementAndGet(),"Other","Name","shared@example.invalid",destination);
+            other.setMobilePhone("08123456789");other.setIsActive(false);contacts.add(other);
+        }
+        Map<String,Object> registration=row("Student","Example","shared@example.invalid","Campus");
+        ((Map<String,Object>)registration.get("user_profile")).put("phone","08123456789");
+        doReturn(List.of(registration)).when(service).getEventParticipants(1L,EmsSource.V2);
+        Event event=event(1,DatabaseDestination.PARTICIPANT);Map<String,Object> preview=service.previewParticipantsForEvent(event);
+        assertEquals(1,preview.get("newCount"));assertEquals(0,preview.get("existingCount"));assertEquals(0,preview.get("rejectedCount"));
+        assertEquals(1,apply(event,preview).get("count"));assertEquals(4,contacts.size());
+        assertEquals(DatabaseDestination.PARTICIPANT,links.get(0).getDatabase().getDatabaseDestination());verifyNoInteractions(companies);
+    }
+
+    @Test void previewFingerprintIgnoresOtherDestinationProfilesAndEventLinksInBothDirections() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY,DatabaseDestination.PARTICIPANT)) {
+            contacts.clear();links.clear();history.clear();
+            DatabaseDestination opposite=destination==DatabaseDestination.COMPANY?DatabaseDestination.PARTICIPANT:DatabaseDestination.COMPANY;
+            Database other=contact(5,"Member","Example","member@example.invalid",opposite);other.setMobilePhone("08123456789");contacts.add(other);
+            Map<String,Object> registration=row("Member","Example","member@example.invalid",null);
+            ((Map<String,Object>)registration.get("user_profile")).put("phone","08123456789");
+            doReturn(List.of(registration)).when(service).getEventParticipants(1L,EmsSource.V2);
+            Event event=event(1,destination);Map<String,Object> preview=service.previewParticipantsForEvent(event);
+            other.setFirstName("Changed");other.setMobilePhone("08999999999");other.setIsActive(false);
+            contacts.add(contact(6,"Another","Owner","member@example.invalid",opposite));
+            links.add(EventParticipant.builder().id(7L).event(event).database(other).build());
+            assertEquals(preview.get("previewToken"),service.previewParticipantsForEvent(event).get("previewToken"));
+            assertEquals(1,apply(event,preview).get("count"));assertEquals(3,contacts.size());
+            assertEquals(destination,links.get(1).getDatabase().getDatabaseDestination());
+        }
+        verifyNoInteractions(companies);
+    }
+
+    @Test void legacyNullIsCompanyOnlyAndBothIsNeverAnOperationalIdentityMatch() {
+        Database legacy=contact(5,"Member","Example","member@example.invalid",null);contacts.add(legacy);
+        Database both=contact(6,"Member","Example","member@example.invalid",DatabaseDestination.BOTH);contacts.add(both);
+        doReturn(List.of(row("Member","Example","member@example.invalid",null))).when(service).getEventParticipants(anyLong(),eq(EmsSource.V2));
+        Event company=event(1,DatabaseDestination.COMPANY);Map<String,Object> preview=service.previewParticipantsForEvent(company);
+        assertEquals(0,preview.get("newCount"));assertEquals(1,preview.get("existingCount"));assertEquals(0,preview.get("rejectedCount"));apply(company,preview);
+        assertSame(legacy,links.get(0).getDatabase());assertNull(legacy.getDatabaseDestination());
+        Event participant=event(2,DatabaseDestination.PARTICIPANT);preview=service.previewParticipantsForEvent(participant);
+        assertEquals(1,preview.get("newCount"));assertEquals(0,preview.get("existingCount"));apply(participant,preview);
+        assertEquals(3,contacts.size());assertNotSame(legacy,links.get(1).getDatabase());assertNotSame(both,links.get(1).getDatabase());
+        assertEquals(DatabaseDestination.BOTH,both.getDatabaseDestination());verifyNoInteractions(companies);
     }
 
     @Test void staleDestinationSourceAndCrmStateRejectBeforeAnyWrites() {
@@ -125,6 +193,22 @@ class EmsDestinationSyncTest {
         assertEquals(2,preview.get("rejectedCount"));assertEquals(0,preview.get("newCount"));
         assertEquals(0,apply(event,preview).get("count"));assertTrue(contacts.isEmpty());
         verify(databases,never()).save(any());verify(emails,never()).save(any());verify(participants,never()).save(any());
+    }
+
+    @Test void sameDestinationPhoneAmbiguityAndInactiveOwnersRemainBlocked() {
+        Database first=contact(4,"Duplicate","Name","first@example.invalid",DatabaseDestination.PARTICIPANT);
+        Database second=contact(5,"Duplicate","Name","second@example.invalid",DatabaseDestination.PARTICIPANT);
+        Database inactive=contact(6,"Inactive","Owner","old@example.invalid",DatabaseDestination.PARTICIPANT);
+        first.setMobilePhone("08123456789");second.setMobilePhone("+628123456789");inactive.setMobilePhone("08139999999");inactive.setIsActive(false);
+        contacts.addAll(List.of(first,second,inactive));
+        Map<String,Object> duplicateRow=row("Duplicate","Name","new@example.invalid",null);
+        ((Map<String,Object>)duplicateRow.get("user_profile")).put("phone","8123456789");
+        Map<String,Object> inactiveRow=row("Inactive","Owner","another@example.invalid",null);
+        ((Map<String,Object>)inactiveRow.get("user_profile")).put("phone","+628139999999");
+        doReturn(List.of(duplicateRow,inactiveRow)).when(service).getEventParticipants(1L,EmsSource.V2);
+        Event event=event(1,DatabaseDestination.PARTICIPANT);Map<String,Object> preview=service.previewParticipantsForEvent(event);
+        assertEquals(2,preview.get("rejectedCount"));assertEquals(0,apply(event,preview).get("count"));assertEquals(3,contacts.size());
+        verify(databases,never()).save(any());verify(emails,never()).save(any());verify(participants,never()).save(any());verifyNoInteractions(companies);
     }
 
     @Test void sameNewParticipantNameAndPhoneWithDifferentEmailsReusesOnePendingProfileAndEventLink() {

@@ -91,13 +91,13 @@ class ParticipantManualCreateTest {
     }
 
     @Test void anotherNameOrAmbiguousOrInactiveOwnerCannotLeaveAnOrphanProfile() {
-        Database owner = Database.builder().id(1L).firstName("Other Person").isActive(true).build();
+        Database owner = Database.builder().id(1L).databaseDestination(DatabaseDestination.PARTICIPANT).firstName("Other Person").isActive(true).build();
         DatabaseEmail known = email("known@campus.ac.id"); known.setDatabase(owner);
         when(emails.findAllByEmailIgnoreCase("known@campus.ac.id")).thenReturn(List.of(known));
         assertEquals(400, controller.createDatabase(incoming("Student", "known@campus.ac.id"), null, null, false, "test").getStatusCode().value());
-        assertNull(owner.getDatabaseDestination());
+        assertEquals(DatabaseDestination.PARTICIPANT, owner.getDatabaseDestination());
 
-        Database second = Database.builder().id(2L).firstName("Student").isActive(true).build();
+        Database second = Database.builder().id(2L).databaseDestination(DatabaseDestination.PARTICIPANT).firstName("Student").isActive(true).build();
         DatabaseEmail otherKnown = email("known@campus.ac.id"); otherKnown.setDatabase(second);
         when(emails.findAllByEmailIgnoreCase("known@campus.ac.id")).thenReturn(List.of(known, otherKnown));
         assertEquals(400, controller.createDatabase(incoming("Student", "known@campus.ac.id"), null, null, false, "test").getStatusCode().value());
@@ -108,35 +108,30 @@ class ParticipantManualCreateTest {
         verify(databases, never()).save(any());
     }
 
-    @Test void samePersonReusesOneProfileAddsParticipantMembershipAndPreservesCompanyAndEmailOwnership() {
+    @Test void samePersonCreatesAnIndependentParticipantEvenWithCompanyEmailAndPhoneAlreadyStored() {
         Company company = Company.builder().id(11L).name("Existing employer").build();
         CompanyBranch branch = CompanyBranch.builder().id(12L).companyId(11L).name("Existing office").build();
         Database existing = Database.builder().id(8L).firstName("Student").company(company).branch(branch)
-                .createdByUserId(99L).entryMethod("ems_sync").isActive(true).build();
-        DatabaseEmail old = email("known@employer.example"); old.setId(44L); old.setEmailType("company");
-        old.setIsCorporate(true); old.setIsPrimary(true); old.setDatabase(existing);
-        existing.setEmails(List.of(old));
+                .databaseDestination(DatabaseDestination.COMPANY).createdByUserId(99L).entryMethod("ems_sync")
+                .mobilePhone("081200001111").isActive(true).build();
+        DatabaseEmail old = email("known@employer.example"); old.setId(44L); old.setEmailType("personal");
+        old.setIsPrimary(true); old.setDatabase(existing); existing.setEmails(List.of(old));
         when(emails.findAllByEmailIgnoreCase("known@employer.example")).thenReturn(List.of(old));
-        Database request = incoming(" student ", "known@employer.example");
-        request.setEmails(List.of(email("known@employer.example"), email("new@campus.ac.id")));
+        when(databases.findAll()).thenReturn(List.of(existing));
+        Database request = incoming("Student", "known@employer.example"); request.setMobilePhone("081200001111");
         request.setInstitutionName("Example Campus"); request.setParticipantCategory("mahasiswa");
         var response = controller.createDatabase(request, null, null, false, "test");
-        assertEquals(200, response.getStatusCode().value());
-        assertSame(existing, response.getBody());
-        assertEquals(8L, existing.getId());
-        assertEquals(DatabaseDestination.BOTH, existing.getDatabaseDestination());
+        assertEquals(200, response.getStatusCode().value()); assertSame(request, response.getBody());
+        assertEquals(42L, request.getId()); assertNotEquals(existing.getId(), request.getId());
+        assertEquals(DatabaseDestination.PARTICIPANT, request.getDatabaseDestination()); assertNull(request.getCompany()); assertNull(request.getBranch());
+        assertEquals(DatabaseDestination.COMPANY, existing.getDatabaseDestination());
         assertSame(company, existing.getCompany()); assertSame(branch, existing.getBranch());
         assertEquals(99L, existing.getCreatedByUserId()); assertEquals("ems_sync", existing.getEntryMethod());
-        assertEquals("Example Campus", existing.getInstitutionName());
-        assertEquals(2, existing.getEmails().size());
-        assertSame(old, existing.getEmails().get(0));
-        assertEquals("company", old.getEmailType()); assertTrue(old.getIsCorporate());
-        DatabaseEmail added = existing.getEmails().get(1);
-        assertSame(existing, added.getDatabase()); assertEquals("personal", added.getEmailType());
-        assertEquals("new@campus.ac.id", added.getEmail());
-        verify(databases).save(existing);
-        verify(emails, never()).save(any());
-        verify(companies, never()).save(any());
+        assertEquals("081200001111", existing.getMobilePhone()); assertNull(existing.getInstitutionName());
+        assertEquals(1, existing.getEmails().size()); assertSame(old, existing.getEmails().get(0));
+        assertSame(existing, old.getDatabase()); assertEquals("personal", old.getEmailType());
+        assertNotSame(old, request.getEmails().get(0)); assertSame(request, request.getEmails().get(0).getDatabase());
+        verify(databases).save(request); verify(databases, never()).save(existing); verify(companies, never()).save(any());
     }
 
     @Test void companyAndBothCreateCannotBypassEmailOwnershipRulesThroughBodyCascade() {
@@ -170,6 +165,21 @@ class ParticipantManualCreateTest {
         assertEquals("081200001111, 081300002222", phoneOnly.getMobilePhone());
         Database invalid = Database.builder().databaseDestination(DatabaseDestination.PARTICIPANT).mobilePhone("081200001111, call 123").build();
         assertEquals(400, controller.createDatabase(invalid, null, null, false, "test").getStatusCode().value());
+    }
+
+    @Test void participantCannotLinkCompanyOrChangeDestinationThroughCreateOrEdit() {
+        Database participant = incoming("Student", "student@campus.ac.id");
+        assertEquals(400, controller.createDatabase(participant, 11L, null, false, "test").getStatusCode().value());
+        participant.setCompany(Company.builder().id(11L).build());
+        assertEquals(400, controller.createDatabase(participant, null, null, false, "test").getStatusCode().value());
+        participant.setCompany(null); participant.setId(8L); when(databases.findById(8L)).thenReturn(java.util.Optional.of(participant));
+        assertEquals(409, controller.updateDatabase(8L, Database.builder().databaseDestination(DatabaseDestination.COMPANY).firstName("Wrong").build(), null,null,false,"test").getStatusCode().value());
+        assertEquals("Student", participant.getFirstName()); assertEquals(DatabaseDestination.PARTICIPANT, participant.getDatabaseDestination());
+        assertEquals(400, controller.updateDatabase(8L, Database.builder().company(Company.builder().id(11L).build()).build(), null,null,false,"test").getStatusCode().value());
+        assertEquals(200, controller.updateDatabase(8L, Database.builder().firstName("Edited").build(), null,null,true,"test").getStatusCode().value());
+        assertNull(participant.getCompany()); assertNull(participant.getBranch());
+        Database both = Database.builder().databaseDestination(DatabaseDestination.BOTH).firstName("Invalid").build();
+        assertEquals(400, controller.createDatabase(both,null,null,false,"test").getStatusCode().value());
     }
 
     private static Database incoming(String name, String address) {

@@ -57,7 +57,9 @@ class DatabaseEmailCategoryTest {
         assertEquals("\"participant\"", mapper.writeValueAsString(DatabaseDestination.PARTICIPANT));
         assertEquals(DatabaseDestination.PARTICIPANT, mapper.readValue("\"participant\"", DatabaseDestination.class));
         assertNull(mapper.readValue("{}", Database.class).getDatabaseDestination());
-        assertEquals(DatabaseDestination.BOTH, DatabaseDestination.COMPANY.add(DatabaseDestination.PARTICIPANT));
+        assertThrows(IllegalArgumentException.class, () -> DatabaseDestination.COMPANY.add(DatabaseDestination.PARTICIPANT));
+        assertFalse(DatabaseDestination.BOTH.includesCompany()); assertFalse(DatabaseDestination.BOTH.includesParticipant());
+        assertTrue(DatabaseDestination.isExact(null, DatabaseDestination.COMPANY));
 
         for (String address : List.of("student@gmail.com", "student@campus.ac.id", "member@company.example")) {
             Database participant = participant(1, "Student", address);
@@ -84,17 +86,17 @@ class DatabaseEmailCategoryTest {
         assertTrue((boolean) ReflectionTestUtils.invokeMethod(controller, "isIncomplete", corporate));
     }
 
-    @Test void scopedListsCountsAnalyticsFacetsAndExportKeepOneProfileForBothMemberships() {
+    @Test void scopedListsCountsAnalyticsFacetsAndExportKeepIndependentProfiles() {
         Database corporate = corporate(1);
         Database student = participant(2, "Student", "student@gmail.com");
-        student.setCompany(Company.builder().id(20L).name("Example School").industry("Education").build());
+        student.setInstitutionName("Example School");
         Database campus = participant(3, "Campus", "viewer@campus.ac.id");
         Database employee = participant(4, "Employee", "member@employer.example");
         Database unnamed = participant(5, " ", "unnamed@outlook.com");
         Database legacyGmail = Database.builder().id(6L).firstName("Legacy").isActive(true)
                 .emails(List.of(email("legacy@gmail.com", true))).build();
-        Database both = participant(7, "Both memberships", "both@campus.ac.id");
-        both.setDatabaseDestination(DatabaseDestination.BOTH);
+        Database both = participant(7, "Separate participant", "member@company.example");
+        both.setMobilePhone(corporate.getMobilePhone());
         Database inactive = participant(8, "Inactive", "inactive@gmail.com");
         inactive.setIsActive(false);
         Database flagged = participant(9, "Flagged", "flagged@gmail.com");
@@ -110,39 +112,39 @@ class DatabaseEmailCategoryTest {
         assertEquals(List.of(campus), second.get("items"));
         assertEquals(first.get("analytics"), second.get("analytics"));
         assertEquals(Map.of("all", 5L, "clean", 4L, "dirty", 1L), first.get("summary"));
-        assertEquals(Map.of("company", 4L, "participant", 5L), first.get("destinations"));
+        assertEquals(Map.of("company", 3L, "participant", 5L), first.get("destinations"));
         assertQualityCounts(first, 5, 4, 1);
         assertEquals(List.of(student, campus, employee, both), list("participant", "clean", 1, 10, null).get("items"));
         assertEquals(List.of(unnamed), list("participant", "dirty", 1, 10, null).get("items"));
         assertEquals(List.of(corporate), list("company", "clean", 1, 10, null).get("items"));
-        assertEquals(List.of(legacyGmail, both, noEmail), list("company", "dirty", 1, 10, null).get("items"));
-        assertEquals(Map.of("all", 4L, "clean", 1L, "dirty", 3L), list("company", "all", 1, 10, null).get("summary"));
+        assertEquals(List.of(legacyGmail, noEmail), list("company", "dirty", 1, 10, null).get("items"));
+        assertEquals(Map.of("all", 3L, "clean", 1L, "dirty", 2L), list("company", "all", 1, 10, null).get("summary"));
         assertEquals(8, list(null, "all", 1, 10, null).get("total"));
-        assertQualityCounts(list(null, "all", 1, 10, null), 8, 4, 4);
+        assertQualityCounts(list(null, "all", 1, 10, null), 8, 5, 3);
         Map<?, ?> searched = list("participant", "all", 1, 10, "Campus");
-        assertEquals(List.of(campus, both), searched.get("items"));
+        assertEquals(List.of(campus), searched.get("items"));
         assertEquals(first.get("summary"), searched.get("summary"));
         assertEquals(first.get("destinations"), searched.get("destinations"));
-        assertQualityCounts(searched, 2, 2, 0);
+        assertQualityCounts(searched, 1, 1, 0);
         assertEquals(List.of(student, campus, employee, unnamed, both), exported("participant", "all"));
         assertEquals(List.of(student, campus, employee, both), exported("participant", "clean"));
-        assertEquals(List.of(corporate, legacyGmail, both, noEmail), exported("company", "all"));
+        assertEquals(List.of(corporate, legacyGmail, noEmail), exported("company", "all"));
         Map<?, ?> options = (Map<?, ?>) controller.getDatabaseFilterOptions(
                 null, null, null, null, null, null, null, "all", "participant", "test").getBody();
-        assertEquals(List.of("Education"), options.get("industries"));
-        assertEquals(List.of(Map.of("id", 20L, "name", "Example School")), options.get("companies"));
+        assertEquals(List.of(), options.get("industries"));
+        assertEquals(List.of(), options.get("companies"));
         verify(databases, never()).save(any());
     }
 
     @Test void ordinaryEditsPreserveMembershipAndParticipantMetadataOnlyChangesExplicitly() {
         Database contact = participant(42, "Before", "student@campus.ac.id");
-        contact.setDatabaseDestination(DatabaseDestination.BOTH);
+        contact.setDatabaseDestination(DatabaseDestination.PARTICIPANT);
         contact.setInstitutionName("Example School");
         contact.setParticipantCategory("mahasiswa");
         when(databases.findById(42L)).thenReturn(Optional.of(contact));
         assertEquals(200, controller.updateDatabase(42L, Database.builder().firstName("After").build(),
                 null, null, false, "test").getStatusCode().value());
-        assertEquals(DatabaseDestination.BOTH, contact.getDatabaseDestination());
+        assertEquals(DatabaseDestination.PARTICIPANT, contact.getDatabaseDestination());
         assertEquals("Example School", contact.getInstitutionName());
         assertEquals("mahasiswa", contact.getParticipantCategory());
         assertEquals(400, controller.updateDatabase(42L, Database.builder().firstName("Rejected")
@@ -152,7 +154,7 @@ class DatabaseEmailCategoryTest {
                 .participantCategory("umum").build(), null, null, false, "test").getStatusCode().value());
         assertEquals("", contact.getInstitutionName());
         assertEquals("umum", contact.getParticipantCategory());
-        assertEquals(DatabaseDestination.BOTH, contact.getDatabaseDestination());
+        assertEquals(DatabaseDestination.PARTICIPANT, contact.getDatabaseDestination());
     }
 
     @Test void campusAndCompanyEmailAreAcceptedForParticipantsButPublicCompanyAddressIsRejectedInCompanyDestination() {
@@ -175,6 +177,18 @@ class DatabaseEmailCategoryTest {
         stored.setDatabase(participant);
         assertEquals(200, controller.updateDatabaseEmail(2L, 11L, email("changed@campus.ac.id", false), "test").getStatusCode().value());
         assertEquals(DatabaseDestination.PARTICIPANT, participant.getDatabaseDestination());
+    }
+
+    @Test void emailOwnershipAndDeleteIdsCannotCrossTheSelectedDatabase() {
+        Database company=corporate(1); Database participant=participant(2,"Student","old@campus.ac.id");
+        DatabaseEmail known=email("same@gmail.com",false);known.setId(11L);known.setDatabase(company);
+        when(databases.findById(1L)).thenReturn(Optional.of(company));when(databases.findById(2L)).thenReturn(Optional.of(participant));
+        when(emails.findAllByEmailIgnoreCase("same@gmail.com")).thenReturn(List.of(known));when(emails.findById(11L)).thenReturn(Optional.of(known));
+        assertEquals(200, controller.addDatabaseEmail(2L,email("same@gmail.com",false),"test").getStatusCode().value());
+        assertSame(company, known.getDatabase()); assertEquals(404, controller.deleteDatabaseEmail(2L,11L,"test").getStatusCode().value());
+        DatabaseEmail supplied=email("new@gmail.com",false);supplied.setId(11L);
+        assertEquals(400, controller.addDatabaseEmail(2L,supplied,"test").getStatusCode().value());
+        verify(emails,never()).deleteById(anyLong());
     }
 
     private Map<?, ?> list(String destination, String tab, int page, int size, String search) {

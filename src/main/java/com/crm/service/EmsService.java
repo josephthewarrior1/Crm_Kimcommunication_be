@@ -221,8 +221,11 @@ public class EmsService {
         Object raw = getEventParticipants(event.getEmsEventId(), event.getEmsSource());
         if (raw instanceof Map && ((Map) raw).get("data") instanceof List) raw = ((Map) raw).get("data");
         if (!(raw instanceof List)) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Data peserta EMS tidak valid.");
-        List<Database> contacts = databaseRepository.findAll();
-        List<EventParticipant> participants = eventParticipantRepository.findByEventId(event.getId());
+        List<Database> contacts = databaseRepository.findAll().stream()
+                .filter(contact -> DatabaseDestination.effective(contact.getDatabaseDestination()) == destination).toList();
+        List<EventParticipant> participants = eventParticipantRepository.findByEventId(event.getId()).stream()
+                .filter(participant -> participant.getDatabase() != null
+                        && DatabaseDestination.effective(participant.getDatabase().getDatabaseDestination()) == destination).toList();
         Map<String, Database> matches = new HashMap<>();
         List<Map> accepted = new ArrayList<>();
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -378,7 +381,9 @@ public class EmsService {
     private int applyParticipants(Event event, SyncPlan plan) {
         List list = plan.accepted();
         Map<String, Database> matchedContacts = new HashMap<>(plan.matches());
-        List<EventParticipant> currentEventParticipants = new ArrayList<>(eventParticipantRepository.findByEventId(event.getId()));
+        List<EventParticipant> currentEventParticipants = new ArrayList<>(eventParticipantRepository.findByEventId(event.getId()).stream()
+                .filter(participant -> participant.getDatabase() != null
+                        && DatabaseDestination.effective(participant.getDatabase().getDatabaseDestination()) == event.getSyncDestination()).toList());
         int syncedCount = 0;
 
         for (Object itemObj : list) {
@@ -424,7 +429,6 @@ public class EmsService {
                 database = databaseRepository.save(database);
                 matchedContacts.put(contactKey, database);
             } else if (participantDestination) {
-                database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(DatabaseDestination.PARTICIPANT));
                 if (isBlank(database.getFirstName()) && !isBlank(firstName)) database.setFirstName(firstName);
                 if (isBlank(database.getLastName()) && !isBlank(lastName)) database.setLastName(lastName);
                 if (isBlank(database.getInstitutionName()) && !isBlank(companyName)) database.setInstitutionName(companyName);
@@ -434,8 +438,7 @@ public class EmsService {
                 }
                 databaseRepository.save(database);
             } else {
-                boolean changed = !DatabaseDestination.effective(database.getDatabaseDestination()).includesCompany();
-                if (changed) database.setDatabaseDestination(DatabaseDestination.BOTH);
+                boolean changed = false;
                 if (isBlank(database.getFirstName()) && !isBlank(firstName)) { database.setFirstName(firstName); changed = true; }
                 changed |= hydrateDatabaseFromEms(database, company, salutation, lastName, phone, jobTitle, profile);
                 if (changed) databaseRepository.save(database);

@@ -121,34 +121,46 @@ class PersonalEmailImportTest {
         verify(databases, never()).save(any());
     }
 
-    @Test void participantImportPreservesExistingCompanyBranchProfessionalFieldsAndEmailOwnership() throws Exception {
+    @Test void participantImportCreatesSeparateProfilePreservingCompanyBranchAndEmailOwnership() throws Exception {
         var company = Company.builder().id(10L).name("Example PT").industry("Technology").build();
         var branch = CompanyBranch.builder().id(20L).companyId(10L).name("Jakarta").address("Original").build();
         var existing = person(1L, "Nadia", "nadia@company.example", true);
+        existing.setDatabaseDestination(DatabaseDestination.COMPANY);
+        existing.setMobilePhone("081200001111, 081300002222");
         existing.setCompany(company); existing.setBranch(branch); existing.setJobTitle("Director"); saved.add(existing);
         var row = personal("Nadia", "nadia@company.example", 14); row[3] = "Campus participant institution"; row[9] = "Student";
+        row[12] = "081200001111, 081300002222";
         var upload = file(row);
-        assertEquals(1, preview(upload).getDuplicateCount());
-        assertEquals(1, imported(upload).get("updatedCount"));
+        assertEquals(1, preview(upload).getNewCount());
+        assertEquals(1, imported(upload).get("newCount"));
         assertSame(company, existing.getCompany()); assertSame(branch, existing.getBranch());
         assertEquals("Director", existing.getJobTitle()); assertEquals("Technology", company.getIndustry());
-        assertEquals(DatabaseDestination.BOTH, existing.getDatabaseDestination());
-        assertEquals("Campus participant institution", existing.getInstitutionName());
+        assertEquals(DatabaseDestination.COMPANY, existing.getDatabaseDestination()); assertNull(existing.getInstitutionName());
         assertTrue(existing.getEmails().get(0).getIsCorporate());
+        Database participant = saved.get(1);
+        assertNotEquals(existing.getId(), participant.getId());
+        assertEquals(DatabaseDestination.PARTICIPANT, participant.getDatabaseDestination());
+        assertNull(participant.getCompany()); assertNull(participant.getBranch());
+        assertEquals("Campus participant institution", participant.getInstitutionName());
+        assertEquals("081200001111, 081300002222", participant.getMobilePhone());
+        assertFalse(participant.getEmails().get(0).getIsCorporate());
         assertEquals(0, imported(upload).get("newCount"));
-        assertEquals(1, saved.size()); verify(companies, never()).save(any()); verify(branches, never()).save(any());
+        assertEquals(2, saved.size()); verify(companies, never()).save(any()); verify(branches, never()).save(any());
     }
 
-    @Test void explicitCompanyImportAddsMembershipToTheConfirmedParticipantIdentity() throws Exception {
+    @Test void explicitCompanyImportCreatesSeparateProfileWithoutChangingParticipant() throws Exception {
         var company = Company.builder().id(10L).name("Example PT").build();
         when(companies.findAll()).thenReturn(List.of(company)); when(companies.save(any())).thenAnswer(call -> call.getArgument(0));
-        var existing = person(1L, "Nadia", "nadia@company.example", true);
-        existing.setDatabaseDestination(DatabaseDestination.PARTICIPANT); existing.setLastName("Person"); existing.setCompany(company); saved.add(existing);
+        var existing = person(1L, "Nadia", "nadia@company.example", false);
+        existing.setLastName("Person"); existing.setInstitutionName("Original Campus"); saved.add(existing);
         var upload = file(corporate("Nadia", "nadia@company.example"));
         var result = (ExcelImportController.ImportPreviewResponse) controller.previewImport(upload, "company").getBody();
-        assertEquals(0, result.getConflictCount());
+        assertEquals(0, result.getConflictCount()); assertEquals(1, result.getNewCount());
         assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value());
-        assertEquals(DatabaseDestination.BOTH, existing.getDatabaseDestination()); assertEquals(1, saved.size());
+        assertEquals(DatabaseDestination.PARTICIPANT, existing.getDatabaseDestination()); assertEquals(2, saved.size());
+        assertNull(existing.getCompany()); assertEquals("Original Campus", existing.getInstitutionName());
+        assertEquals(DatabaseDestination.COMPANY, saved.get(1).getDatabaseDestination()); assertSame(company, saved.get(1).getCompany());
+        assertNotEquals(existing.getId(), saved.get(1).getId());
     }
 
     @Test void simpleParticipantTemplateKeepsCategoryAndInstitutionWithoutFabricatedCompany() throws Exception {
@@ -176,49 +188,54 @@ class PersonalEmailImportTest {
         verify(databases, never()).save(any());
     }
 
-    @Test void explicitCompanyImportReusesParticipantWithCampusOrWorkEmailWithoutDuplicatingProfile() throws Exception {
+    @Test void explicitCompanyImportKeepsCampusAndWorkParticipantProfilesSeparateAndRepeatsReuseCompany() throws Exception {
         when(companies.save(any())).thenAnswer(call -> { Company company = call.getArgument(0); if (company.getId() == null) company.setId(55L); return company; });
         for (String domain : List.of("campus.ac.id", "company.example")) {
             saved.clear(); String address = "nadia@" + domain;
             Database existing = person(1L, "Nadia", address, false);
-            existing.setLastName("Person"); existing.setDatabaseDestination(DatabaseDestination.PARTICIPANT);
-            existing.setInstitutionName("Original Campus"); saved.add(existing);
+            existing.setLastName("Person"); existing.setInstitutionName("Original Campus"); saved.add(existing);
             var upload = file(corporate("Nadia", address));
             var result = (ExcelImportController.ImportPreviewResponse) controller.previewImport(upload, "company").getBody();
-            assertEquals(0, result.getConflictCount(), domain); assertEquals(1L, result.getRows().get(0).getExistingDatabaseId(), domain);
+            assertEquals(0, result.getConflictCount(), domain); assertNull(result.getRows().get(0).getExistingDatabaseId(), domain);
             assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value(), domain);
-            assertEquals(1, saved.size()); assertNotNull(existing.getCompany());
-            assertEquals(DatabaseDestination.BOTH, existing.getDatabaseDestination()); assertEquals("Original Campus", existing.getInstitutionName());
+            assertEquals(2, saved.size()); assertNull(existing.getCompany());
+            assertEquals(DatabaseDestination.PARTICIPANT, existing.getDatabaseDestination()); assertEquals("Original Campus", existing.getInstitutionName());
+            assertEquals(DatabaseDestination.COMPANY, saved.get(1).getDatabaseDestination()); assertNotNull(saved.get(1).getCompany());
+            assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value(), domain);
+            assertEquals(2, saved.size());
         }
     }
 
-    @Test void ambiguousParticipantEmailOwnerRejectsCompanyImportBeforeAnyWrites() throws Exception {
+    @Test void ambiguousOppositeParticipantEmailOwnersDoNotBlockCompanyImport() throws Exception {
+        when(companies.save(any())).thenAnswer(call -> { Company company = call.getArgument(0); if (company.getId() == null) company.setId(55L); return company; });
         for (long id : List.of(1L, 2L)) {
-            Database existing = person(id, "Nadia", "nadia@campus.ac.id", id == 1L);
-            existing.setLastName("Person"); existing.setDatabaseDestination(DatabaseDestination.PARTICIPANT); saved.add(existing);
+            Database existing = person(id, id == 1 ? "Other" : "Another", "nadia@campus.ac.id", id == 1L);
+            existing.setLastName("Person"); existing.setMobilePhone("08123456789"); saved.add(existing);
         }
         var upload = file(corporate("Nadia", "nadia@campus.ac.id"));
         var result = (ExcelImportController.ImportPreviewResponse) controller.previewImport(upload, "company").getBody();
-        assertEquals(1, result.getConflictCount());
-        assertTrue(result.getRows().get(0).getMessage().contains("ambigu"));
-        assertEquals(400, controller.importDatabases(upload, "company", "test").getStatusCode().value());
-        verify(databases, never()).save(any()); verify(companies, never()).save(any());
+        assertEquals(0, result.getConflictCount()); assertEquals(1, result.getNewCount());
+        assertEquals(200, controller.importDatabases(upload, "company", "test").getStatusCode().value());
+        assertEquals(3, saved.size());
+        assertTrue(saved.subList(0, 2).stream().allMatch(profile -> profile.getDatabaseDestination() == DatabaseDestination.PARTICIPANT));
+        assertEquals(DatabaseDestination.COMPANY, saved.get(2).getDatabaseDestination());
     }
 
-    @Test void fullParticipantTemplateReusesEmailOwnerDespiteDifferentCompanySpelling() throws Exception {
+    @Test void fullParticipantTemplateCreatesSeparateProfileDespiteSharedEmailAndCompanySpelling() throws Exception {
         for (String domain : List.of("campus.ac.id", "company.example")) {
             saved.clear();
             String address = "nadia@" + domain;
             Company originalCompany = Company.builder().id(30L).name("Original Institute, PT").industry("Education").build();
             Database existing = person(1L, "Nadia", address, false);
+            existing.setDatabaseDestination(DatabaseDestination.COMPANY);
             existing.setLastName("Person"); existing.setCompany(originalCompany); saved.add(existing);
-            var upload = file(corporate("Nadia", address)); // Incoming Company Name is Example PT.
-            assertEquals(1L, preview(upload).getRows().get(0).getExistingDatabaseId());
-            assertEquals(1, imported(upload).get("updatedCount"));
-            assertEquals(1, saved.size()); assertSame(originalCompany, existing.getCompany());
-            assertEquals(DatabaseDestination.BOTH, existing.getDatabaseDestination());
-            assertEquals("Example PT", existing.getInstitutionName());
-            assertEquals(0, imported(upload).get("newCount"));
+            var upload = file(corporate("Nadia", address));
+            assertNull(preview(upload).getRows().get(0).getExistingDatabaseId());
+            assertEquals(1, imported(upload).get("newCount"));
+            assertEquals(2, saved.size()); assertSame(originalCompany, existing.getCompany());
+            assertEquals(DatabaseDestination.COMPANY, existing.getDatabaseDestination()); assertNull(existing.getInstitutionName());
+            assertNull(saved.get(1).getCompany()); assertEquals("Example PT", saved.get(1).getInstitutionName());
+            assertEquals(0, imported(upload).get("newCount")); assertEquals(2, saved.size());
         }
         verify(companies, never()).save(any()); verify(groups, never()).save(any()); verify(branches, never()).save(any());
     }
@@ -244,7 +261,7 @@ class PersonalEmailImportTest {
     }
 
     private static Database person(long id, String firstName, String address, boolean corporate) {
-        Database contact = Database.builder().id(id).firstName(firstName).isActive(true).emails(new ArrayList<>()).build();
+        Database contact = Database.builder().id(id).firstName(firstName).databaseDestination(DatabaseDestination.PARTICIPANT).isActive(true).emails(new ArrayList<>()).build();
         contact.getEmails().add(DatabaseEmail.builder().database(contact).email(address)
                 .emailType(corporate ? "company" : "personal").isCorporate(corporate).isPrimary(true).build());
         return contact;

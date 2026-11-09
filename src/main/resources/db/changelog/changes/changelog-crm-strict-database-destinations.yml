@@ -1,0 +1,89 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-strict-database-destinations-20261109
+      author: codex
+      changes:
+        - sql:
+            dbms: postgresql
+            splitStatements: false
+            sql: |
+              -- Preserve Company IDs and the provenance of every legacy shared-profile split.
+              CREATE TABLE database_destination_splits (
+                company_database_id BIGINT PRIMARY KEY,
+                participant_database_id BIGINT NOT NULL UNIQUE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+              COMMENT ON TABLE database_destination_splits IS 'Legacy BOTH split provenance. IDs intentionally have no FK so later profile deletion does not erase history.';
+              ALTER TABLE database_emails ADD COLUMN database_destination VARCHAR(16);
+              DROP INDEX IF EXISTS unique_personal_email_lower;
+              CREATE TEMP TABLE crm_destination_flag_copies (original_id BIGINT PRIMARY KEY, participant_id BIGINT NOT NULL UNIQUE) ON COMMIT DROP;
+              DO $$
+              DECLARE original RECORD; participant_id BIGINT; original_flag RECORD; copied_flag_id BIGINT;
+              BEGIN
+                FOR original IN SELECT d.*, c.name AS original_company_name FROM databases d LEFT JOIN companies c ON c.id=d.company_id
+                    WHERE d.database_destination='BOTH' ORDER BY d.id LOOP
+                  INSERT INTO databases(company_id,branch_id,salutation,first_name,last_name,position_level,speciality_division,job_title,
+                    mobile_phone,normalized_phone,linkedin_url,database_type,source,created_by_user_id,entry_method,is_active,created_at,updated_at,
+                    database_destination,institution_name,participant_category)
+                  VALUES(NULL,NULL,original.salutation,original.first_name,original.last_name,original.position_level,original.speciality_division,original.job_title,
+                    original.mobile_phone,original.normalized_phone,original.linkedin_url,original.database_type,original.source,original.created_by_user_id,
+                    original.entry_method,original.is_active,original.created_at,original.updated_at,'PARTICIPANT',
+                    COALESCE(NULLIF(BTRIM(original.institution_name),''),original.original_company_name),original.participant_category)
+                  RETURNING id INTO participant_id;
+                  INSERT INTO database_destination_splits(company_database_id,participant_database_id) VALUES(original.id,participant_id);
+                  INSERT INTO database_emails(database_id,email,email_type,is_primary,is_verified,is_corporate,domain,created_at,database_destination)
+                    SELECT participant_id,email,email_type,is_primary,is_verified,is_corporate,domain,created_at,'PARTICIPANT'
+                    FROM database_emails WHERE database_id=original.id;
+                  FOR original_flag IN SELECT * FROM flagged_identities WHERE database_id=original.id ORDER BY id LOOP
+                    INSERT INTO flagged_identities(database_id,event_id,name_used,email_used,phone_used,flag_reason,linked_flag_id,evidence_notes,status,created_at,updated_at)
+                      VALUES(participant_id,original_flag.event_id,original_flag.name_used,original_flag.email_used,original_flag.phone_used,
+                        original_flag.flag_reason,NULL,original_flag.evidence_notes,original_flag.status,original_flag.created_at,original_flag.updated_at)
+                      RETURNING id INTO copied_flag_id;
+                    INSERT INTO crm_destination_flag_copies(original_id,participant_id) VALUES(original_flag.id,copied_flag_id);
+                  END LOOP;
+                  INSERT INTO removal_requests(database_id,reason,requested_by,request_date,source_db,notes,status,created_at)
+                    SELECT participant_id,reason,requested_by,request_date,source_db,notes,status,created_at FROM removal_requests WHERE database_id=original.id;
+                  UPDATE event_participants ep SET database_id=participant_id FROM events e
+                    WHERE ep.event_id=e.id AND e.sync_destination='PARTICIPANT' AND ep.database_id=original.id;
+                END LOOP;
+              END $$;
+              UPDATE flagged_identities copied SET linked_flag_id=linked.participant_id
+                FROM crm_destination_flag_copies own, flagged_identities original, crm_destination_flag_copies linked
+                WHERE copied.id=own.participant_id AND original.id=own.original_id AND original.linked_flag_id=linked.original_id;
+              UPDATE databases SET database_destination='COMPANY' WHERE database_destination='BOTH';
+              -- Old optional Participant company links become local institution text, without changing a master.
+              UPDATE databases d SET institution_name=COALESCE(NULLIF(BTRIM(d.institution_name),''),c.name),company_id=NULL,branch_id=NULL
+                FROM companies c WHERE d.database_destination='PARTICIPANT' AND d.company_id=c.id;
+              UPDATE databases SET branch_id=NULL WHERE database_destination='PARTICIPANT' AND branch_id IS NOT NULL;
+              UPDATE database_emails e SET database_destination=d.database_destination FROM databases d WHERE d.id=e.database_id;
+              ALTER TABLE databases ADD CONSTRAINT chk_database_destination_exact CHECK (database_destination IN ('COMPANY','PARTICIPANT'));
+              ALTER TABLE databases ADD CONSTRAINT chk_participant_detached_company CHECK (database_destination<>'PARTICIPANT' OR (company_id IS NULL AND branch_id IS NULL));
+              ALTER TABLE database_emails ALTER COLUMN database_destination SET NOT NULL;
+              ALTER TABLE database_emails ADD CONSTRAINT chk_email_destination_exact CHECK (database_destination IN ('COMPANY','PARTICIPANT'));
+              CREATE UNIQUE INDEX unique_personal_email_destination_lower ON database_emails(database_destination,LOWER(email))
+                WHERE LOWER(COALESCE(email_type,''))='personal';
+              CREATE FUNCTION crm_guard_database_destination() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+              BEGIN
+                IF NEW.database_destination IS DISTINCT FROM OLD.database_destination THEN
+                  RAISE EXCEPTION 'Database destination is immutable; create a separate profile' USING ERRCODE='23514';
+                END IF;
+                RETURN NEW;
+              END $$;
+              CREATE TRIGGER crm_database_destination_immutable BEFORE UPDATE OF database_destination ON databases
+                FOR EACH ROW EXECUTE FUNCTION crm_guard_database_destination();
+              CREATE FUNCTION crm_guard_email_destination() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+              DECLARE parent_destination VARCHAR(16);
+              BEGIN
+                SELECT database_destination INTO parent_destination FROM databases WHERE id=NEW.database_id;
+                IF parent_destination IS NULL THEN RAISE EXCEPTION 'Email profile not found' USING ERRCODE='23503'; END IF;
+                IF NEW.database_destination IS NOT NULL AND NEW.database_destination<>parent_destination THEN
+                  RAISE EXCEPTION 'Email destination must match its profile' USING ERRCODE='23514';
+                END IF;
+                IF TG_OP='UPDATE' AND OLD.database_destination<>parent_destination THEN
+                  RAISE EXCEPTION 'Emails cannot move between databases' USING ERRCODE='23514';
+                END IF;
+                NEW.database_destination=parent_destination;
+                RETURN NEW;
+              END $$;
+              CREATE TRIGGER crm_email_destination_scope BEFORE INSERT OR UPDATE ON database_emails
+                FOR EACH ROW EXECUTE FUNCTION crm_guard_email_destination();

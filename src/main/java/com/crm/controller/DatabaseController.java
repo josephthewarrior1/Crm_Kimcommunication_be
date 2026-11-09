@@ -351,6 +351,21 @@ public class DatabaseController {
         }
         String metadataError = participantMetadataError(database);
         if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
+        if (selected == DatabaseDestination.PARTICIPANT) {
+            String organizationError = participantOrganizationError(database);
+            if (organizationError != null) return ResponseEntity.badRequest().body(organizationError);
+        } else {
+            database.setOrganizationGroupName(null);
+            database.setOrganizationBrandName(null);
+            database.setOrganizationAddress(null);
+            database.setOrganizationOfficePhone(null);
+            database.setOrganizationIndustry(null);
+            database.setOrganizationSizeRevenue(null);
+            database.setOrganizationSizeEmployee(null);
+            database.setOrganizationBranchName(null);
+            database.setOrganizationPostalCode(null);
+            database.setOrganizationWebsite(null);
+        }
         database.setCompany(company);
         database.setBranch(branch);
         if (database.getDatabaseDestination() == DatabaseDestination.PARTICIPANT) {
@@ -441,6 +456,7 @@ public class DatabaseController {
                     .domain(requestedEmail.getKey().substring(requestedEmail.getKey().indexOf('@') + 1)).build());
             primaryPersonal = true;
         }
+        copyParticipantOrganization(incoming, target, reuse);
         if (!isBlank(incoming.getFirstName())) target.setFirstName(incoming.getFirstName());
         if (!isBlank(incoming.getLastName())) target.setLastName(incoming.getLastName());
         if (!mergedPhone.isBlank()) { target.setMobilePhone(mergedPhone); target.setNormalizedPhone(ContactPhone.primary(mergedPhone)); }
@@ -512,9 +528,13 @@ public class DatabaseController {
             }
             String metadataError = participantMetadataError(databaseDetails);
             if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
+            if (kind == DatabaseDestination.PARTICIPANT) {
+                String organizationError = participantOrganizationError(databaseDetails);
+                if (organizationError != null) return ResponseEntity.badRequest().body(organizationError);
+            }
             // Validate the complete assignment before touching this managed contact.
             existing.setCompany(company);
-
+            if (kind == DatabaseDestination.PARTICIPANT) copyParticipantOrganization(databaseDetails, existing, false);
             if (databaseDetails.getInstitutionName() != null) existing.setInstitutionName(databaseDetails.getInstitutionName().trim());
             if (databaseDetails.getParticipantCategory() != null) existing.setParticipantCategory(databaseDetails.getParticipantCategory().trim());
             if (clearBranch || branchId != null) existing.setBranch(branch);
@@ -729,6 +749,31 @@ public class DatabaseController {
         return ResponseEntity.noContent().build();
     }
 
+    private String participantOrganizationError(Database database) {
+        if (database.getOrganizationGroupName() != null && database.getOrganizationGroupName().codePointCount(0, database.getOrganizationGroupName().length()) > 255) return "Nama Group/Holding Company maksimal 255 karakter.";
+        if (database.getOrganizationBrandName() != null && database.getOrganizationBrandName().codePointCount(0, database.getOrganizationBrandName().length()) > 255) return "Nama Brand maksimal 255 karakter.";
+        if (database.getOrganizationOfficePhone() != null && database.getOrganizationOfficePhone().codePointCount(0, database.getOrganizationOfficePhone().length()) > 50) return "Office Phone maksimal 50 karakter.";
+        if (database.getOrganizationIndustry() != null && database.getOrganizationIndustry().codePointCount(0, database.getOrganizationIndustry().length()) > 100) return "Industry maksimal 100 karakter.";
+        if (database.getOrganizationSizeRevenue() != null && database.getOrganizationSizeRevenue().codePointCount(0, database.getOrganizationSizeRevenue().length()) > 100) return "Company Size (Revenue) maksimal 100 karakter.";
+        if (database.getOrganizationSizeEmployee() != null && database.getOrganizationSizeEmployee().codePointCount(0, database.getOrganizationSizeEmployee().length()) > 100) return "Company Size (Employee) maksimal 100 karakter.";
+        if (database.getOrganizationBranchName() != null && database.getOrganizationBranchName().codePointCount(0, database.getOrganizationBranchName().length()) > 255) return "Cabang/Kantor maksimal 255 karakter.";
+        if (database.getOrganizationPostalCode() != null && database.getOrganizationPostalCode().codePointCount(0, database.getOrganizationPostalCode().length()) > 20) return "Postal Code maksimal 20 karakter.";
+        return null;
+    }
+
+    private void copyParticipantOrganization(Database incoming, Database target, boolean fillBlanksOnly) {
+        if (incoming.getOrganizationGroupName() != null && (!fillBlanksOnly || isBlank(target.getOrganizationGroupName()))) target.setOrganizationGroupName(incoming.getOrganizationGroupName().trim());
+        if (incoming.getOrganizationBrandName() != null && (!fillBlanksOnly || isBlank(target.getOrganizationBrandName()))) target.setOrganizationBrandName(incoming.getOrganizationBrandName().trim());
+        if (incoming.getOrganizationAddress() != null && (!fillBlanksOnly || isBlank(target.getOrganizationAddress()))) target.setOrganizationAddress(incoming.getOrganizationAddress().trim());
+        if (incoming.getOrganizationOfficePhone() != null && (!fillBlanksOnly || isBlank(target.getOrganizationOfficePhone()))) target.setOrganizationOfficePhone(incoming.getOrganizationOfficePhone().trim());
+        if (incoming.getOrganizationIndustry() != null && (!fillBlanksOnly || isBlank(target.getOrganizationIndustry()))) target.setOrganizationIndustry(incoming.getOrganizationIndustry().trim());
+        if (incoming.getOrganizationSizeRevenue() != null && (!fillBlanksOnly || isBlank(target.getOrganizationSizeRevenue()))) target.setOrganizationSizeRevenue(incoming.getOrganizationSizeRevenue().trim());
+        if (incoming.getOrganizationSizeEmployee() != null && (!fillBlanksOnly || isBlank(target.getOrganizationSizeEmployee()))) target.setOrganizationSizeEmployee(incoming.getOrganizationSizeEmployee().trim());
+        if (incoming.getOrganizationBranchName() != null && (!fillBlanksOnly || isBlank(target.getOrganizationBranchName()))) target.setOrganizationBranchName(incoming.getOrganizationBranchName().trim());
+        if (incoming.getOrganizationPostalCode() != null && (!fillBlanksOnly || isBlank(target.getOrganizationPostalCode()))) target.setOrganizationPostalCode(incoming.getOrganizationPostalCode().trim());
+        if (incoming.getOrganizationWebsite() != null && (!fillBlanksOnly || isBlank(target.getOrganizationWebsite()))) target.setOrganizationWebsite(incoming.getOrganizationWebsite().trim());
+    }
+
     private String participantMetadataError(Database database) {
         if (database.getInstitutionName() != null && database.getInstitutionName().codePointCount(0, database.getInstitutionName().length()) > 255) {
             return "Nama sekolah/kampus/instansi maksimal 255 karakter";
@@ -782,6 +827,16 @@ public class DatabaseController {
                 database.getEmails() == null ? "" : database.getEmails().stream().filter(java.util.Objects::nonNull)
                         .map(address -> safe(address.getEmail())).collect(Collectors.joining(" ")),
                 safe(database.getInstitutionName()), safe(database.getParticipantCategory()),
+                safe(database.getOrganizationGroupName()),
+                safe(database.getOrganizationBrandName()),
+                safe(database.getOrganizationAddress()),
+                safe(database.getOrganizationOfficePhone()),
+                safe(database.getOrganizationIndustry()),
+                safe(database.getOrganizationSizeRevenue()),
+                safe(database.getOrganizationSizeEmployee()),
+                safe(database.getOrganizationBranchName()),
+                safe(database.getOrganizationPostalCode()),
+                safe(database.getOrganizationWebsite()),
                 safe(database.getSource() != null ? database.getSource().name() : null),
                 safe(company != null ? company.getName() : null), safe(company != null ? company.getBrandName() : null),
                 safe(company != null && company.getGroup() != null ? company.getGroup().getName() : null),
@@ -855,15 +910,16 @@ public class DatabaseController {
     }
 
     private String getSortString(Database database, String field) {
+        boolean participant = DatabaseDestination.isExact(database.getDatabaseDestination(), DatabaseDestination.PARTICIPANT);
         return switch (field) {
             case "firstName" -> safe(database.getFirstName()).toLowerCase(Locale.ROOT);
             case "lastName" -> safe(database.getLastName()).toLowerCase(Locale.ROOT);
-            case "companyName" -> safe(database.getCompany() != null ? database.getCompany().getName() : null).toLowerCase(Locale.ROOT);
-            case "groupName" -> safe(database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null).toLowerCase(Locale.ROOT);
-            case "brandName" -> safe(database.getCompany() != null ? database.getCompany().getBrandName() : null).toLowerCase(Locale.ROOT);
+            case "companyName", "institutionName" -> safe(participant ? database.getInstitutionName() : database.getCompany() != null ? database.getCompany().getName() : null).toLowerCase(Locale.ROOT);
+            case "groupName", "organizationGroupName" -> safe(participant ? database.getOrganizationGroupName() : database.getCompany() != null && database.getCompany().getGroup() != null ? database.getCompany().getGroup().getName() : null).toLowerCase(Locale.ROOT);
+            case "brandName", "organizationBrandName" -> safe(participant ? database.getOrganizationBrandName() : database.getCompany() != null ? database.getCompany().getBrandName() : null).toLowerCase(Locale.ROOT);
             case "jobTitle" -> safe(database.getJobTitle()).toLowerCase(Locale.ROOT);
             case "position" -> safe(database.getPositionLevel() != null ? database.getPositionLevel().getValue() : null).toLowerCase(Locale.ROOT);
-            case "industry" -> safe(database.getCompany() != null ? database.getCompany().getIndustry() : null).toLowerCase(Locale.ROOT);
+            case "industry", "organizationIndustry" -> safe(participant ? database.getOrganizationIndustry() : database.getCompany() != null ? database.getCompany().getIndustry() : null).toLowerCase(Locale.ROOT);
             case "city" -> safe(contactCity(database)).toLowerCase(Locale.ROOT);
             default -> String.valueOf(database.getId() == null ? 0L : database.getId());
         };
@@ -875,7 +931,8 @@ public class DatabaseController {
         Map<String, String> labels = new LinkedHashMap<>();
         for (Database database : databases) {
             if (isIncompleteForDestination(database, destination)) dirty++;
-            String label = industryFilterLabel(database.getCompany() != null ? database.getCompany().getIndustry() : null);
+            String label = industryFilterLabel(DatabaseDestination.isExact(database.getDatabaseDestination(), DatabaseDestination.PARTICIPANT)
+                    ? database.getOrganizationIndustry() : database.getCompany() != null ? database.getCompany().getIndustry() : null);
             if (label.isBlank()) label = "Belum diisi";
             String key = label.toLowerCase(Locale.ROOT);
             if (key.equals("lainnya")) label = "Lainnya";

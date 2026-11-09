@@ -319,6 +319,32 @@ class EventImportDestinationTest {
         assertEquals(1, contacts.size()); assertEquals(1, attendance.size());
     }
 
+    @Test void student20EventImportStoresIndependentOrganizationAndProfessionalFields() throws Exception {
+        String[] headers = {"No", "Nama Group/Holding Company", "Nama Brand", "Company Name", "Salutation", "First Name", "Last Name", "Position", "Division", "Jobtitle",
+                "Address", "Office Phone", "Mobile Phone", "Personal Email Address", "Industry", "Company Size (Revenue)", "Company Size (Employee)", "Cabang/Kantor", "Postal Code", "Company Website"};
+        String[] values = {"1", "Campus Holding", "Campus Brand", "Campus Institute", "Ms", "Alex", "Student", "Staff", "Student Services", "Coordinator",
+                "Campus Address", "021-111 ext 7", "081200001111, 081300002222", "alex@campus.ac.id", "Education", "Revenue band", "Employee band", "Central Campus", "12345", "https://campus.invalid"};
+        var upload = file(headers, values);
+        assertEquals("valid", previewRow(upload, "participant").get("status"));
+        assertEquals(200, controller.importEventParticipants(1L, upload, "request", "participant", "test").getStatusCode().value());
+        Database contact = contacts.get(0);
+        assertEquals("Campus Institute", contact.getInstitutionName()); assertEquals("Ms", contact.getSalutation());
+        assertEquals(PositionLevel.STAFF, contact.getPositionLevel()); assertEquals("Student Services", contact.getSpecialityDivision());
+        assertEquals("Coordinator", contact.getJobTitle()); assertEquals("Campus Holding", contact.getOrganizationGroupName());
+        assertEquals("Campus Brand", contact.getOrganizationBrandName()); assertEquals("Campus Address", contact.getOrganizationAddress());
+        assertEquals("021-111 ext 7", contact.getOrganizationOfficePhone()); assertEquals("Education", contact.getOrganizationIndustry());
+        assertEquals("Revenue band", contact.getOrganizationSizeRevenue()); assertEquals("Employee band", contact.getOrganizationSizeEmployee());
+        assertEquals("Central Campus", contact.getOrganizationBranchName()); assertEquals("12345", contact.getOrganizationPostalCode());
+        assertEquals("https://campus.invalid", contact.getOrganizationWebsite()); assertNull(contact.getCompany()); assertNull(contact.getBranch());
+        assertEquals("081200001111, 081300002222", contact.getMobilePhone()); assertEquals("personal", contact.getEmails().get(0).getEmailType());
+        String[] update = new String[20]; Arrays.fill(update, ""); update[13] = values[13];
+        assertEquals(200, controller.importEventParticipants(2L, file(headers, update), "request", "participant", "test").getStatusCode().value());
+        assertEquals(1, contacts.size()); assertEquals(2, attendance.size()); assertEquals("Campus Address", contact.getOrganizationAddress());
+        values[18] = "x".repeat(21);
+        assertEquals("error", previewRow(file(headers, values), "participant").get("status"));
+        verify(companies, never()).save(any()); verify(groups, never()).save(any());
+    }
+
     private void typeEvent(long id, DatabaseDestination destination) {
         eventRecords.computeIfAbsent(id, key -> Event.builder().id(key).name("Example event " + key).build()).setSyncDestination(destination);
     }

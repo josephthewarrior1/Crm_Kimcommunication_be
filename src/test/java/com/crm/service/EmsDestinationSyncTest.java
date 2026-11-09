@@ -285,6 +285,48 @@ class EmsDestinationSyncTest {
         verifyNoInteractions(companies);
     }
 
+    @Test void studentSyncPreservesAvailableOrganizationFieldsWithoutMastersAndKeepsStaffValuesOnRepeat() {
+        Map<String,Object> incoming = row("Alex", "Student", "alex@campus.ac.id", "Campus Institute");
+        Map<String,Object> profile = (Map<String,Object>) incoming.get("user_profile");
+        profile.putAll(Map.of("organization_group_name", "Campus Holding", "organization_brand_name", "Campus Brand",
+                "organization_address", "Campus Address", "organization_office_phone", "021-111 ext 7", "organization_industry", "Education",
+                "organization_size_revenue", "Revenue band", "organization_size_employee", "Employee band", "organization_branch_name", "Central Campus",
+                "organization_postal_code", "12345", "organization_website", "https://campus.invalid"));
+        profile.put("job_title", "Coordinator"); profile.put("job_level", "Staff"); profile.put("division", "Student Services");
+        profile.put("registered_salutation", "Ms"); profile.put("phone", "081200001111, 081300002222");
+        doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.PARTICIPANT);
+        apply(event, service.previewParticipantsForEvent(event));
+        Database contact = contacts.get(0);
+        assertEquals("Campus Institute", contact.getInstitutionName()); assertEquals("Ms", contact.getSalutation());
+        assertEquals(PositionLevel.STAFF, contact.getPositionLevel()); assertEquals("Coordinator", contact.getJobTitle());
+        assertEquals("Student Services", contact.getSpecialityDivision()); assertEquals("Campus Holding", contact.getOrganizationGroupName());
+        assertEquals("Campus Brand", contact.getOrganizationBrandName()); assertEquals("Campus Address", contact.getOrganizationAddress());
+        assertEquals("021-111 ext 7", contact.getOrganizationOfficePhone()); assertEquals("Education", contact.getOrganizationIndustry());
+        assertEquals("Revenue band", contact.getOrganizationSizeRevenue()); assertEquals("Employee band", contact.getOrganizationSizeEmployee());
+        assertEquals("Central Campus", contact.getOrganizationBranchName()); assertEquals("12345", contact.getOrganizationPostalCode());
+        assertEquals("https://campus.invalid", contact.getOrganizationWebsite()); assertNull(contact.getCompany()); assertNull(contact.getBranch());
+        assertEquals("081200001111, 081300002222", contact.getMobilePhone());
+        contact.setOrganizationAddress("Staff revised address"); contact.setJobTitle("Staff revised role");
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        contact.setOrganizationBrandName("Staff revised brand");
+        assertEquals(409, assertThrows(ResponseStatusException.class, () -> apply(event, preview)).getStatusCode().value());
+        apply(event, service.previewParticipantsForEvent(event));
+        assertEquals("Staff revised address", contact.getOrganizationAddress()); assertEquals("Staff revised role", contact.getJobTitle());
+        assertEquals("Staff revised brand", contact.getOrganizationBrandName()); assertEquals(1, contacts.size()); assertEquals(1, links.size());
+        verifyNoInteractions(companies);
+    }
+
+    @Test void oversizedStudentOrganizationIsHeldDuringPreviewBeforeAnyWrites() {
+        Map<String,Object> incoming = row("Alex", "Student", "alex@campus.ac.id", "Campus Institute");
+        ((Map<String,Object>)incoming.get("user_profile")).put("office_phone", "x".repeat(51));
+        doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.PARTICIPANT);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(1, preview.get("rejectedCount")); assertEquals(0, apply(event, preview).get("count"));
+        verify(databases, never()).save(any()); verifyNoInteractions(companies);
+    }
+
     private Map<String,Object> apply(Event event,Map<String,Object> preview){return service.syncParticipantsForEvent(event,(String)preview.get("previewToken"));}
     private static Event event(long id,DatabaseDestination destination){return Event.builder().id(id).name("Event "+id).emsEventId(id).emsSource(EmsSource.V2).syncDestination(destination).build();}
     private static Database contact(long id,String first,String last,String email,DatabaseDestination destination){return Database.builder().id(id).firstName(first).lastName(last).databaseDestination(destination).isActive(true).emails(new ArrayList<>(List.of(DatabaseEmail.builder().email(email).build()))).build();}

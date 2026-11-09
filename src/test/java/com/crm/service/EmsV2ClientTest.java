@@ -79,6 +79,29 @@ class EmsV2ClientTest {
     }
 
     @Test
+    void preservesExplicitStudentOrganizationFieldsAndDivisionWithoutInventingMissingValues() throws Exception {
+        setup(true);
+        Map<String,Object> supplied = registration(11L, "ACCEPTED", "Alex Student");
+        form(supplied).putAll(Map.of("group_name", "Campus Holding", "brand_name", "Campus Brand", "company_address", "Campus Address",
+                "office_phone", "021-111 ext 7", "organization_industry", "Education", "company_size_revenue", "Revenue band",
+                "company_size_employee", "Employee band", "branch_name", "Central Campus", "postal_code", "12345", "website", "https://campus.invalid"));
+        form(supplied).put("division", "Student Services");
+        expectGet("/api/events/9/registrations", List.of(supplied, registration(12L, "PENDING", "Missing Data")));
+        expectGet("/api/events/9/attendance", List.of(attendance(11L, "ABSENT", null), attendance(12L, "ABSENT", null)));
+        List<Map<String,Object>> rows = client.getEventParticipants(9L);
+        Map<?,?> profile = (Map<?,?>) rows.get(0).get("user_profile");
+        assertEquals("Student Services", profile.get("division")); assertEquals("Campus Holding", profile.get("organization_group_name"));
+        assertEquals("Campus Brand", profile.get("organization_brand_name")); assertEquals("Campus Address", profile.get("organization_address"));
+        assertEquals("021-111 ext 7", profile.get("organization_office_phone")); assertEquals("Education", profile.get("organization_industry"));
+        assertEquals("Revenue band", profile.get("organization_size_revenue")); assertEquals("Employee band", profile.get("organization_size_employee"));
+        assertEquals("Central Campus", profile.get("organization_branch_name")); assertEquals("12345", profile.get("organization_postal_code"));
+        assertEquals("https://campus.invalid", profile.get("organization_website"));
+        Map<?,?> missing = (Map<?,?>) rows.get(1).get("user_profile");
+        for (Object key : profile.keySet()) if (key.toString().startsWith("organization_") || key.equals("division")) assertFalse(missing.containsKey(key));
+        server.verify();
+    }
+
+    @Test
     void industryUsesTheWinningFieldAndExactOptionValueWithoutGuessing() throws Exception {
         setup(true);
         List<Map<String, Object>> registrations = new ArrayList<>();

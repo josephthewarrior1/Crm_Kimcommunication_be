@@ -1,0 +1,64 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-participant-organization-fields-20261109
+      author: codex
+      changes:
+        - addColumn:
+            tableName: databases
+            columns:
+              - column:
+                  name: organization_group_name
+                  type: VARCHAR(255)
+              - column:
+                  name: organization_brand_name
+                  type: VARCHAR(255)
+              - column:
+                  name: organization_address
+                  type: TEXT
+              - column:
+                  name: organization_office_phone
+                  type: VARCHAR(50)
+              - column:
+                  name: organization_industry
+                  type: VARCHAR(100)
+              - column:
+                  name: organization_size_revenue
+                  type: VARCHAR(100)
+              - column:
+                  name: organization_size_employee
+                  type: VARCHAR(100)
+              - column:
+                  name: organization_branch_name
+                  type: VARCHAR(255)
+              - column:
+                  name: organization_postal_code
+                  type: VARCHAR(20)
+              - column:
+                  name: organization_website
+                  type: TEXT
+        - sql:
+            dbms: postgresql
+            sql: |
+              -- A split proves contact lineage, not that an explicitly different campus is its employer.
+              -- Seed only known same-organization clones. Company profiles and all master rows stay untouched.
+              UPDATE databases participant SET
+                organization_group_name=master_group.name,
+                organization_brand_name=company.brand_name,
+                organization_address=COALESCE(NULLIF(BTRIM(branch.address),''),company.address),
+                organization_office_phone=COALESCE(NULLIF(BTRIM(branch.office_phone),''),company.office_phone),
+                organization_industry=company.industry,
+                organization_size_revenue=company.company_size_revenue,
+                organization_size_employee=company.company_size_employee,
+                organization_branch_name=branch.name,
+                organization_postal_code=COALESCE(NULLIF(BTRIM(branch.postal_code),''),company.postal_code),
+                organization_website=company.website
+              FROM database_destination_splits split
+              JOIN databases original ON original.id=split.company_database_id
+              JOIN companies company ON company.id=original.company_id
+              LEFT JOIN groups master_group ON master_group.id=company.group_id
+              LEFT JOIN company_branches branch ON branch.id=original.branch_id AND branch.company_id=company.id
+              WHERE participant.id=split.participant_database_id AND participant.database_destination='PARTICIPANT'
+                AND original.database_destination='COMPANY'
+                AND (NULLIF(BTRIM(participant.institution_name),'') IS NULL
+                  OR LOWER(REGEXP_REPLACE(REGEXP_REPLACE(BTRIM(participant.institution_name),'[[:space:]]+',' ','g'),'^(pt[.]? )|( pt[.]?)$','','gi'))
+                     = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(BTRIM(company.name),'[[:space:]]+',' ','g'),'^(pt[.]? )|( pt[.]?)$','','gi')));

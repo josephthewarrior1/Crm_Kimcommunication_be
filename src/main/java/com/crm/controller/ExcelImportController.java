@@ -85,8 +85,8 @@ public class ExcelImportController {
             
             Sheet sheet = prepareImportSheet(workbook, participantImport);
             int lastRowNum = sheet.getLastRowNum();
-            List<Company> knownCompanies = new ArrayList<>(companyRepository.findAll());
-            List<CompanyBranch> knownBranches = new ArrayList<>(companyBranchRepository.findAll());
+            List<Company> knownCompanies = participantImport ? List.of() : new ArrayList<>(companyRepository.findAll());
+            List<CompanyBranch> knownBranches = participantImport ? List.of() : new ArrayList<>(companyBranchRepository.findAll());
             
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
@@ -148,6 +148,7 @@ public class ExcelImportController {
                     String category = namedCell(row, "Kategori Peserta");
                     if (!institution.isEmpty()) targetDb.setInstitutionName(institution);
                     if (!category.isEmpty()) targetDb.setParticipantCategory(category.toLowerCase(Locale.ROOT));
+                    applyParticipantFields(targetDb, row, branchName);
                     targetDb = databaseRepository.save(targetDb);
                     Database savedParticipant = targetDb;
                     List<String> newEmails = emailTokens(companyEmail + ";" + personalEmail).stream()
@@ -341,8 +342,8 @@ public class ExcelImportController {
             List<Database> databases = databaseRepository.findAll().stream()
                     .filter(database -> DatabaseDestination.isExact(database.getDatabaseDestination(), DatabaseDestination.fromValue(destination)))
                     .toList();
-            List<Company> knownCompanies = companyRepository.findAll();
-            List<CompanyBranch> knownBranches = companyBranchRepository.findAll();
+            List<Company> knownCompanies = participantImport ? List.of() : companyRepository.findAll();
+            List<CompanyBranch> knownBranches = participantImport ? List.of() : companyBranchRepository.findAll();
             List<RowPreview> previews = new ArrayList<>();
             Map<String, List<RowPreview>> fileOwners = new LinkedHashMap<>();
             Map<String, List<RowPreview>> companyRows = new LinkedHashMap<>();
@@ -370,6 +371,7 @@ public class ExcelImportController {
                 previews.add(preview);
                 if (!participantImport) validateCompanyFieldLengths(row, preview);
                 else {
+                    validateParticipantFieldLengths(row, preview);
                     if (firstName.length() > 255 || lastName.length() > 255 || participantInstitution(row).length() > 255) {
                         conflict(preview, "Nama dan Sekolah/Kampus/Instansi maksimal 255 karakter.");
                     }
@@ -570,42 +572,57 @@ public class ExcelImportController {
         Row header = source.getRow(0);
         if (header == null) throw new IllegalArgumentException("Header Excel kosong.");
         Map<String, Integer> columns = new LinkedHashMap<>();
-        for (Cell value : header) columns.put(normalizeKey(getCellValueAsString(value)), value.getColumnIndex());
-        Integer emailColumn = columns.get("email");
-        if (emailColumn == null) emailColumn = columns.get("email peserta");
-        boolean fullTemplate = columns.containsKey("company email address") || columns.containsKey("personal email address");
-        Integer phoneColumn = columns.get("mobile phone");
-        if (phoneColumn == null) phoneColumn = columns.get("whatsapp");
-        if (fullTemplate || emailColumn == null && phoneColumn == null) {
-            // Accept the known EDU sheet's two header aliases only for the participant destination.
-            for (Cell value : header) {
-                String label = normalizeKey(getCellValueAsString(value));
-                if (label.equals("firts name")) value.setCellValue("First Name");
-                if (label.equals("linkedin")) value.setCellValue("Linkedin Link");
-            }
-            return source;
+        for (Cell value : header) {
+            String label = normalizeKey(getCellValueAsString(value));
+            if (label.equals("firts name") || label.equals("nama")) label = "first name";
+            if (label.equals("linkedin")) label = "linkedin link";
+            if (label.equals("email") || label.equals("email peserta")) label = "personal email address";
+            if (label.equals("whatsapp")) label = "mobile phone";
+            if (label.equals("branch") || label.equals("branch name")) label = "cabang/kantor";
+            columns.put(label, value.getColumnIndex());
         }
-        Integer nameColumn = columns.get("first name");
-        if (nameColumn == null) nameColumn = columns.get("nama");
-        // Names may be supplied later; compact participant files need only an email or phone column.
+        if (!columns.containsKey("personal email address") && !columns.containsKey("company email address")
+                && !columns.containsKey("mobile phone")) return source;
+        // Normalize Student20, the previous full company-style template and compact participant files by header.
+        List<String> headers = new ArrayList<>(HEADERS);
+        headers.addAll(List.of("Cabang/Kantor", "Kategori Peserta", "Sekolah/Kampus/Instansi"));
         Sheet normalized = workbook.createSheet("_crm_participant_" + workbook.getNumberOfSheets());
         Row normalizedHeader = normalized.createRow(0);
-        for (int i = 0; i < HEADERS.size(); i++) normalizedHeader.createCell(i).setCellValue(HEADERS.get(i));
-        normalizedHeader.createCell(23).setCellValue("Kategori Peserta");
-        normalizedHeader.createCell(24).setCellValue("Sekolah/Kampus/Instansi");
+        for (int i = 0; i < headers.size(); i++) normalizedHeader.createCell(i).setCellValue(headers.get(i));
         for (int index = 1; index <= source.getLastRowNum(); index++) {
             Row raw = source.getRow(index); if (raw == null) continue;
             Row row = normalized.createRow(index);
-            if (nameColumn != null) row.createCell(5).setCellValue(getCellValueAsString(raw.getCell(nameColumn)));
-            if (emailColumn != null) row.createCell(14).setCellValue(getCellValueAsString(raw.getCell(emailColumn)));
-            if (phoneColumn != null) row.createCell(12).setCellValue(getCellValueAsString(raw.getCell(phoneColumn)));
-            for (Map.Entry<String, Integer> entry : Map.of("last name", 6, "mobile phone", 12,
-                    "kategori peserta", 23, "sekolah/kampus/instansi", 24).entrySet()) {
-                Integer column = columns.get(entry.getKey());
-                if (column != null) row.createCell(entry.getValue()).setCellValue(getCellValueAsString(raw.getCell(column)));
+            for (int column = 0; column < headers.size(); column++) {
+                Integer original = columns.get(normalizeKey(headers.get(column)));
+                if (original != null) row.createCell(column).setCellValue(getCellValueAsString(raw.getCell(original)));
             }
         }
         return normalized;
+    }
+
+    private void applyParticipantFields(Database contact, Row row, String branchName) {
+        if (!cell(row, 4).isEmpty()) contact.setSalutation(cell(row, 4));
+        if (!cell(row, 7).isEmpty()) contact.setPositionLevel(PositionLevel.fromValue(cell(row, 7)));
+        if (!cell(row, 8).isEmpty()) contact.setSpecialityDivision(cell(row, 8));
+        if (!cell(row, 9).isEmpty()) contact.setJobTitle(cell(row, 9));
+        if (!cell(row, 1).isEmpty()) contact.setOrganizationGroupName(cell(row, 1));
+        if (!cell(row, 2).isEmpty()) contact.setOrganizationBrandName(cell(row, 2));
+        if (!cell(row, 10).isEmpty()) contact.setOrganizationAddress(cell(row, 10));
+        if (!cell(row, 11).isEmpty()) contact.setOrganizationOfficePhone(cell(row, 11));
+        if (!cell(row, 15).isEmpty()) contact.setOrganizationIndustry(cell(row, 15));
+        if (!cell(row, 16).isEmpty()) contact.setOrganizationSizeRevenue(cell(row, 16));
+        if (!cell(row, 17).isEmpty()) contact.setOrganizationSizeEmployee(cell(row, 17));
+        if (!branchName.isEmpty()) contact.setOrganizationBranchName(branchName);
+        if (!cell(row, 21).isEmpty()) contact.setOrganizationPostalCode(cell(row, 21));
+        if (!cell(row, 22).isEmpty()) contact.setOrganizationWebsite(cell(row, 22));
+    }
+
+    private void validateParticipantFieldLengths(Row row, RowPreview preview) {
+        for (int column : List.of(1, 2, 4, 8, 9, 11, 15, 16, 17, 21)) {
+            int limit = switch (column) { case 11 -> 50; case 15, 16, 17 -> 100; case 21 -> 20; default -> 255; };
+            String value = cell(row, column);
+            if (value.codePointCount(0, value.length()) > limit) conflict(preview, "Kolom " + HEADERS.get(column) + " maksimal " + limit + " karakter.");
+        }
     }
 
     private String namedCell(Row row, String name) {

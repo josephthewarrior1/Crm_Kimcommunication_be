@@ -262,6 +262,7 @@ public class EmsService {
             if (email.isBlank() && isBlank(registration.phone())) problem = "Isi minimal email valid atau HP/WhatsApp peserta.";
             else if (!email.isBlank() && !ContactEmailCategory.isValidEmail(email)) problem = "Email peserta tidak valid.";
             else if (!isBlank(registration.phone()) && !ContactPhone.isUsable(registration.phone())) problem = "Mobile Phone peserta tidak valid.";
+            if (problem.isEmpty() && destination == DatabaseDestination.PARTICIPANT) problem = participantFieldProblem(registration);
             if (problem.isEmpty() && incomingNames.getOrDefault(email, Set.of()).size() > 1
                     && (destination == DatabaseDestination.PARTICIPANT || name.isBlank())) {
                 problem = "Email berulang pada nama berbeda di data EMS. Baris ini ditahan untuk ditinjau.";
@@ -336,6 +337,10 @@ public class EmsService {
         List<Object> contactState = contacts.stream().sorted(Comparator.comparing(Database::getId, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(contact -> (Object) Arrays.asList(contact.getId(), contact.getUpdatedAt(), contact.getDatabaseDestination(), contact.getIsActive(),
                         contact.getFirstName(), contact.getLastName(), contact.getMobilePhone(), contact.getNormalizedPhone(), contact.getCompany() == null ? null : contact.getCompany().getId(),
+                        contact.getInstitutionName(), contact.getSalutation(), contact.getPositionLevel(), contact.getSpecialityDivision(), contact.getJobTitle(),
+                        contact.getOrganizationGroupName(), contact.getOrganizationBrandName(), contact.getOrganizationAddress(), contact.getOrganizationOfficePhone(),
+                        contact.getOrganizationIndustry(), contact.getOrganizationSizeRevenue(), contact.getOrganizationSizeEmployee(), contact.getOrganizationBranchName(),
+                        contact.getOrganizationPostalCode(), contact.getOrganizationWebsite(),
                         contact.getEmails() == null ? List.of() : contact.getEmails().stream().filter(Objects::nonNull).map(email -> safe(email.getEmail())).sorted().toList())).toList();
         List<Object> participantState = participants.stream().sorted(Comparator.comparing(EventParticipant::getId, Comparator.nullsFirst(Comparator.naturalOrder()))).map(participant -> (Object) Arrays.asList(participant.getId(),
                 participant.getDatabase() == null ? null : participant.getDatabase().getId(), participant.getUpdatedAt())).toList();
@@ -426,6 +431,7 @@ public class EmsService {
                         .normalizedPhone(normalizePhone(phone)).databaseType(DatabaseType.end_user)
                         .source(DatabaseSource.event_registration).isActive(true)
                         .databaseDestination(event.getSyncDestination()).institutionName(participantDestination ? companyName : null).build();
+                if (participantDestination) hydrateParticipantOrganization(database, registration);
                 database = databaseRepository.save(database);
                 matchedContacts.put(contactKey, database);
             } else if (participantDestination) {
@@ -436,6 +442,7 @@ public class EmsService {
                     String merged = ContactPhone.merge(database.getMobilePhone(), phone);
                     database.setMobilePhone(merged); database.setNormalizedPhone(ContactPhone.primary(merged));
                 }
+                hydrateParticipantOrganization(database, registration);
                 databaseRepository.save(database);
             } else {
                 boolean changed = false;
@@ -603,6 +610,66 @@ public class EmsService {
         }
 
         return null;
+    }
+
+    private String registrationValue(Registration registration, String... keys) {
+        for (Map source : List.of(registration.profile() == null ? Map.of() : registration.profile(), registration.item())) {
+            for (String key : keys) {
+                Object value = source.get(key);
+                if ((value instanceof String || value instanceof Number) && !isBlank(value.toString())) return value.toString().trim();
+            }
+        }
+        return "";
+    }
+
+    private Map<String, String> participantOrganization(Registration registration) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("group", registrationValue(registration, "organization_group_name", "group_name", "holding_company"));
+        fields.put("brand", registrationValue(registration, "organization_brand_name", "brand_name"));
+        fields.put("address", registrationValue(registration, "organization_address", "address", "company_address"));
+        fields.put("officePhone", registrationValue(registration, "organization_office_phone", "office_phone", "company_phone"));
+        fields.put("industry", isBlank(registration.industry()) ? registrationValue(registration, "organization_industry") : registration.industry());
+        fields.put("revenue", registrationValue(registration, "organization_size_revenue", "company_size_revenue", "company_size_revenue_amount"));
+        fields.put("employee", registrationValue(registration, "organization_size_employee", "company_size_employee"));
+        fields.put("branch", registrationValue(registration, "organization_branch_name", "branch_name", "branch"));
+        fields.put("postal", registrationValue(registration, "organization_postal_code", "postal_code"));
+        fields.put("website", registrationValue(registration, "organization_website", "company_website", "website"));
+        return fields;
+    }
+
+    private String participantFieldProblem(Registration registration) {
+        Map<String, String> fields = participantOrganization(registration);
+        for (String key : List.of("group", "brand", "branch", "industry", "revenue", "employee", "officePhone", "postal")) {
+            int limit = switch (key) { case "industry", "revenue", "employee" -> 100; case "officePhone" -> 50; case "postal" -> 20; default -> 255; };
+            String value = fields.get(key);
+            if (value.codePointCount(0, value.length()) > limit) return "Data organisasi peserta (" + key + ") maksimal " + limit + " karakter.";
+        }
+        for (String value : List.of(safe(registration.companyName()), safe(registration.salutation()), registration.firstName(),
+                registration.lastName(), safe(registration.jobTitle()), registrationValue(registration, "division", "speciality_division", "department"))) {
+            if (value.codePointCount(0, value.length()) > 255) return "Nama, instansi, dan data profesi peserta maksimal 255 karakter.";
+        }
+        return "";
+    }
+
+    private void hydrateParticipantOrganization(Database database, Registration registration) {
+        Map<String, String> fields = participantOrganization(registration);
+        database.setCompany(null); database.setBranch(null);
+        if (isBlank(database.getSalutation()) && !isBlank(registration.salutation())) database.setSalutation(registration.salutation());
+        if (isBlank(database.getJobTitle()) && !isBlank(registration.jobTitle())) database.setJobTitle(registration.jobTitle());
+        String level = registrationValue(registration, "job_level", "position_level");
+        if ((database.getPositionLevel() == null || database.getPositionLevel() == PositionLevel.UNKNOWN) && !isBlank(level)) database.setPositionLevel(PositionLevel.fromValue(level));
+        String division = registrationValue(registration, "division", "speciality_division", "department");
+        if (isBlank(database.getSpecialityDivision()) && !division.isBlank()) database.setSpecialityDivision(division);
+        if (isBlank(database.getOrganizationGroupName()) && !fields.get("group").isBlank()) database.setOrganizationGroupName(fields.get("group"));
+        if (isBlank(database.getOrganizationBrandName()) && !fields.get("brand").isBlank()) database.setOrganizationBrandName(fields.get("brand"));
+        if (isBlank(database.getOrganizationAddress()) && !fields.get("address").isBlank()) database.setOrganizationAddress(fields.get("address"));
+        if (isBlank(database.getOrganizationOfficePhone()) && !fields.get("officePhone").isBlank()) database.setOrganizationOfficePhone(fields.get("officePhone"));
+        if (isBlank(database.getOrganizationIndustry()) && !fields.get("industry").isBlank()) database.setOrganizationIndustry(fields.get("industry"));
+        if (isBlank(database.getOrganizationSizeRevenue()) && !fields.get("revenue").isBlank()) database.setOrganizationSizeRevenue(fields.get("revenue"));
+        if (isBlank(database.getOrganizationSizeEmployee()) && !fields.get("employee").isBlank()) database.setOrganizationSizeEmployee(fields.get("employee"));
+        if (isBlank(database.getOrganizationBranchName()) && !fields.get("branch").isBlank()) database.setOrganizationBranchName(fields.get("branch"));
+        if (isBlank(database.getOrganizationPostalCode()) && !fields.get("postal").isBlank()) database.setOrganizationPostalCode(fields.get("postal"));
+        if (isBlank(database.getOrganizationWebsite()) && !fields.get("website").isBlank()) database.setOrganizationWebsite(fields.get("website"));
     }
 
     private boolean hydrateDatabaseFromEms(Database database, Company company, String salutation, String lastName, String phone, String jobTitle, Map profile) {

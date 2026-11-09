@@ -25,7 +25,8 @@ public class DatabaseMergeService {
                                Map<String, String> emailTypes, String previewToken) {}
     private static final List<String> FIELDS = List.of("company_id", "salutation", "first_name", "last_name",
             "position_level", "speciality_division", "job_title", "mobile_phone", "linkedin_url", "database_type", "source",
-            "institution_name", "participant_category");
+            "institution_name", "participant_category",
+            "organization_group_name", "organization_brand_name", "organization_address", "organization_office_phone", "organization_industry", "organization_size_revenue", "organization_size_employee", "organization_branch_name", "organization_postal_code", "organization_website");
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+$");
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;

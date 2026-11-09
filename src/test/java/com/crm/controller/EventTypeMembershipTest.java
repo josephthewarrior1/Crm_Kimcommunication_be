@@ -156,6 +156,12 @@ class EventTypeMembershipTest {
         Database company = profile(1L, DatabaseDestination.COMPANY, "Corporate");
         company.setIsActive(false); company.setCreatedByUserId(19L); company.setEntryMethod("manual");
         company.setMobilePhone("081200001111, 081300002222");
+        company.getCompany().setGroup(Group.builder().id(80L).name("Original Holding").build());
+        company.getCompany().setBrandName("Original Brand"); company.getCompany().setIndustry("Education");
+        company.getCompany().setCompanySizeRevenue("Revenue band"); company.getCompany().setCompanySizeEmployee("Employee band");
+        company.getCompany().setWebsite("https://original.invalid");
+        company.setBranch(CompanyBranch.builder().id(81L).companyId(company.getCompany().getId()).name("Original Campus")
+                .address("Branch Address").officePhone("021-111 ext 7").postalCode("12345").build());
         DatabaseEmail address = DatabaseEmail.builder().id(20L).database(company).email("same@campus.ac.id")
                 .emailType("company").isCorporate(true).isPrimary(true).isVerified(true).build();
         company.setEmails(new ArrayList<>(List.of(address)));
@@ -173,6 +179,11 @@ class EventTypeMembershipTest {
         assertEquals(linkId, link.getId()); assertEquals("Retain notes", link.getNotes()); assertEquals("approve", link.getConfirmationStatus());
         assertFalse(copy.getIsActive()); assertEquals(19L, copy.getCreatedByUserId()); assertEquals("manual", copy.getEntryMethod());
         assertEquals(company.getMobilePhone(), copy.getMobilePhone()); assertNull(copy.getCompany()); assertNull(copy.getBranch());
+        assertEquals("Original Holding", copy.getOrganizationGroupName()); assertEquals("Original Brand", copy.getOrganizationBrandName());
+        assertEquals("Education", copy.getOrganizationIndustry()); assertEquals("Original Campus", copy.getOrganizationBranchName());
+        assertEquals("Branch Address", copy.getOrganizationAddress()); assertEquals("021-111 ext 7", copy.getOrganizationOfficePhone());
+        assertEquals("12345", copy.getOrganizationPostalCode()); assertEquals("https://original.invalid", copy.getOrganizationWebsite());
+        assertEquals("Revenue band", copy.getOrganizationSizeRevenue()); assertEquals("Employee band", copy.getOrganizationSizeEmployee());
         assertEquals(DatabaseDestination.COMPANY, company.getDatabaseDestination()); assertNotNull(company.getCompany());
         assertSame(address, company.getEmails().get(0)); assertSame(company, address.getDatabase()); assertTrue(address.getIsCorporate());
         assertNotSame(address, copy.getEmails().get(0)); assertEquals(address.getEmail(), copy.getEmails().get(0).getEmail());
@@ -185,6 +196,19 @@ class EventTypeMembershipTest {
         assertEquals(200, eventsController.setSyncDestination(1L, Map.of("destination", "participant"), "test").getStatusCode().value());
         assertEquals(2, profiles.size()); assertSame(copy, link.getDatabase());
         verify(databases, times(1)).save(any()); verify(emails, times(1)).save(any());
+    }
+
+    @Test void legacyClassificationDoesNotCopyEmployerOrganizationIntoAnExplicitDifferentInstitution() {
+        event(1L, null);
+        Database company = profile(1L, DatabaseDestination.COMPANY, "Employer Company");
+        company.setInstitutionName("Different Campus"); company.getCompany().setAddress("Employer Address");
+        company.getCompany().setIndustry("Technology");
+        link(1L, company);
+        assertEquals(200, eventsController.setSyncDestination(1L, Map.of("destination", "participant"), "test").getStatusCode().value());
+        Database participant = links.get(0).getDatabase();
+        assertEquals("Different Campus", participant.getInstitutionName()); assertNull(participant.getOrganizationAddress());
+        assertNull(participant.getOrganizationIndustry()); assertNull(participant.getCompany()); assertNull(participant.getBranch());
+        assertEquals("Employer Address", company.getCompany().getAddress());
     }
 
     @Test void availableContactCandidatesAndTheirFilterOptionsFollowTheStoredEventClassification() {

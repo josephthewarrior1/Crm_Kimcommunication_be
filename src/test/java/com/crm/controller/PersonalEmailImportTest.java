@@ -252,6 +252,55 @@ class PersonalEmailImportTest {
         assertEquals(0, imported(upload).get("newCount")); assertEquals(2, saved.size());
     }
 
+    @Test void exactStudent20TemplatePreservesEveryIndependentFieldAndBlankUpdatesRetainThem() throws Exception {
+        String[] values = {"1", "Campus Holding", "Campus Brand", "Campus Institute", "Ms", "Nadia", "Person", "Manager", "Student Services", "Coordinator",
+                "Campus Address", "021-111 ext 7", "081200001111, 081300002222", "nadia@campus.ac.id", "Education", "Revenue band", "Employee band", "Central Campus", "12345", "https://campus.invalid"};
+        var upload = studentFile(values);
+        assertEquals(1, preview(upload).getNewCount()); assertEquals(1, imported(upload).get("newCount"));
+        Database contact = saved.get(0);
+        assertEquals("Campus Institute", contact.getInstitutionName()); assertEquals("Ms", contact.getSalutation());
+        assertEquals(com.crm.domain.PositionLevel.MANAGERIAL_HEAD, contact.getPositionLevel());
+        assertEquals("Student Services", contact.getSpecialityDivision()); assertEquals("Coordinator", contact.getJobTitle());
+        assertEquals("Campus Holding", contact.getOrganizationGroupName()); assertEquals("Campus Brand", contact.getOrganizationBrandName());
+        assertEquals("Campus Address", contact.getOrganizationAddress()); assertEquals("021-111 ext 7", contact.getOrganizationOfficePhone());
+        assertEquals("Education", contact.getOrganizationIndustry()); assertEquals("Revenue band", contact.getOrganizationSizeRevenue());
+        assertEquals("Employee band", contact.getOrganizationSizeEmployee()); assertEquals("Central Campus", contact.getOrganizationBranchName());
+        assertEquals("12345", contact.getOrganizationPostalCode()); assertEquals("https://campus.invalid", contact.getOrganizationWebsite());
+        assertEquals("081200001111, 081300002222", contact.getMobilePhone());
+        assertEquals("nadia@campus.ac.id", contact.getEmails().get(0).getEmail()); assertEquals("personal", contact.getEmails().get(0).getEmailType());
+        assertNull(contact.getCompany()); assertNull(contact.getBranch());
+        String[] blankUpdate = new String[20]; Arrays.fill(blankUpdate, ""); blankUpdate[13] = values[13];
+        assertEquals(1, imported(studentFile(blankUpdate)).get("updatedCount")); assertEquals(1, saved.size());
+        assertEquals("Campus Institute", contact.getInstitutionName()); assertEquals("Campus Holding", contact.getOrganizationGroupName());
+        assertEquals("Student Services", contact.getSpecialityDivision()); assertEquals("https://campus.invalid", contact.getOrganizationWebsite());
+        verify(companies, never()).save(any()); verify(branches, never()).save(any()); verify(groups, never()).save(any());
+    }
+
+    @Test void studentOrganizationFieldBoundsAreCheckedBeforeAnyWrites() throws Exception {
+        for (int column : List.of(1, 2, 11, 14, 15, 16, 17, 18)) {
+            String[] values = new String[20]; Arrays.fill(values, ""); values[13] = "student@campus.ac.id";
+            int limit = column == 11 ? 50 : column == 18 ? 20 : column >= 14 && column <= 16 ? 100 : 255;
+            values[column] = "x".repeat(limit + 1);
+            assertEquals(1, preview(studentFile(values)).getConflictCount(), "column " + column);
+            assertEquals(400, controller.importDatabases(studentFile(values), "participant", "test").getStatusCode().value());
+        }
+        verify(databases, never()).save(any()); verify(emails, never()).save(any());
+    }
+
+    private static MockMultipartFile studentFile(String[]... rows) throws Exception {
+        String[] headers = {"No", "Nama Group/Holding Company", "Nama Brand", "Company Name", "Salutation", "First Name", "Last Name", "Position", "Division", "Jobtitle",
+                "Address", "Office Phone", "Mobile Phone", "Personal Email Address", "Industry", "Company Size (Revenue)", "Company Size (Employee)", "Cabang/Kantor", "Postal Code", "Company Website"};
+        try (Workbook workbook = new XSSFWorkbook(); var out = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet(); Row header = sheet.createRow(0);
+            for (int column = 0; column < headers.length; column++) header.createCell(column).setCellValue(headers[column]);
+            for (int index = 0; index < rows.length; index++) {
+                Row row = sheet.createRow(index + 1);
+                for (int column = 0; column < rows[index].length; column++) row.createCell(column).setCellValue(rows[index][column]);
+            }
+            workbook.write(out); return new MockMultipartFile("file", "student20.xlsx", "application/octet-stream", out.toByteArray());
+        }
+    }
+
     private static String[] corporate(String name, String address) {
         String[] row = personal(name, address, 13);
         row[1] = "Example Group"; row[2] = "Example"; row[3] = "Example PT"; row[4] = "Ms";

@@ -167,6 +167,17 @@ public class EmsV2Client {
             if (!industry.equals(rawIndustry)) put(profile, "ems_v2_industry_raw", rawIndustry);
         }
         put(profile, "job_level", first(form, "job_level", "position_level"));
+        put(profile, "division", first(form, "division", "speciality_division", "department"));
+        put(profile, "organization_group_name", first(form, "organization_group_name", "group_name", "holding_company"));
+        put(profile, "organization_brand_name", first(form, "organization_brand_name", "brand_name"));
+        put(profile, "organization_address", first(form, "organization_address", "address", "company_address"));
+        put(profile, "organization_office_phone", first(form, "organization_office_phone", "office_phone", "company_phone"));
+        put(profile, "organization_industry", first(form, "organization_industry"));
+        put(profile, "organization_size_revenue", first(form, "organization_size_revenue", "company_size_revenue"));
+        put(profile, "organization_size_employee", first(form, "organization_size_employee", "company_size_employee"));
+        put(profile, "organization_branch_name", first(form, "organization_branch_name", "branch_name", "branch"));
+        put(profile, "organization_postal_code", first(form, "organization_postal_code", "postal_code"));
+        put(profile, "organization_website", first(form, "organization_website", "company_website", "website"));
         Map<String, Object> normalized = new LinkedHashMap<>();
         normalized.put("id", id);
         normalized.put("user_profile", profile);

@@ -52,7 +52,7 @@ class StrictDestinationCoreTest {
 
     @Test void mergeRejectsOppositeDestinationsAndPreservesParticipantMetadataWithinOneDestination() {
         var jdbc=mock(JdbcTemplate.class);var service=new DatabaseMergeService(jdbc,new ObjectMapper());
-        Map<String,Object> target=profile(1,"COMPANY"),source=profile(2,"PARTICIPANT");source.put("institution_name","Source Campus");source.put("participant_category","mahasiswa");
+        Map<String,Object> target=profile(1,"COMPANY"),source=profile(2,"PARTICIPANT");source.put("institution_name","Source Campus");source.put("participant_category","mahasiswa");source.put("organization_address","Source campus address");
         when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<Map<String,Object>>>any(), any(Object[].class)))
                 .thenAnswer(call->((String)call.getArgument(0)).contains("(SELECT * FROM databases WHERE id IN")?List.of(target,source):List.of());
         var actor=AppUser.builder().id(7L).roles(Set.of(Role.ADMIN)).build();var request=new DatabaseMergeService.MergeRequest(1L,2L,Map.of(),Map.of(),null);
@@ -61,6 +61,7 @@ class StrictDestinationCoreTest {
         var preview=service.merge(request,actor,false);
         Map<?,?> merged=(Map<?,?>)preview.get("contact");assertEquals("Source Campus",merged.get("institution_name"));assertEquals("mahasiswa",merged.get("participant_category"));
         assertEquals("+6281200001111",merged.get("normalized_phone"));
+        assertEquals("Source campus address",merged.get("organization_address"));
         verify(jdbc,never()).update(anyString(),any(Object[].class));
     }
 

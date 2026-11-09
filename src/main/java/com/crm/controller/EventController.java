@@ -6,6 +6,7 @@ import com.crm.domain.Role;
 import com.crm.domain.AppUser;
 import com.crm.domain.AttendanceStatus;
 import com.crm.domain.Company;
+import com.crm.domain.CompanyBranch;
 import com.crm.domain.Database;
 import com.crm.domain.DatabaseEmail;
 import com.crm.domain.DatabaseDestination;
@@ -648,6 +649,20 @@ public class EventController {
                 if (!draft.lastName().isBlank()) database.setLastName(draft.lastName());
                 if (!draft.companyName().isBlank()) database.setInstitutionName(draft.companyName());
                 if (!draft.participantCategory().isBlank()) database.setParticipantCategory(draft.participantCategory());
+                if (!draft.salutation().isBlank()) database.setSalutation(draft.salutation());
+                if (!draft.position().isBlank()) database.setPositionLevel(PositionLevel.fromValue(draft.position()));
+                if (!draft.specialityDivision().isBlank()) database.setSpecialityDivision(draft.specialityDivision());
+                if (!draft.jobTitle().isBlank()) database.setJobTitle(draft.jobTitle());
+                if (!draft.groupName().isBlank()) database.setOrganizationGroupName(draft.groupName());
+                if (!draft.brandName().isBlank()) database.setOrganizationBrandName(draft.brandName());
+                if (!draft.address().isBlank()) database.setOrganizationAddress(draft.address());
+                if (!draft.officePhone().isBlank()) database.setOrganizationOfficePhone(draft.officePhone());
+                if (!draft.industry().isBlank()) database.setOrganizationIndustry(draft.industry());
+                if (!draft.sizeRevenue().isBlank()) database.setOrganizationSizeRevenue(draft.sizeRevenue());
+                if (!draft.sizeEmployee().isBlank()) database.setOrganizationSizeEmployee(draft.sizeEmployee());
+                if (!draft.branchName().isBlank()) database.setOrganizationBranchName(draft.branchName());
+                if (!draft.postalCode().isBlank()) database.setOrganizationPostalCode(draft.postalCode());
+                if (!draft.website().isBlank()) database.setOrganizationWebsite(draft.website());
                 if (!mobilePhone.isBlank()) {
                     database.setMobilePhone(mobilePhone); database.setNormalizedPhone(normalizeEventImportPhone(mobilePhone));
                 }
@@ -2005,7 +2020,8 @@ public class EventController {
                 String lastName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 6, "last name", "lastname", "last_name", "nama belakang"));
                 String groupName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 1, "nama group", "group name", "group", "nama group holding", "nama group/holding company", "group holding company", "group/holding company"));
                 String brandName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 2, "nama brand", "brand name", "brand"));
-                String companyName = cleanCompanyName(normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 3, "company name", "companyname", "company", "perusahaan")));
+                String companyName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 3, "company name", "companyname", "company", "perusahaan"));
+                if (!participantImport) companyName = cleanCompanyName(companyName);
                 String rawMobilePhone = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 12, "mobile phone", "phone", "no hp", "whatsapp"));
                 String mobilePhone = cleanImportPhone(rawMobilePhone);
                 String companyEmail = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 13, "company email address", "company email", "email", "email peserta"));
@@ -2016,7 +2032,7 @@ public class EventController {
                 String jobTitle = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 9, "jobtitle", "job title", "jabatan"));
                 String address = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 10, "address", "company address", "alamat"));
                 String rawOfficePhone = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 11, "office phone", "company phone", "telepon kantor"));
-                String officePhone = cleanImportPhone(rawOfficePhone);
+                String officePhone = participantImport ? rawOfficePhone : cleanImportPhone(rawOfficePhone);
                 String industry = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 15, "industry", "industri"));
                 String sizeRevenue = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 16, "company size (revenue)"));
                 String sizeEmployee = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 17, "company size (employee)"));
@@ -2025,6 +2041,7 @@ public class EventController {
                 String city = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 20, "city", "kota"));
                 String postalCode = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 21, "postal code"));
                 String website = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, 22, "company website", "website"));
+                String branchName = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, -1, "cabang/kantor", "branch", "branch name"));
                 String category = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, -1, "kategori peserta")).toLowerCase(Locale.ROOT);
                 if (participantImport) {
                     String institution = normalizeImportValue(getImportCell(row, headerMap, hasImportHeader, -1, "sekolah/kampus/instansi", "institution name", "instansi"));
@@ -2046,9 +2063,18 @@ public class EventController {
                 if (emails.isEmpty() && rawMobilePhone.isBlank()) issues.add("Isi minimal satu kontak: email atau nomor HP/WhatsApp.");
                 if (emails.stream().anyMatch(email -> !EVENT_IMPORT_EMAIL.matcher(email).matches())) issues.add("Format email tidak valid");
                 if (!rawMobilePhone.isBlank() && !isUsableEventImportPhone(rawMobilePhone)) issues.add("Mobile Phone tidak valid; isi nomor yang benar atau kosongkan jika ada email.");
-                if (!rawOfficePhone.isBlank() && !isUsableEventImportPhone(rawOfficePhone)) issues.add("Office Phone tidak valid.");
+                if (!participantImport && !rawOfficePhone.isBlank() && !isUsableEventImportPhone(rawOfficePhone)) issues.add("Office Phone tidak valid.");
                 if (officePhone.length() > 50) issues.add("Office Phone maksimal 50 karakter setelah format nomor dirapikan.");
                 if (participantImport && !Set.of("", "pelajar", "mahasiswa", "umum").contains(category)) issues.add("Kategori Peserta tidak valid");
+                if (participantImport) {
+                    for (String value : List.of(groupName, brandName, branchName, salutation, specialityDivision, jobTitle)) {
+                        if (value.codePointCount(0, value.length()) > 255) issues.add("Nama group, brand, cabang, dan data profesi maksimal 255 karakter.");
+                    }
+                    for (String value : List.of(industry, sizeRevenue, sizeEmployee)) {
+                        if (value.codePointCount(0, value.length()) > 100) issues.add("Industry dan ukuran perusahaan maksimal 100 karakter.");
+                    }
+                    if (postalCode.codePointCount(0, postalCode.length()) > 20) issues.add("Postal Code maksimal 20 karakter.");
+                }
                 if (firstName.length() > 255 || lastName.length() > 255 || companyName.length() > 255) issues.add("Nama dan perusahaan maksimal 255 karakter");
                 List<String> warnings = mobilePhone.isBlank() ? List.of("Nomor HP/WhatsApp belum diisi; peserta belum bisa ditelepon.") : List.of();
                 Database existingDatabase = null;
@@ -2092,6 +2118,7 @@ public class EventController {
                         city,
                         postalCode,
                         website,
+                        branchName,
                         existingDatabase != null ? existingDatabase.getId() : null,
                         existingEventParticipant != null ? existingEventParticipant.getId() : null,
                         issues,
@@ -2259,6 +2286,7 @@ public class EventController {
             if (safe(copy.getInstitutionName()).isBlank() && original.getCompany() != null) {
                 copy.setInstitutionName(original.getCompany().getName());
             }
+            copyLegacyParticipantOrganization(original, copy);
         } else {
             copy.setCompany(original.getCompany());
             copy.setBranch(original.getBranch());
@@ -2277,6 +2305,24 @@ public class EventController {
         }
         copy.setEmails(copiedEmails);
         return copy;
+    }
+
+    private void copyLegacyParticipantOrganization(Database original, Database copy) {
+        Company company = original.getCompany();
+        if (company == null || !normalizedEventImportName(cleanCompanyName(copy.getInstitutionName()), "")
+                .equals(normalizedEventImportName(cleanCompanyName(company.getName()), ""))) return;
+        CompanyBranch branch = original.getBranch();
+        if (branch != null && !Objects.equals(branch.getCompanyId(), company.getId())) branch = null;
+        if (safe(copy.getOrganizationGroupName()).isBlank() && company.getGroup() != null) copy.setOrganizationGroupName(company.getGroup().getName());
+        if (safe(copy.getOrganizationBrandName()).isBlank()) copy.setOrganizationBrandName(company.getBrandName());
+        if (safe(copy.getOrganizationAddress()).isBlank()) copy.setOrganizationAddress(branch != null && !safe(branch.getAddress()).isBlank() ? branch.getAddress() : company.getAddress());
+        if (safe(copy.getOrganizationOfficePhone()).isBlank()) copy.setOrganizationOfficePhone(branch != null && !safe(branch.getOfficePhone()).isBlank() ? branch.getOfficePhone() : company.getOfficePhone());
+        if (safe(copy.getOrganizationIndustry()).isBlank()) copy.setOrganizationIndustry(company.getIndustry());
+        if (safe(copy.getOrganizationSizeRevenue()).isBlank()) copy.setOrganizationSizeRevenue(company.getCompanySizeRevenue());
+        if (safe(copy.getOrganizationSizeEmployee()).isBlank()) copy.setOrganizationSizeEmployee(company.getCompanySizeEmployee());
+        if (safe(copy.getOrganizationBranchName()).isBlank() && branch != null) copy.setOrganizationBranchName(branch.getName());
+        if (safe(copy.getOrganizationPostalCode()).isBlank()) copy.setOrganizationPostalCode(branch != null && !safe(branch.getPostalCode()).isBlank() ? branch.getPostalCode() : company.getPostalCode());
+        if (safe(copy.getOrganizationWebsite()).isBlank()) copy.setOrganizationWebsite(company.getWebsite());
     }
 
     private void copyLegacyRestrictions(Database original, Database copy) {
@@ -2593,6 +2639,7 @@ public class EventController {
             String city,
             String postalCode,
             String website,
+            String branchName,
             Long existingDatabaseId,
             Long existingParticipantId,
             List<String> issues,

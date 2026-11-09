@@ -50,6 +50,37 @@ public class Database {
     @Column(name = "participant_category", length = 32)
     private String participantCategory;
 
+    // Participant-owned text; these fields never refer to Company/Branch masters.
+    @Column(name = "organization_group_name", length = 255)
+    private String organizationGroupName;
+
+    @Column(name = "organization_brand_name", length = 255)
+    private String organizationBrandName;
+
+    @Column(name = "organization_address", columnDefinition = "TEXT")
+    private String organizationAddress;
+
+    @Column(name = "organization_office_phone", length = 50)
+    private String organizationOfficePhone;
+
+    @Column(name = "organization_industry", length = 100)
+    private String organizationIndustry;
+
+    @Column(name = "organization_size_revenue", length = 100)
+    private String organizationSizeRevenue;
+
+    @Column(name = "organization_size_employee", length = 100)
+    private String organizationSizeEmployee;
+
+    @Column(name = "organization_branch_name", length = 255)
+    private String organizationBranchName;
+
+    @Column(name = "organization_postal_code", length = 20)
+    private String organizationPostalCode;
+
+    @Column(name = "organization_website", columnDefinition = "TEXT")
+    private String organizationWebsite;
+
     private String salutation;
 
     @Column(name = "first_name")

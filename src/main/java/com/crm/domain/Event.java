@@ -46,9 +46,16 @@ public class Event {
     @Column(name = "ems_event_id")
     private Long emsEventId;
 
+    @Column(name = "pms_event_id", unique = true)
+    private Long pmsEventId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "ems_source", length = 16)
     private EmsSource emsSource;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sync_destination", length = 16)
+    private DatabaseDestination syncDestination;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

@@ -3,6 +3,8 @@ package com.crm.controller;
 import com.crm.domain.*;
 import com.crm.repository.*;
 import com.crm.service.AuditLogService;
+import com.crm.util.ContactEmailCategory;
+import com.crm.util.ContactPhone;
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -45,6 +47,7 @@ public class ExcelImportController {
     @Transactional
     public ResponseEntity<?> importDatabases(
             @RequestParam("file") MultipartFile file,
+            @RequestParam("destination") String destination,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
         if (currentUser == null) {
@@ -59,7 +62,7 @@ public class ExcelImportController {
         }
 
         // Re-run exactly the preview validation inside the import transaction.
-        ResponseEntity<?> validation = previewImport(file);
+        ResponseEntity<?> validation = previewImport(file, destination);
         if (!validation.getStatusCode().is2xxSuccessful()) return validation;
         ImportPreviewResponse preview = (ImportPreviewResponse) validation.getBody();
         List<RowPreview> invalidRows = preview.getRows().stream()
@@ -73,13 +76,14 @@ public class ExcelImportController {
                     "count", 0, "skippedCount", invalidRows.size(), "skippedRows", invalidRows));
         }
 
+        boolean participantImport = "participant".equals(destination);
         int successCount = 0;
         int newCount = 0;
         int updatedCount = 0;
         try (InputStream is = file.getInputStream();
              Workbook workbook = WorkbookFactory.create(is)) {
             
-            Sheet sheet = workbook.getSheetAt(0);
+            Sheet sheet = prepareImportSheet(workbook, participantImport);
             int lastRowNum = sheet.getLastRowNum();
             List<Company> knownCompanies = new ArrayList<>(companyRepository.findAll());
             List<CompanyBranch> knownBranches = new ArrayList<>(companyBranchRepository.findAll());
@@ -121,8 +125,42 @@ public class ExcelImportController {
                 Database targetDb = existingId == null ? null : databaseRepository.findById(existingId)
                         .orElseThrow(() -> new IllegalStateException("Kontak target sudah tidak tersedia: " + existingId));
 
+                if (participantImport) {
+                    if (targetDb == null) {
+                        targetDb = Database.builder().firstName(firstName).lastName(lastName.isEmpty() ? null : lastName)
+                                .databaseDestination(DatabaseDestination.PARTICIPANT).createdByUserId(currentUser.getId())
+                                .entryMethod("excel_import").source(DatabaseSource.excel_import).isActive(true).build();
+                        newCount++;
+                    } else {
+                        targetDb.setDatabaseDestination(DatabaseDestination.effective(targetDb.getDatabaseDestination())
+                                .add(DatabaseDestination.PARTICIPANT));
+                        updatedCount++;
+                    }
+                    if (!firstName.isEmpty()) targetDb.setFirstName(firstName);
+                    if (!lastName.isEmpty()) targetDb.setLastName(lastName);
+                    if (!cell(row, 12).isEmpty()) {
+                        String merged = ContactPhone.merge(targetDb.getMobilePhone(), cell(row, 12));
+                        targetDb.setMobilePhone(merged); targetDb.setNormalizedPhone(ContactPhone.primary(merged));
+                    }
+                    String institution = participantInstitution(row);
+                    String category = namedCell(row, "Kategori Peserta");
+                    if (!institution.isEmpty()) targetDb.setInstitutionName(institution);
+                    if (!category.isEmpty()) targetDb.setParticipantCategory(category.toLowerCase(Locale.ROOT));
+                    targetDb = databaseRepository.save(targetDb);
+                    Database savedParticipant = targetDb;
+                    List<String> newEmails = emailTokens(companyEmail + ";" + personalEmail).stream()
+                            .filter(addressValue -> emails(savedParticipant).stream().noneMatch(existing -> normalizeKey(existing.getEmail()).equals(addressValue)))
+                            .toList();
+                    mergeEmails(targetDb, newEmails, false);
+                    suspiciousIdentityService.checkAndFlagDatabase(targetDb);
+                    successCount++;
+                    continue;
+                }
+
+                if (targetDb != null) targetDb.setDatabaseDestination(DatabaseDestination.effective(targetDb.getDatabaseDestination()).add(DatabaseDestination.COMPANY));
                 // Preserve existing company ownership; only create a group when it can be assigned.
-                Company company = findCompany(knownCompanies, companyName);
+                Company company = companyName.isEmpty() && targetDb != null
+                        ? targetDb.getCompany() : findCompany(knownCompanies, companyName);
                 if (targetDb != null && targetDb.getBranch() != null && (company == null
                         || !Objects.equals(targetDb.getBranch().getCompanyId(), company.getId())
                         || !normalizeKey(targetDb.getBranch().getName()).equals(normalizeKey(branchName)))) {
@@ -133,7 +171,7 @@ public class ExcelImportController {
                     throw new IllegalStateException("Lokasi cabang berubah. Preview ulang sebelum import.");
                 }
                 Group group = company == null ? null : company.getGroup();
-                if (group == null && !groupName.isEmpty()) {
+                if (group == null && !companyName.isEmpty() && !groupName.isEmpty()) {
                     group = groupRepository.findByNameIgnoreCase(groupName).orElse(null);
                     if (group == null) {
                         group = Group.builder().name(groupName).build();
@@ -213,6 +251,7 @@ public class ExcelImportController {
                     updatedCount++;
                 } else {
                     targetDb = Database.builder()
+                            .databaseDestination(DatabaseDestination.COMPANY)
                             .createdByUserId(currentUser.getId())
                             .entryMethod("excel_import")
                             .salutation(salutation.isEmpty() ? null : salutation)
@@ -284,13 +323,18 @@ public class ExcelImportController {
     }
 
     @PostMapping("/import/preview")
-    public ResponseEntity<?> previewImport(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<?> previewImport(@RequestParam("file") MultipartFile file,
+            @RequestParam("destination") String destination) {
+        if (!Set.of("company", "participant").contains(Objects.toString(destination, ""))) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Pilih tujuan import: Database Perusahaan atau Database Peserta."));
+        }
+        boolean participantImport = "participant".equals(destination);
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
         }
 
         try (InputStream is = file.getInputStream(); Workbook workbook = WorkbookFactory.create(is)) {
-            Sheet sheet = workbook.getSheetAt(0);
+            Sheet sheet = prepareImportSheet(workbook, participantImport);
             int branchColumn = validateHeaders(sheet.getRow(0));
             // ponytail: one snapshot, O(rows * contacts); index identities if large imports become slow.
             List<Database> databases = databaseRepository.findAll();
@@ -311,19 +355,32 @@ public class ExcelImportController {
                 String branchName = branchColumn < 0 ? "" : normalizeField(getCellValueAsString(row.getCell(branchColumn)));
                 String firstName = cell(row, 5);
                 String lastName = cell(row, 6);
-                String mobilePhone = cleanPhone(cell(row, 12));
+                String mobilePhone = participantImport ? ContactPhone.clean(cell(row, 12)) : cleanPhone(cell(row, 12));
                 String companyEmail = cell(row, 13);
                 String personalEmail = cell(row, 14);
                 RowPreview preview = RowPreview.builder()
-                        .rowNum(r + 1).groupName(groupName).companyName(companyName).branchName(branchName)
+                        .rowNum(r + 1).groupName(groupName).companyName(participantImport ? participantInstitution(row) : companyName).branchName(branchName)
                         .firstName(firstName).lastName(lastName).jobTitle(cell(row, 9))
                         .companyEmail(companyEmail).personalEmail(personalEmail).mobilePhone(mobilePhone)
                         .email(companyEmail.isEmpty() ? personalEmail : companyEmail)
                         .status("NEW").message("").build();
                 previews.add(preview);
-                validateCompanyFieldLengths(row, preview);
+                if (!participantImport) validateCompanyFieldLengths(row, preview);
+                else {
+                    if (firstName.length() > 255 || lastName.length() > 255 || participantInstitution(row).length() > 255) {
+                        conflict(preview, "Nama dan Sekolah/Kampus/Instansi maksimal 255 karakter.");
+                    }
+                    if ((!cell(row, 12).isEmpty() && !ContactPhone.isUsable(cell(row, 12))) || ContactPhone.clean(cell(row, 12)).length() > 50) {
+                        conflict(preview, "Mobile Phone peserta tidak valid; isi nomor yang benar atau kosongkan jika belum tersedia.");
+                    }
+                    String category = normalizeKey(namedCell(row, "Kategori Peserta"));
+                    if (!Set.of("", "pelajar", "mahasiswa", "umum").contains(category)) conflict(preview, "Kategori Peserta harus pelajar, mahasiswa, atau umum.");
+                }
                 if (branchName.codePointCount(0, branchName.length()) > 255) {
                     conflict(preview, "Nama Cabang/Kantor maksimal 255 karakter. Perbaiki isi sel lalu upload ulang.");
+                }
+                if (!participantImport && !branchName.isEmpty() && companyName.isEmpty()) {
+                    conflict(preview, "Cabang/Kantor memerlukan Company Name. Kosongkan cabang untuk kontak tanpa perusahaan.");
                 }
 
                 for (String email : emailTokens(companyEmail + ";" + personalEmail)) {
@@ -332,8 +389,11 @@ public class ExcelImportController {
                     }
                 }
                 List<String> invalidPersonal = getCorporateEmailsInPersonalColumn(personalEmail);
-                if (!invalidPersonal.isEmpty()) {
+                if (!participantImport && !invalidPersonal.isEmpty()) {
                     conflict(preview, "Email kantor tidak boleh berada di kolom Personal Email: " + String.join(", ", invalidPersonal));
+                }
+                if (!participantImport && splitEmailTokens(companyEmail).stream().anyMatch(ContactEmailCategory::isPublicPersonalEmail)) {
+                    conflict(preview, "Email pribadi masuk melalui Database Peserta. Company Email Address harus email perusahaan/institusi.");
                 }
                 Set<String> personal = new LinkedHashSet<>(splitEmailTokens(personalEmail));
                 Set<String> corporate = new LinkedHashSet<>(splitEmailTokens(companyEmail));
@@ -345,10 +405,33 @@ public class ExcelImportController {
                 Company matchedCompany = null;
                 CompanyBranch matchedBranch = null;
                 try {
-                    matchedCompany = findCompany(knownCompanies, companyName);
-                    target = findExistingDatabase(databases, firstName, lastName, companyName, personal, mobilePhone);
-                    if (target != null) preview.setExistingDatabaseId(target.getId());
-                    if (target != null && target.getBranch() != null) {
+                    matchedCompany = participantImport ? null : findCompany(knownCompanies, companyName);
+                    target = participantImport
+                            ? findParticipantDatabase(databases, firstName, lastName, emailTokens(companyEmail + ";" + personalEmail), cell(row, 12))
+                            : findExistingDatabase(databases, firstName, lastName, companyName, personal, corporate, mobilePhone);
+                    if (!participantImport) {
+                        Database participantOwner = findParticipantOnlyEmailOwner(databases, firstName, lastName,
+                                emailTokens(companyEmail + ";" + personalEmail));
+                        if (participantOwner != null) {
+                            if (target != null && !Objects.equals(target.getId(), participantOwner.getId())) {
+                                throw new IllegalArgumentException("Target update ambigu antara profil Perusahaan dan Peserta. Tinjau profil sebelum import.");
+                            }
+                            target = participantOwner;
+                        }
+                    }
+                    if (target != null) {
+                        preview.setExistingDatabaseId(target.getId());
+                        if (companyName.isEmpty()) matchedCompany = target.getCompany();
+                    }
+                    if (participantImport && target != null && !cell(row, 12).isEmpty()) {
+                        try { ContactPhone.merge(target.getMobilePhone(), cell(row, 12)); }
+                        catch (IllegalArgumentException invalid) { conflict(preview, invalid.getMessage()); }
+                    }
+                    if (!participantImport && target != null && target.getCompany() != null && !companyName.isEmpty()
+                            && !normalizeKey(cleanCompanyName(target.getCompany().getName())).equals(normalizeKey(companyName))) {
+                        conflict(preview, "Kontak sudah terdaftar di perusahaan lain. Pindahkan perusahaan/cabang melalui Edit kontak sebelum import.");
+                    }
+                    if (!participantImport && target != null && target.getBranch() != null) {
                         CompanyBranch retainedBranch = target.getBranch();
                         if (matchedCompany == null || !Objects.equals(retainedBranch.getCompanyId(), matchedCompany.getId())
                                 || (!branchName.isEmpty() && !normalizeKey(branchName).equals(normalizeKey(retainedBranch.getName())))) {
@@ -358,7 +441,7 @@ public class ExcelImportController {
                             branchName = retainedBranch.getName();
                         }
                     }
-                    matchedBranch = findBranch(knownBranches, matchedCompany, branchName);
+                    matchedBranch = participantImport ? null : findBranch(knownBranches, matchedCompany, branchName);
                     preview.setBranchName(matchedBranch == null ? branchName : matchedBranch.getName());
                     if (matchedBranch != null) {
                         for (String field : branchLocationConflicts(row, matchedBranch)) {
@@ -370,9 +453,19 @@ public class ExcelImportController {
                     conflict(preview, e.getMessage());
                 }
 
-                List<String> missing = getMissingMandatoryFields(groupName, cell(row, 2), companyName,
+                // The chosen destination owns validation; never infer a destination from the email domain.
+                List<DatabaseEmail> effectiveEmails = new ArrayList<>(target == null ? List.of() : emails(target));
+                for (String email : emailTokens(companyEmail + ";" + personalEmail)) {
+                    effectiveEmails.add(DatabaseEmail.builder().email(email).build());
+                }
+                List<String> missing = participantImport ? new ArrayList<>()
+                        : getMissingMandatoryFields(groupName, cell(row, 2), companyName,
                         cell(row, 4), firstName, lastName, cell(row, 7), cell(row, 9), cell(row, 10),
                         cleanPhone(cell(row, 11)), mobilePhone, companyEmail, cell(row, 15), cell(row, 20), cell(row, 22));
+                if (participantImport && effectiveEmails.stream().noneMatch(emailValue -> ContactEmailCategory.isValidEmail(emailValue.getEmail()))
+                        && !ContactPhone.isUsable(cell(row, 12)) && (target == null || !ContactPhone.isUsable(target.getMobilePhone()))) {
+                    missing.add("Email atau HP/WhatsApp Peserta");
+                }
                 if (target != null) {
                     // A blank update is valid only if the retained value actually fills that field.
                     Database retained = target;
@@ -388,10 +481,15 @@ public class ExcelImportController {
                     addMessage(preview, "Kolom kosong: " + String.join(", ", missing));
                 }
 
-                String normalizedPhone = formatNormalizedPhone(mobilePhone);
+                if (participantImport && firstName.isEmpty() && lastName.isEmpty()) addMessage(preview, "Nama belum diisi; data tetap boleh diimport sebagai Data Kotor.");
+                if (participantImport) { personal.addAll(corporate); corporate.clear(); }
+                String normalizedPhone = participantImport ? (ContactPhone.primary(mobilePhone).isEmpty() ? null : ContactPhone.primary(mobilePhone)) : formatNormalizedPhone(mobilePhone);
                 for (Database other : databases) {
                     if (target != null && Objects.equals(target.getId(), other.getId())) continue;
-                    if (normalizedPhone != null && (normalizedPhone.equals(formatNormalizedPhone(other.getMobilePhone()))
+                    Set<String> existingPhones = ContactPhone.normalizedNumbers(other.getMobilePhone());
+                    existingPhones.addAll(ContactPhone.normalizedNumbers(other.getNormalizedPhone()));
+                    if (participantImport ? ContactPhone.normalizedNumbers(mobilePhone).stream().anyMatch(existingPhones::contains)
+                            : normalizedPhone != null && (normalizedPhone.equals(formatNormalizedPhone(other.getMobilePhone()))
                             || normalizedPhone.equals(formatNormalizedPhone(other.getNormalizedPhone())))) {
                         conflict(preview, "Mobile Phone sudah dipakai " + contactLabel(other));
                     }
@@ -404,15 +502,19 @@ public class ExcelImportController {
                 }
 
                 // One contact is updated at most once per workbook; conflicting row order must not choose a winner.
-                registerOwner(fileOwners, "Kontak: " + normalizeKey(firstName + " " + lastName)
+                if (!participantImport && !companyName.isEmpty()) registerOwner(fileOwners, "Kontak: " + normalizeKey(firstName + " " + lastName)
                         + " / " + normalizeKey(companyName), preview);
                 if (target != null) registerOwner(fileOwners, "Target ID: " + target.getId(), preview);
-                if (normalizedPhone != null) registerOwner(fileOwners, "Mobile Phone: " + normalizedPhone, preview);
+                if (participantImport) {
+                    for (String number : ContactPhone.normalizedNumbers(mobilePhone)) registerOwner(fileOwners, "Mobile Phone: " + number, preview);
+                } else if (normalizedPhone != null) registerOwner(fileOwners, "Mobile Phone: " + normalizedPhone, preview);
                 for (String email : personal) registerOwner(fileOwners, "Personal Email: " + email, preview);
 
-                // Company metadata is shared; locations are compared only within the same office.
-                for (boolean location : List.of(false, true)) {
-                    String companyKey = normalizeKey(companyName) + (location ? "\u0000" + normalizeKey(preview.getBranchName()) : "");
+                // Companyless contacts do not share metadata; retained company assignments still do.
+                String companyScope = !companyName.isEmpty() ? normalizeKey(companyName)
+                        : matchedCompany == null ? "" : normalizeKey(cleanCompanyName(matchedCompany.getName()));
+                if (!participantImport && !companyScope.isEmpty()) for (boolean location : List.of(false, true)) {
+                    String companyKey = companyScope + (location ? "\u0000" + normalizeKey(preview.getBranchName()) : "");
                     companyRows.computeIfAbsent(companyKey, key -> new ArrayList<>()).add(preview);
                     Map<Integer, String> values = companyValues.computeIfAbsent(companyKey, key -> new LinkedHashMap<>());
                     for (int column : location ? List.of(10, 11, 20, 21) : List.of(1, 2, 15, 16, 17, 18, 22)) {
@@ -448,15 +550,16 @@ public class ExcelImportController {
                 if ("NEW".equals(preview.getStatus()) && preview.getExistingDatabaseId() != null) {
                     preview.setStatus("DUPLICATE");
                     addMessage(preview, "Update kontak ID " + preview.getExistingDatabaseId()
-                            + ". Nilai kosong dan email lama dipertahankan; Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong.");
+                            + (participantImport ? ". Tujuan Database Peserta; profil dan email lama dipertahankan." : ". Nilai kosong dan email lama dipertahankan; Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong."));
                 } else if ("NEW".equals(preview.getStatus())) {
-                    addMessage(preview, "Akan disimpan sebagai kontak baru. Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong.");
+                    addMessage(preview, participantImport ? "Akan disimpan sebagai kontak Database Peserta." : "Akan disimpan sebagai kontak baru. Office Phone cabang mengikuti Excel; data master lainnya hanya dilengkapi jika kosong.");
                 }
             }
             if (previews.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("message", "File Excel tidak memiliki baris data."));
             }
             return ResponseEntity.ok(ImportPreviewResponse.builder()
+                    .destination(destination)
                     .totalRows(previews.size())
                     .newCount(countStatus(previews, "NEW"))
                     .duplicateCount(countStatus(previews, "DUPLICATE"))
@@ -466,6 +569,97 @@ public class ExcelImportController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("message", "Gagal memvalidasi Excel: " + e.getMessage()));
         }
+    }
+
+    private Sheet prepareImportSheet(Workbook workbook, boolean participantImport) {
+        Sheet source = workbook.getSheetAt(0);
+        if (!participantImport) return source;
+        Row header = source.getRow(0);
+        if (header == null) throw new IllegalArgumentException("Header Excel kosong.");
+        Map<String, Integer> columns = new LinkedHashMap<>();
+        for (Cell value : header) columns.put(normalizeKey(getCellValueAsString(value)), value.getColumnIndex());
+        Integer emailColumn = columns.get("email");
+        if (emailColumn == null) emailColumn = columns.get("email peserta");
+        boolean fullTemplate = columns.containsKey("company email address") || columns.containsKey("personal email address");
+        Integer phoneColumn = columns.get("mobile phone");
+        if (phoneColumn == null) phoneColumn = columns.get("whatsapp");
+        if (fullTemplate || emailColumn == null && phoneColumn == null) {
+            // Accept the known EDU sheet's two header aliases only for the participant destination.
+            for (Cell value : header) {
+                String label = normalizeKey(getCellValueAsString(value));
+                if (label.equals("firts name")) value.setCellValue("First Name");
+                if (label.equals("linkedin")) value.setCellValue("Linkedin Link");
+            }
+            return source;
+        }
+        Integer nameColumn = columns.get("first name");
+        if (nameColumn == null) nameColumn = columns.get("nama");
+        // Names may be supplied later; compact participant files need only an email or phone column.
+        Sheet normalized = workbook.createSheet("_crm_participant_" + workbook.getNumberOfSheets());
+        Row normalizedHeader = normalized.createRow(0);
+        for (int i = 0; i < HEADERS.size(); i++) normalizedHeader.createCell(i).setCellValue(HEADERS.get(i));
+        normalizedHeader.createCell(23).setCellValue("Kategori Peserta");
+        normalizedHeader.createCell(24).setCellValue("Sekolah/Kampus/Instansi");
+        for (int index = 1; index <= source.getLastRowNum(); index++) {
+            Row raw = source.getRow(index); if (raw == null) continue;
+            Row row = normalized.createRow(index);
+            if (nameColumn != null) row.createCell(5).setCellValue(getCellValueAsString(raw.getCell(nameColumn)));
+            if (emailColumn != null) row.createCell(14).setCellValue(getCellValueAsString(raw.getCell(emailColumn)));
+            if (phoneColumn != null) row.createCell(12).setCellValue(getCellValueAsString(raw.getCell(phoneColumn)));
+            for (Map.Entry<String, Integer> entry : Map.of("last name", 6, "mobile phone", 12,
+                    "kategori peserta", 23, "sekolah/kampus/instansi", 24).entrySet()) {
+                Integer column = columns.get(entry.getKey());
+                if (column != null) row.createCell(entry.getValue()).setCellValue(getCellValueAsString(raw.getCell(column)));
+            }
+        }
+        return normalized;
+    }
+
+    private String namedCell(Row row, String name) {
+        for (Cell header : row.getSheet().getRow(0)) {
+            if (normalizeKey(getCellValueAsString(header)).equals(normalizeKey(name))) return normalizeField(getCellValueAsString(row.getCell(header.getColumnIndex())));
+        }
+        return "";
+    }
+
+    private String participantInstitution(Row row) {
+        String institution = namedCell(row, "Sekolah/Kampus/Instansi");
+        return institution.isEmpty() ? cell(row, 3) : institution;
+    }
+
+    private Database findParticipantOnlyEmailOwner(List<Database> databases, String firstName, String lastName,
+            List<String> addresses) {
+        String name = normalizeKey(firstName + " " + lastName);
+        List<String> validAddresses = addresses.stream().filter(ContactEmailCategory::isValidEmail).toList();
+        List<Database> owners = databases.stream()
+                .filter(database -> DatabaseDestination.effective(database.getDatabaseDestination()) == DatabaseDestination.PARTICIPANT)
+                .filter(database -> name.equals(normalizeKey(Objects.toString(database.getFirstName(), "")
+                        + " " + Objects.toString(database.getLastName(), ""))))
+                .filter(database -> emails(database).stream().anyMatch(email -> validAddresses.contains(normalizeKey(email.getEmail()))))
+                .toList();
+        if (owners.size() > 1) throw new IllegalArgumentException("Target update ambigu; beberapa profil Peserta memakai nama dan email yang sama. Tinjau sebelum import perusahaan.");
+        return owners.isEmpty() ? null : owners.get(0);
+    }
+
+    private Database findParticipantDatabase(List<Database> databases, String firstName, String lastName,
+            List<String> addresses, String mobilePhone) {
+        String name = normalizeKey(firstName + " " + lastName);
+        Set<String> phoneNumbers = ContactPhone.normalizedNumbers(mobilePhone);
+        List<Database> matches = new ArrayList<>();
+        for (Database candidate : databases) {
+            String candidateName = normalizeKey(Objects.toString(candidate.getFirstName(), "") + " " + Objects.toString(candidate.getLastName(), ""));
+            boolean emailMatch = emails(candidate).stream().anyMatch(email -> addresses.contains(normalizeKey(email.getEmail())));
+            Set<String> existingNumbers = ContactPhone.normalizedNumbers(candidate.getMobilePhone());
+            existingNumbers.addAll(ContactPhone.normalizedNumbers(candidate.getNormalizedPhone()));
+            boolean phoneMatch = phoneNumbers.stream().anyMatch(existingNumbers::contains);
+            if (!emailMatch && !phoneMatch) continue;
+            if (!name.isBlank() && !candidateName.isBlank() && !name.equals(candidateName)) {
+                throw new IllegalArgumentException("Email atau HP sudah dipakai nama lain; tinjau profil sebelum import Peserta.");
+            }
+            matches.add(candidate);
+        }
+        if (matches.size() > 1) throw new IllegalArgumentException("Target update ambigu; rapikan duplikat peserta sebelum import.");
+        return matches.isEmpty() ? null : matches.get(0);
     }
 
     private String companyCellValue(Row row, int column) {
@@ -504,6 +698,7 @@ public class ExcelImportController {
     }
 
     private Company findCompany(List<Company> companies, String companyName) {
+        if (companyName.isEmpty()) return null;
         List<Company> matches = companies.stream()
                 .filter(company -> normalizeKey(cleanCompanyName(company.getName())).equals(normalizeKey(companyName))).toList();
         if (matches.size() > 1) {
@@ -551,7 +746,7 @@ public class ExcelImportController {
             case "Position" -> contact.getPositionLevel() == null ? null : contact.getPositionLevel().getValue();
             case "Job Title" -> contact.getJobTitle();
             case "Mobile Phone" -> cleanPhone(contact.getMobilePhone());
-            case "Company Email" -> emails(contact).stream().filter(ExcelImportController::isCompanyEmail)
+            case "Company Email" -> emails(contact).stream().filter(ContactEmailCategory::isCompanyEmail)
                     .map(DatabaseEmail::getEmail).filter(email -> !normalizeField(email).isEmpty()
                             && !incomingPersonal.contains(normalizeKey(email))).findFirst().orElse(null);
             case "Nama Group Holding" -> company == null || company.getGroup() == null ? null : company.getGroup().getName();
@@ -567,14 +762,18 @@ public class ExcelImportController {
     }
 
     private Database findExistingDatabase(List<Database> databases, String firstName, String lastName,
-                                          String companyName, Set<String> personalEmails, String mobilePhone) {
+                                          String companyName, Set<String> personalEmails,
+                                          Set<String> companyEmails, String mobilePhone) {
         String name = normalizeKey(firstName + " " + lastName);
         String phone = formatNormalizedPhone(mobilePhone);
         List<Database> candidates = databases.stream().filter(database -> {
             if (!name.equals(normalizeKey(Objects.toString(database.getFirstName(), "") + " "
                     + Objects.toString(database.getLastName(), "")))) return false;
             String company = database.getCompany() == null ? "" : cleanCompanyName(database.getCompany().getName());
-            return normalizeKey(companyName).equals(normalizeKey(company))
+            return (!companyName.isEmpty() && normalizeKey(companyName).equals(normalizeKey(company)))
+                    || (companyName.isEmpty()
+                    && emails(database).stream().anyMatch(email -> ContactEmailCategory.isPersonalEmail(email.getEmail())
+                    && companyEmails.contains(normalizeKey(email.getEmail()))))
                     || (phone != null && (phone.equals(formatNormalizedPhone(database.getMobilePhone()))
                     || phone.equals(formatNormalizedPhone(database.getNormalizedPhone()))))
                     || emails(database).stream().anyMatch(email -> !isCompanyEmail(email)
@@ -740,17 +939,7 @@ public class ExcelImportController {
     }
 
     static boolean isPublicPersonalEmail(String email) {
-        if (email == null || !email.contains("@")) return false;
-        String domain = email.substring(email.indexOf("@") + 1).toLowerCase(Locale.ROOT).trim();
-        Set<String> publicDomains = Set.of(
-            "gmail.com", "googlemail.com",
-            "yahoo.com", "yahoo.co.id", "yahoo.co.uk", "ymail.com", "rocketmail.com",
-            "hotmail.com", "hotmail.co.id", "outlook.com", "outlook.co.id",
-            "live.com", "live.co.id", "windowslive.com", "msn.com",
-            "icloud.com", "me.com", "mac.com",
-            "aol.com", "mail.com", "zoho.com", "proton.me", "protonmail.com"
-        );
-        return publicDomains.contains(domain);
+        return com.crm.util.ContactEmailCategory.isPublicPersonalEmail(email);
     }
 
     static List<String> getCorporateEmailsInPersonalColumn(String personalEmail) {
@@ -894,6 +1083,7 @@ public class ExcelImportController {
     @lombok.Data
     @lombok.Builder
     public static class ImportPreviewResponse {
+        private String destination;
         private int totalRows;
         private int newCount;
         private int duplicateCount;

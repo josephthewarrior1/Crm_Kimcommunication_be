@@ -39,6 +39,17 @@ public class Database {
         this.company = company;
     }
 
+    // Destination is an explicit staff choice. Email domains never move a contact.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "database_destination", nullable = false, length = 16)
+    private DatabaseDestination databaseDestination;
+
+    @Column(name = "institution_name", length = 255)
+    private String institutionName;
+
+    @Column(name = "participant_category", length = 32)
+    private String participantCategory;
+
     private String salutation;
 
     @Column(name = "first_name")
@@ -94,6 +105,7 @@ public class Database {
 
     @PrePersist
     protected void onCreate() {
+        databaseDestination = DatabaseDestination.effective(databaseDestination);
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
         if (isActive == null) {

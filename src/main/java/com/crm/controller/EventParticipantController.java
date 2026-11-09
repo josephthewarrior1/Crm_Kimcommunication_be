@@ -61,6 +61,7 @@ public class EventParticipantController {
     }
 
     @PostMapping
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> createEventParticipant(
             @RequestBody EventParticipantRequest request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -72,11 +73,18 @@ public class EventParticipantController {
             return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can add event participants");
         }
 
-        Event event = eventRepository.findById(request.getEventId()).orElse(null);
+        Event event = eventRepository.findForSyncById(request.getEventId()).orElse(null);
         if (event == null) {
             return ResponseEntity.badRequest().body("Event not found");
         }
 
+        if (!securityHelper.hasRole(currentUser, Role.ADMIN)
+                && (currentUser.getAllowedEventIds() == null || !currentUser.getAllowedEventIds().contains(event.getId()))) {
+            return ResponseEntity.status(403).body("Forbidden: You don't have access to this event");
+        }
+        if (event.getSyncDestination() != DatabaseDestination.COMPANY && event.getSyncDestination() != DatabaseDestination.PARTICIPANT) {
+            return ResponseEntity.status(409).body("Tipe event belum dipilih. Pilih Korporat atau Peserta melalui Edit Event terlebih dahulu.");
+        }
         java.util.List<Long> databasesToProcess = new java.util.ArrayList<>();
         if (request.getDatabaseIds() != null && !request.getDatabaseIds().isEmpty()) {
             databasesToProcess.addAll(request.getDatabaseIds());
@@ -88,14 +96,18 @@ public class EventParticipantController {
             return ResponseEntity.badRequest().body("No Database IDs provided");
         }
 
-        java.util.List<EventParticipant> savedParticipants = new java.util.ArrayList<>();
-        for (Long databaseId : databasesToProcess) {
+        List<Database> selectedDatabases = new ArrayList<>();
+        for (Long databaseId : new java.util.LinkedHashSet<>(databasesToProcess)) {
             Database database = databaseRepository.findById(databaseId).orElse(null);
-            if (database == null) {
-                continue;
-            }
-
-            if (eventParticipantRepository.findByEventIdAndDatabaseId(request.getEventId(), databaseId).isPresent()) {
+            if (database == null) continue;
+            if (Boolean.FALSE.equals(database.getIsActive())) return ResponseEntity.badRequest().body("Kontak nonaktif; tinjau profil sebelum menambahkan ke event.");
+            selectedDatabases.add(database);
+        }
+        java.util.List<EventParticipant> savedParticipants = new java.util.ArrayList<>();
+        for (Database database : selectedDatabases) {
+            database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()).add(event.getSyncDestination()));
+            databaseRepository.save(database);
+            if (eventParticipantRepository.findByEventIdAndDatabaseId(request.getEventId(), database.getId()).isPresent()) {
                 continue;
             }
 

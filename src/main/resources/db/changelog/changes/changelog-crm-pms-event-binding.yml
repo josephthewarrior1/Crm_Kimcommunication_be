@@ -1,0 +1,22 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-pms-event-binding-20261109
+      author: codex
+      changes:
+        - addColumn:
+            tableName: events
+            columns:
+              - column:
+                  name: pms_event_id
+                  type: BIGINT
+        - addUniqueConstraint:
+            tableName: events
+            columnNames: pms_event_id
+            constraintName: uq_events_pms_event_id
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE events ADD CONSTRAINT chk_events_pms_event_positive CHECK (pms_event_id IS NULL OR pms_event_id > 0)
+      rollback:
+        - dropColumn:
+            tableName: events
+            columnName: pms_event_id

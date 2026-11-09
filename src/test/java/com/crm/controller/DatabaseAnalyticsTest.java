@@ -115,7 +115,7 @@ class DatabaseAnalyticsTest {
                 otherIndustries(result).stream().map(bucket -> number(bucket, "count")).toList());
         Collections.reverse(records);
         Map<?, ?> descending = (Map<?, ?>) controller.getDatabasesList(null, null, null, null, null,
-                null, null, "all", "id", "desc", 3, 2, "test").getBody();
+                null, null, "all", "id", "desc", 3, 2, "all", "test").getBody();
         assertEquals(result.get("analytics"), descending.get("analytics"));
         assertEquals("Manufaktur", records.get(records.size() - 1).getCompany().getIndustry());
         for (long id = 19; id <= 22; id++) records.add(contact(id, "LAINNYA"));
@@ -152,7 +152,7 @@ class DatabaseAnalyticsTest {
     private Map<?, ?> list(String search, Long group, Long company, Long branch, String position,
                           String industry, String city, String tab, int page, int size) {
         return (Map<?, ?>) controller.getDatabasesList(search, group, company, branch, position, industry,
-                city, tab, "id", "asc", page, size, "test").getBody();
+                city, tab, "id", "asc", page, size, "all", "test").getBody();
     }
 
     private static void assertCounts(Map<?, ?> result, long total, long clean, long dirty) {

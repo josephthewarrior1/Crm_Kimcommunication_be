@@ -139,11 +139,13 @@ class EventImportIncompleteTest {
         assertEquals(2,contacts.size());assertEquals(1,links.size());
     }
 
-    @Test void aNameOrCompanyAloneNeverMergesDifferentPeople() throws Exception {
+    @Test void sameNameWithUnresolvedDifferentPhonesIsHeldInsteadOfMergedOrDuplicated() throws Exception {
         oldContact("Alex","Demo","alex@example.org","081200000001");
         var file=file(new String[]{"Alex","Demo","other@example.org","081200000002",""});
-        assertEquals(200,controller.importEventParticipants(1L,file,"request",null,"test").getStatusCode().value());
-        assertEquals(2,contacts.size());assertEquals(2,addresses.size());assertEquals(1,links.size());
+        assertTrue(previewRow(file).get("issues").toString().contains("nomor HP berbeda"));
+        assertEquals(400,controller.importEventParticipants(1L,file,"request",null,"test").getStatusCode().value());
+        assertEquals(1,contacts.size());assertEquals(1,addresses.size());assertTrue(links.isEmpty());
+        verify(databases,never()).save(any());verify(emails,never()).save(any());verify(participants,never()).save(any());
     }
 
 

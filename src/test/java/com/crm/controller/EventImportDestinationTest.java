@@ -345,6 +345,114 @@ class EventImportDestinationTest {
         verify(companies, never()).save(any()); verify(groups, never()).save(any());
     }
 
+    @Test void sameNameAndOrganizationWithUnresolvedDifferentPhonesIsHeldAgainstStoredProfiles() throws Exception {
+        for (String destination : List.of("company", "participant")) {
+            DatabaseDestination kind = DatabaseDestination.fromValue(destination);
+            typeEvent(1L, kind);
+            Database stored = oldContact("Alex", "Example", "known-" + destination + "@example.invalid", kind);
+            stored.setMobilePhone("081200001111");
+            if (kind == DatabaseDestination.COMPANY) stored.setCompany(Company.builder().id(70L).name("Example Org").build());
+            else stored.setInstitutionName("Example Org");
+            for (String organization : List.of("Example Org", "")) {
+                assertHeld(simpleFile(new String[]{" alex ", "EXAMPLE", "", "081300002222", organization}), destination, "nomor HP berbeda");
+            }
+            assertEquals("081200001111", stored.getMobilePhone());
+        }
+        assertNoImportWrites();
+    }
+
+    @Test void sameNameAndOrganizationWithDisjointPhonesInOneWorkbookIsHeldBeforeAnyWrites() throws Exception {
+        String[] first = {"Alex", "Example", "", "081200001111", "Example Org"};
+        String[] second = {" alex ", "EXAMPLE", "", "081300002222", "Example Org"};
+        for (String destination : List.of("company", "participant")) {
+            typeEvent(1L, DatabaseDestination.fromValue(destination));
+            for (boolean reversed : List.of(false, true)) {
+                var batch = simpleFile(new String[]{"Unrelated", "Person", "", "081400003333", "Other Org"},
+                        reversed ? second : first, reversed ? first : second);
+                var response = controller.validateEventParticipantsImport(1L, batch, "request", destination, "test");
+                assertEquals(2, ((Map<?, ?>) ((Map<?, ?>) response.getBody()).get("summary")).get("errorCount"));
+                assertHeld(batch, destination, "nomor HP berbeda");
+            }
+        }
+        assertNoImportWrites(); assertTrue(contacts.isEmpty()); assertTrue(attendance.isEmpty());
+    }
+
+    @Test void sameNormalizedPhoneWithDifferentNamesIsHeldForStoredAndInFileIdentities() throws Exception {
+        for (String destination : List.of("company", "participant")) {
+            DatabaseDestination kind = DatabaseDestination.fromValue(destination);
+            typeEvent(1L, kind);
+            Database stored = oldContact("Alex", "Example", "known-" + destination + "@example.invalid", kind);
+            stored.setMobilePhone("081200001111");
+            assertHeld(simpleFile(new String[]{"Bima", "Example", "", "+62 812-0000-1111", ""}), destination, "nama berbeda");
+            contacts.clear(); addresses.clear();
+            assertHeld(simpleFile(new String[]{"Alex", "Example", "", "081200001111", ""},
+                    new String[]{"Bima", "Example", "", "+62 812-0000-1111", ""}), destination, "nama berbeda");
+        }
+        assertNoImportWrites();
+    }
+
+    @Test void strongPersonalEmailAndTwoNumberCellsReuseOneProfileAndSameEventLink() throws Exception {
+        for (String destination : List.of("company", "participant")) {
+            long eventId = destination.equals("company") ? 1L : 3L;
+            DatabaseDestination kind = DatabaseDestination.fromValue(destination);
+            typeEvent(eventId, kind); typeEvent(eventId + 1, kind);
+            String address = "same-" + destination + "@example.invalid";
+            var batch = file(new String[]{"First Name", "Last Name", "Personal Email Address", "Mobile Phone", "Company Name"},
+                    new String[]{"Alex", "Example", address, "081200001111", ""},
+                    new String[]{" alex ", "EXAMPLE", address, "081300002222", ""});
+            assertEquals("valid", previewRow(eventId, batch, destination).get("status"));
+            assertEquals(200, controller.importEventParticipants(eventId, batch, "request", destination, "test").getStatusCode().value());
+            Database contact = contacts.stream().filter(row -> row.getDatabaseDestination() == kind).findFirst().orElseThrow();
+            assertEquals("081200001111, 081300002222", contact.getMobilePhone());
+            assertEquals(1, contacts.stream().filter(row -> row.getDatabaseDestination() == kind).count());
+            assertEquals(1, attendance.stream().filter(row -> row.getEvent().getId().equals(eventId)).count());
+            var twoNumbers = simpleFile(new String[]{"Alex", "Example", "", "+62 812-0000-1111 / 081300002222", ""});
+            assertEquals(contact.getId(), previewRow(eventId, twoNumbers, destination).get("existingDatabaseId"));
+            var repeated = (Map<?, ?>) controller.importEventParticipants(eventId, twoNumbers, "request", destination, "test").getBody();
+            assertEquals(0, repeated.get("addedParticipants")); assertEquals(1, repeated.get("skippedParticipants"));
+            assertEquals(200, controller.importEventParticipants(eventId + 1, twoNumbers, "request", destination, "test").getStatusCode().value());
+            assertEquals(2, attendance.stream().filter(row -> row.getDatabase() == contact).count());
+            assertEquals("081200001111, 081300002222", contact.getMobilePhone());
+        }
+        assertEquals(2, contacts.size()); assertEquals(4, attendance.size());
+    }
+
+    @Test void sharedIdentifiersCannotChooseBetweenDifferentOrganizationsWithinOneWorkbook() throws Exception {
+        for (String destination : List.of("company", "participant")) {
+            typeEvent(1L, DatabaseDestination.fromValue(destination));
+            assertHeld(simpleFile(new String[]{"Alex", "Example", "", "081200001111", "Org A"},
+                    new String[]{"Alex", "Example", "", "+6281200001111", "Org B"}), destination, "perusahaan/instansi berbeda");
+            assertHeld(simpleFile(new String[]{"Alex", "Example", "alex@example.invalid", "081200001111", "Org A"},
+                    new String[]{"Alex", "Example", "alex@example.invalid", "081300002222", "Org B"}), destination, "perusahaan/instansi berbeda");
+        }
+        assertNoImportWrites();
+    }
+
+    @Test void sameNameAtDifferentFilledOrganizationsWithoutSharedContactsStaysSeparate() throws Exception {
+        for (String destination : List.of("company", "participant")) {
+            DatabaseDestination kind = DatabaseDestination.fromValue(destination);
+            typeEvent(1L, kind);
+            var batch = simpleFile(new String[]{"Alex", "Example", "", "081200001111", "Org A"},
+                    new String[]{"Alex", "Example", "", "081300002222", "Org B"});
+            assertEquals(200, controller.importEventParticipants(1L, batch, "request", destination, "test").getStatusCode().value());
+            assertEquals(2, contacts.stream().filter(row -> row.getDatabaseDestination() == kind).count());
+        }
+        assertEquals(4, contacts.size()); assertEquals(4, attendance.size());
+    }
+
+    private void assertHeld(MockMultipartFile upload, String destination, String reason) {
+        var response = controller.validateEventParticipantsImport(1L, upload, "request", destination, "test");
+        assertEquals(200, response.getStatusCode().value());
+        List<?> rows = (List<?>) ((Map<?, ?>) response.getBody()).get("rows");
+        assertTrue(rows.stream().anyMatch(row -> ((Map<?, ?>) row).get("issues").toString().contains(reason)));
+        assertEquals(400, controller.importEventParticipants(1L, upload, "request", destination, "test").getStatusCode().value());
+    }
+
+    private void assertNoImportWrites() {
+        verify(databases, never()).save(any()); verify(emails, never()).save(any()); verify(participants, never()).save(any());
+        verify(companies, never()).save(any()); verify(groups, never()).save(any());
+    }
+
     private void typeEvent(long id, DatabaseDestination destination) {
         eventRecords.computeIfAbsent(id, key -> Event.builder().id(key).name("Example event " + key).build()).setSyncDestination(destination);
     }

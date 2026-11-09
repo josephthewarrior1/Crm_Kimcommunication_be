@@ -47,6 +47,7 @@ import java.util.HashSet;
 import java.util.Arrays;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -630,7 +631,7 @@ public class EventController {
         for (ImportValidationRowDraft draft : drafts) {
             Database database = draft.existingDatabaseId() != null
                     ? databaseRepository.findById(draft.existingDatabaseId()).orElseThrow(() -> new IllegalStateException("Kontak berubah; preview ulang sebelum import"))
-                    : findEventImportDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail(), participantImport);
+                    : findEventImportDatabase(allDatabases, draft.firstName(), draft.lastName(), draft.companyName(), draft.mobilePhone(), draft.companyEmail(), draft.personalEmail(), participantImport);
             if (database != null && !DatabaseDestination.isExact(database.getDatabaseDestination(), event.getSyncDestination())) {
                 throw new IllegalStateException("Jenis data kontak berubah; preview ulang sebelum import.");
             }
@@ -2079,7 +2080,7 @@ public class EventController {
                 List<String> warnings = mobilePhone.isBlank() ? List.of("Nomor HP/WhatsApp belum diisi; peserta belum bisa ditelepon.") : List.of();
                 Database existingDatabase = null;
                 try {
-                    existingDatabase = findEventImportDatabase(allDatabases, firstName, lastName, mobilePhone, companyEmail, personalEmail, participantImport);
+                    existingDatabase = findEventImportDatabase(allDatabases, firstName, lastName, companyName, mobilePhone, companyEmail, personalEmail, participantImport);
                     if (!rawMobilePhone.isBlank() && isUsableEventImportPhone(rawMobilePhone)) {
                         mobilePhone = mergeEventImportPhones(existingDatabase != null ? existingDatabase.getMobilePhone() : "", rawMobilePhone);
                     }
@@ -2148,6 +2149,35 @@ public class EventController {
             }
             if (candidateNames.size() > 1) draft.issues().add("Identitas peserta cocok dengan beberapa profil di file ini; rapikan duplikat sebelum import.");
         }
+        for (int first = 0; first < drafts.size(); first++) {
+            for (int second = first + 1; second < drafts.size(); second++) {
+                ImportValidationRowDraft left = drafts.get(first), right = drafts.get(second);
+                String leftName = normalizedEventImportName(left.firstName(), left.lastName());
+                String rightName = normalizedEventImportName(right.firstName(), right.lastName());
+                Set<String> leftPhones = normalizedEventImportPhones(left.mobilePhone());
+                Set<String> rightPhones = normalizedEventImportPhones(right.mobilePhone());
+                boolean sharedPhone = !Collections.disjoint(leftPhones, rightPhones);
+                boolean sharedEmail = !Collections.disjoint(eventImportEmails(left.companyEmail(), left.personalEmail()),
+                        eventImportEmails(right.companyEmail(), right.personalEmail()));
+                boolean sameExisting = left.existingDatabaseId() != null && Objects.equals(left.existingDatabaseId(), right.existingDatabaseId());
+                String problem = null;
+                if (sharedPhone && !leftName.isBlank() && !rightName.isBlank() && !leftName.equals(rightName)) {
+                    problem = "Nomor HP yang sama dipakai nama berbeda; tinjau identitas melalui Edit kontak sebelum import.";
+                } else if ((sharedPhone || sharedEmail || sameExisting)
+                        && (leftName.isBlank() || rightName.isBlank() || leftName.equals(rightName))
+                        && differentFilledEventImportOrganizations(left.companyName(), right.companyName())) {
+                    problem = "Identitas kontak sama tetapi perusahaan/instansi berbeda; tinjau melalui Edit kontak sebelum import.";
+                } else if (!leftName.isBlank() && leftName.equals(rightName)
+                        && comparableEventImportOrganizations(left.companyName(), right.companyName())
+                        && !leftPhones.isEmpty() && !rightPhones.isEmpty() && !sharedPhone && !sharedEmail && !sameExisting) {
+                    problem = "Nama dan perusahaan/instansi sama tetapi nomor HP berbeda tanpa email yang sama; tinjau identitas, atau gabungkan nomor milik orang yang sama dalam satu sel Excel.";
+                }
+                if (problem != null) {
+                    left.issues().add(problem + " Periksa baris " + right.rowNumber() + ".");
+                    right.issues().add(problem + " Periksa baris " + left.rowNumber() + ".");
+                }
+            }
+        }
         return new EventImportBatch(drafts, blankCount);
     }
 
@@ -2157,7 +2187,7 @@ public class EventController {
         return ExcelImportController.splitEmailTokens(String.join(";", values));
     }
 
-    private Database findEventImportDatabase(List<Database> databases, String firstName, String lastName,
+    private Database findEventImportDatabase(List<Database> databases, String firstName, String lastName, String companyName,
             String phone, String companyEmail, String personalEmail, boolean participantImport) {
         Set<String> addresses = new LinkedHashSet<>(eventImportEmails(companyEmail, personalEmail));
         Set<String> individualAddresses = participantImport ? addresses : new LinkedHashSet<>(eventImportEmails(personalEmail));
@@ -2180,6 +2210,9 @@ public class EventController {
             Set<String> existingPhones = normalizedEventImportPhones(database.getMobilePhone());
             existingPhones.addAll(normalizedEventImportPhones(database.getNormalizedPhone()));
             boolean phoneMatch = normalizedPhones.stream().anyMatch(existingPhones::contains);
+            if (phoneMatch && !name.isBlank() && !existingName.isBlank() && !samePersonName) {
+                throw new IllegalArgumentException("Nomor HP yang sama dipakai nama berbeda; tinjau identitas melalui Edit kontak sebelum import.");
+            }
             if (emailMatch || phoneMatch) {
                 contactOwners.add(database);
                 if (name.isBlank() || existingName.isBlank() || samePersonName) owners.add(database);
@@ -2189,7 +2222,35 @@ public class EventController {
                 && normalizedEventImportName(owners.get(0).getFirstName(), owners.get(0).getLastName()).isBlank()) {
             throw new IllegalArgumentException("Identitas peserta cocok dengan beberapa profil; rapikan duplikat sebelum import");
         }
+        if (owners.isEmpty() && !name.isBlank() && !normalizedPhones.isEmpty()) {
+            for (Database database : databases) {
+                if (!DatabaseDestination.isExact(database.getDatabaseDestination(), participantImport ? DatabaseDestination.PARTICIPANT : DatabaseDestination.COMPANY)
+                        || !name.equals(normalizedEventImportName(database.getFirstName(), database.getLastName()))) continue;
+                String organization = participantImport ? database.getInstitutionName()
+                        : database.getCompany() == null ? "" : database.getCompany().getName();
+                Set<String> existingPhones = normalizedEventImportPhones(database.getMobilePhone());
+                existingPhones.addAll(normalizedEventImportPhones(database.getNormalizedPhone()));
+                if (comparableEventImportOrganizations(companyName, organization) && !existingPhones.isEmpty()
+                        && Collections.disjoint(normalizedPhones, existingPhones)) {
+                    throw new IllegalArgumentException("Nama dan perusahaan/instansi sama tetapi nomor HP berbeda tanpa email yang sama; tinjau profil lama melalui Edit kontak sebelum import.");
+                }
+            }
+        }
+        if (participantImport && owners.size() == 1
+                && differentFilledEventImportOrganizations(companyName, owners.get(0).getInstitutionName())) {
+            throw new IllegalArgumentException("Identitas kontak sama tetapi perusahaan/instansi berbeda; tinjau melalui Edit kontak sebelum import.");
+        }
         return owners.isEmpty() ? null : owners.get(0);
+    }
+
+    private boolean comparableEventImportOrganizations(String first, String second) {
+        String left = normalizedEventImportName(cleanCompanyName(first), "");
+        String right = normalizedEventImportName(cleanCompanyName(second), "");
+        return left.isBlank() || right.isBlank() || left.equals(right);
+    }
+
+    private boolean differentFilledEventImportOrganizations(String first, String second) {
+        return !comparableEventImportOrganizations(first, second);
     }
 
     private String normalizedEventImportName(String firstName, String lastName) {
@@ -2573,6 +2634,8 @@ public class EventController {
             if (owners.size() < 2) {
                 continue;
             }
+            if (owners.stream().map(owner -> owner.fullName().replaceAll("(?U)\\s+", " ").trim())
+                    .filter(name -> !name.isBlank()).distinct().count() <= 1) continue;
 
             for (EventImportEmailOwnerInfo owner : owners) {
                 List<String> others = owners.stream()

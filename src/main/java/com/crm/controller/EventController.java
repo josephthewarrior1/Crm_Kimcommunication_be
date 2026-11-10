@@ -63,6 +63,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/events")
 public class EventController {
     private static final Pattern PIC_PATTERN = Pattern.compile("\\[PIC:\\s*([^\\]]+)\\]", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PRE_EVENT_APPROVAL_PATTERN = Pattern.compile("\\[PreEventApproval:\\s*([^\\]]+)\\]", Pattern.CASE_INSENSITIVE);
     private static final Pattern EVENT_IMPORT_EMAIL = Pattern.compile("^[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+$", Pattern.UNICODE_CHARACTER_CLASS);
 
 
@@ -290,6 +291,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestParam(required = false, defaultValue = "1") Integer page,
             @RequestParam(required = false, defaultValue = "25") Integer size,
@@ -317,6 +319,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -347,6 +350,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -372,6 +376,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -432,6 +437,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -458,6 +464,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -783,6 +790,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -811,6 +819,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -888,6 +897,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -916,6 +926,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -930,6 +941,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -953,6 +965,7 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
@@ -981,6 +994,7 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                remarks,
                 search
         );
 
@@ -1420,6 +1434,7 @@ public class EventController {
             String industry,
             String confirmationStatus,
             String reminderHariH,
+            String remarks,
             String search) {
         String scopedPic = resolveMinePic(currentUser, tab);
         String effectivePic = scopedPic != null ? scopedPic : pic;
@@ -1431,6 +1446,7 @@ public class EventController {
                 .filter(participant -> matchesIndustry(participant, industry))
                 .filter(participant -> matchesConfirmationStatus(participant, tab, confirmationStatus))
                 .filter(participant -> matchesReminderHariH(participant, tab, reminderHariH))
+                .filter(participant -> matchesRemarks(participant, tab, remarks))
                 .filter(participant -> matchesPic(participant, effectivePic))
                 .filter(participant -> matchesSearch(participant, search))
                 .sorted(Comparator.comparing(EventParticipant::getId))
@@ -1592,7 +1608,9 @@ public class EventController {
                 stats.put("totalDeclined", participants.stream()
                         .filter(participant -> "decline".equals(getEffectiveConfirmationStatus(participant))
                                 || "declined".equals(getEffectiveConfirmationStatus(participant))
-                                || "decline".equals(getPreEventApprovalStatus(participant)))
+                                || "decline".equals(getPreEventApprovalStatus(participant))
+                                || "declined".equals(getPreEventApprovalStatus(participant))
+                                || isDeclinedParticipant(participant))
                         .count());
                 stats.put("declinedFromDbVetting", participants.stream()
                         .filter(participant -> "decline".equals(getEffectiveConfirmationStatus(participant))
@@ -1681,8 +1699,14 @@ public class EventController {
     }
 
     private String getPreEventApprovalStatus(EventParticipant participant) {
-        String status = safe(participant.getPreEventApprovalStatus()).toLowerCase(Locale.ROOT);
-        return status.isBlank() ? "pending" : status;
+        String status = safe(participant.getPreEventApprovalStatus()).trim().toLowerCase(Locale.ROOT);
+        if ("declined".equals(status)) return "decline";
+        if (Set.of("approve", "decline", "pending").contains(status)) return status;
+        Matcher legacyApproval = PRE_EVENT_APPROVAL_PATTERN.matcher(safe(participant.getNotes()));
+        if (!legacyApproval.find()) return "pending";
+        String legacyStatus = legacyApproval.group(1).trim().toLowerCase(Locale.ROOT);
+        if ("declined".equals(legacyStatus)) return "decline";
+        return "approve".equals(legacyStatus) || "decline".equals(legacyStatus) ? legacyStatus : "pending";
     }
 
     private String getLatestReminderStatus(EventParticipant participant) {
@@ -1721,13 +1745,15 @@ public class EventController {
         if (tab == null || tab.isBlank()) return true;
         String normalizedTab = tab.trim().toLowerCase(Locale.ROOT);
         String confirmation = getEffectiveConfirmationStatus(participant);
-        String preEvent = safe(participant.getPreEventApprovalStatus()).toLowerCase(Locale.ROOT);
+        String preEvent = getPreEventApprovalStatus(participant);
         boolean isEms = isEmsParticipant(participant);
+        boolean declined = "decline".equals(confirmation) || "declined".equals(confirmation)
+                || "decline".equals(preEvent) || "declined".equals(preEvent) || isDeclinedParticipant(participant);
 
         return switch (normalizedTab) {
-            case "request" -> !isPublicEmsOnlyParticipant(participant);
+            case "request" -> true;
             case "pre_event" -> {
-                if ("decline".equals(confirmation) || "declined".equals(confirmation) || "decline".equals(preEvent)) {
+                if (declined) {
                     yield false;
                 }
                 if (!isEms && !"approve".equals(confirmation) && !"confirmed".equals(confirmation)) {
@@ -1735,13 +1761,9 @@ public class EventController {
                 }
                 yield true;
             }
-            case "declined" -> "decline".equals(confirmation)
-                    || "declined".equals(confirmation)
-                    || "decline".equals(preEvent)
-                    || isDeclinedParticipant(participant);
-            case "reminder" -> ("approve".equals(confirmation) || "confirmed".equals(confirmation))
-                    && isRegisteredParticipant(participant);
-            case "reminder_dday" -> ("approve".equals(confirmation) || "confirmed".equals(confirmation))
+            case "declined" -> declined;
+            case "reminder", "reminder_dday" -> !declined
+                    && ("approve".equals(confirmation) || "confirmed".equals(confirmation))
                     && isRegisteredParticipant(participant);
             default -> true;
         };
@@ -1783,7 +1805,7 @@ public class EventController {
         if (confirmationStatus == null || confirmationStatus.isBlank()) return true;
         String target = confirmationStatus.trim().toLowerCase(Locale.ROOT);
         if ("pre_event".equalsIgnoreCase(safe(tab))) {
-            return safe(participant.getPreEventApprovalStatus()).equalsIgnoreCase(target);
+            return getPreEventApprovalStatus(participant).equals("declined".equals(target) ? "decline" : target);
         }
         String current = safe(participant.getConfirmationStatus()).toLowerCase(Locale.ROOT);
         if ("approve".equals(target)) {
@@ -1793,6 +1815,23 @@ public class EventController {
             return "decline".equals(current) || "declined".equals(current);
         }
         return current.equals(target);
+    }
+
+    private boolean matchesRemarks(EventParticipant participant, String tab, String remarks) {
+        if (!"pre_event".equalsIgnoreCase(safe(tab)) || remarks == null || remarks.isBlank()) return true;
+        String current = participant.getParticipantStatus() == null ? "" : participant.getParticipantStatus().name();
+        return normalizeRemark(current).equals(normalizeRemark(remarks));
+    }
+
+    private String normalizeRemark(String value) {
+        return switch (normalizeStatus(value)) {
+            case "", "white", "notresponyet", "notrespondyet" -> "not_respon_yet";
+            case "green", "registered", "confirm", "confirmed" -> "registered";
+            case "yellow", "tentative" -> "tentative";
+            case "red", "notinterest" -> "not_interest";
+            case "unableattend", "unabletoattend" -> "unable_to_attend";
+            default -> safe(value).trim().toLowerCase(Locale.ROOT);
+        };
     }
 
     private boolean matchesReminderHariH(EventParticipant participant, String tab, String reminderHariH) {
@@ -1855,15 +1894,6 @@ public class EventController {
                 || "attended".equals(attendanceStatus);
     }
 
-    private boolean isPublicEmsOnlyParticipant(EventParticipant participant) {
-        String notes = safe(participant.getNotes());
-        boolean hasRequestOrigin = notes.contains("[Origin: Request]");
-        boolean hasEmsOrigin = notes.contains("[Origin: EMS Sync]") || notes.contains("[EMS]");
-        boolean isEventRegistration = participant.getDatabase() != null
-                && participant.getDatabase().getSource() == DatabaseSource.event_registration;
-        return !hasRequestOrigin && (hasEmsOrigin || isEventRegistration);
-    }
-
     private boolean isDeclinedParticipant(EventParticipant participant) {
         String att = participant.getAttendanceStatus() != null ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT) : "";
         String notes = safe(participant.getNotes()).toLowerCase(Locale.ROOT);
@@ -1875,26 +1905,8 @@ public class EventController {
     }
 
     private String getEffectiveConfirmationStatus(EventParticipant participant) {
-        String confirmationStatus = safe(participant.getConfirmationStatus()).toLowerCase(Locale.ROOT);
-        if (confirmationStatus.isBlank()) {
-            confirmationStatus = "pending";
-        }
-        String attendanceStatus = participant.getAttendanceStatus() != null ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT) : "";
-        String participantStatus = participant.getParticipantStatus() != null ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT) : "";
-        boolean isActiveEms = isEmsParticipant(participant)
-                && !isDeclinedParticipant(participant)
-                && ("registered".equals(attendanceStatus)
-                || "attended".equals(attendanceStatus)
-                || "registered".equals(participantStatus)
-                || "green".equals(participantStatus)
-                || "confirm".equals(participantStatus)
-                || "confirmed".equals(participantStatus)
-                || "on_location".equals(safe(participant.getReminderHariH()).toLowerCase(Locale.ROOT)));
-
-        if (isActiveEms && ("decline".equals(confirmationStatus) || "declined".equals(confirmationStatus))) {
-            return "approve";
-        }
-        return confirmationStatus;
+        String status = safe(participant.getConfirmationStatus()).trim().toLowerCase(Locale.ROOT);
+        return status.isBlank() ? "pending" : status;
     }
 
     private String extractPic(String notes) {

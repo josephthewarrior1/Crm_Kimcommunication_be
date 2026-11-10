@@ -327,6 +327,149 @@ class EmsDestinationSyncTest {
         verify(databases, never()).save(any()); verifyNoInteractions(companies);
     }
 
+    @Test void existingClientAndPreEventDecisionsSurviveEveryEmsStateAndRepeatSync() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            for (String client : List.of("pending", "approve", "decline")) {
+                for (String preEvent : List.of("pending", "approve", "decline")) {
+                    for (String state : List.of("pending", "accepted", "checked_in", "declined")) {
+                        contacts.clear(); links.clear(); history.clear();
+                        Event event = event(1, destination);
+                        Database contact = contact(9, "Approval", "Example", "approval@company.example", destination);
+                        contacts.add(contact);
+                        EventParticipant link = EventParticipant.builder().id(10L).event(event).database(contact)
+                                .confirmationStatus(client).preEventApprovalStatus(preEvent)
+                                .notes("[Origin: Request] [PIC: Test Agent] [PreEventApproval: " + preEvent + "] Staff note").build();
+                        links.add(link);
+                        doReturn(List.of(approvalRow(state))).when(service).getEventParticipants(1L, EmsSource.V2);
+                        for (int repeat = 0; repeat < 2; repeat++) {
+                            assertEquals(1, apply(event, service.previewParticipantsForEvent(event)).get("count"));
+                            String context = destination + "/" + client + "/" + preEvent + "/" + state;
+                            assertEquals(client, link.getConfirmationStatus(), context);
+                            assertEquals(preEvent, link.getPreEventApprovalStatus(), context);
+                            assertTrue(link.getNotes().contains("[PreEventApproval: " + preEvent + "]"), context);
+                            assertTrue(link.getNotes().contains("[Origin: Request]"), context);
+                            assertTrue(link.getNotes().contains("[PIC: Test Agent]"), context);
+                            assertTrue(link.getNotes().contains("Staff note"), context);
+                            assertEquals(state.equals("declined"), link.getNotes().contains("[EMS Declined]"), context);
+                            assertEquals(state.equals("declined") ? AttendanceStatus.cancelled
+                                    : state.equals("checked_in") ? AttendanceStatus.attended : AttendanceStatus.registered,
+                                    link.getAttendanceStatus(), context);
+                            assertEquals(1, contacts.size()); assertEquals(1, links.size());
+                        }
+                    }
+                }
+            }
+        }
+        verifyNoInteractions(companies);
+    }
+
+    @Test void newEmsParticipantsStayPendingEvenWhenVerifiedCheckedInOrDeclined() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            for (String state : List.of("pending", "accepted", "checked_in", "declined")) {
+                contacts.clear(); links.clear(); history.clear();
+                Event event = event(1, destination);
+                doReturn(List.of(approvalRow(state))).when(service).getEventParticipants(1L, EmsSource.V2);
+                apply(event, service.previewParticipantsForEvent(event));
+                EventParticipant link = links.get(0);
+                assertEquals("pending", link.getConfirmationStatus());
+                assertEquals("pending", link.getPreEventApprovalStatus());
+                assertTrue(link.getNotes().contains("[PreEventApproval: pending]"));
+                assertEquals(state.equals("declined"), link.getNotes().contains("[EMS Declined]"));
+                apply(event, service.previewParticipantsForEvent(event));
+                assertEquals(1, contacts.size()); assertEquals(1, links.size());
+                assertEquals("pending", link.getConfirmationStatus());
+                assertEquals("pending", link.getPreEventApprovalStatus());
+            }
+        }
+    }
+
+    @Test void legacyPreEventNotesAreRetainedWhileAnExplicitPendingFieldWins() {
+        for (String legacy : List.of("approve", "decline", "declined", "pending")) {
+            contacts.clear(); links.clear(); history.clear();
+            Event event = event(1, DatabaseDestination.COMPANY);
+            Database contact = contact(9, "Approval", "Example", "approval@company.example", DatabaseDestination.COMPANY);
+            contacts.add(contact);
+            EventParticipant link = EventParticipant.builder().id(10L).event(event).database(contact)
+                    .confirmationStatus("decline").preEventApprovalStatus(null)
+                    .notes("[preEventApproval: " + legacy.toUpperCase(Locale.ROOT) + "] Staff note").build();
+            links.add(link);
+            doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
+            apply(event, service.previewParticipantsForEvent(event));
+            assertEquals("decline", link.getConfirmationStatus());
+            assertEquals(legacy.equals("declined") ? "decline" : legacy, link.getPreEventApprovalStatus());
+            link.setPreEventApprovalStatus("pending");
+            link.setNotes("[PreEventApproval: decline] Staff note");
+            apply(event, service.previewParticipantsForEvent(event));
+            assertEquals("pending", link.getPreEventApprovalStatus());
+            assertTrue(link.getNotes().contains("[PreEventApproval: pending]"));
+            link.setPreEventApprovalStatus(" DECLINED ");
+            apply(event, service.previewParticipantsForEvent(event));
+            assertEquals("decline", link.getConfirmationStatus());
+            assertEquals("decline", link.getPreEventApprovalStatus());
+            assertTrue(link.getNotes().contains("[PreEventApproval: decline]"));
+        }
+    }
+
+    @Test void emsDeclineMetadataClearsOnRestorationWithoutRestoringClientApproval() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Map<String,Object> declinedWithCheckIn = approvalRow("declined");
+        declinedWithCheckIn.put("checked_in_at", "2026-11-10T01:00:00Z");
+        doReturn(List.of(declinedWithCheckIn)).when(service).getEventParticipants(1L, EmsSource.V2);
+        apply(event, service.previewParticipantsForEvent(event));
+        EventParticipant link = links.get(0);
+        assertEquals(AttendanceStatus.cancelled, link.getAttendanceStatus());
+        assertNull(link.getReminderHariH());
+        link.setConfirmationStatus("decline"); link.setPreEventApprovalStatus("approve");
+        doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
+        apply(event, service.previewParticipantsForEvent(event));
+        assertEquals(AttendanceStatus.registered, link.getAttendanceStatus());
+        assertFalse(link.getNotes().contains("[EMS Declined]"));
+        assertEquals("decline", link.getConfirmationStatus());
+        assertEquals("approve", link.getPreEventApprovalStatus());
+    }
+
+    @Test void sameCorporateMobileUnderDifferentNamesIsHeldAgainstStoredProfilesAndWithinTheBatch() {
+        Database known = contact(9, "Known", "Name", "shared@company.example", DatabaseDestination.COMPANY);
+        known.setMobilePhone("08123456789"); contacts.add(known);
+        Map<String,Object> alias = row("Other", "Name", "shared@company.example", null);
+        ((Map<String,Object>)alias.get("user_profile")).put("phone", "+62 8123456789");
+        doReturn(List.of(alias)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(1, preview.get("rejectedCount"));
+        assertEquals(0, apply(event, preview).get("count"));
+        contacts.clear();
+        Map<String,Object> first = row("First", "Person", "shared@company.example", null);
+        ((Map<String,Object>)first.get("user_profile")).put("phone", "08123456789");
+        doReturn(List.of(first, alias)).when(service).getEventParticipants(1L, EmsSource.V2);
+        preview = service.previewParticipantsForEvent(event);
+        assertEquals(2, preview.get("rejectedCount"));
+        assertEquals(0, apply(event, preview).get("count"));
+        assertTrue(contacts.isEmpty()); assertTrue(links.isEmpty());
+        verify(databases, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies);
+    }
+
+    @Test void corporateSharedEmailAloneDoesNotMergeDifferentPeople() {
+        Database known = contact(9, "Known", "Name", "shared@company.example", DatabaseDestination.COMPANY);
+        contacts.add(known);
+        doReturn(List.of(row("Other", "Name", "shared@company.example", null)))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(0, preview.get("rejectedCount")); assertEquals(1, preview.get("newCount"));
+        assertEquals(1, apply(event, preview).get("count"));
+        assertEquals(2, contacts.size()); assertNotSame(known, links.get(0).getDatabase());
+    }
+
+    private Map<String,Object> approvalRow(String state) {
+        Map<String,Object> incoming = new HashMap<>(row("Approval", "Example", "approval@company.example", null));
+        if (state.equals("accepted")) incoming.put("verified_at", "2026-11-10T01:00:00Z");
+        if (state.equals("checked_in")) incoming.put("checked_in_at", "2026-11-10T01:00:00Z");
+        if (state.equals("declined")) incoming.put("declined_at", "2026-11-10T01:00:00Z");
+        return incoming;
+    }
+
     private Map<String,Object> apply(Event event,Map<String,Object> preview){return service.syncParticipantsForEvent(event,(String)preview.get("previewToken"));}
     private static Event event(long id,DatabaseDestination destination){return Event.builder().id(id).name("Event "+id).emsEventId(id).emsSource(EmsSource.V2).syncDestination(destination).build();}
     private static Database contact(long id,String first,String last,String email,DatabaseDestination destination){return Database.builder().id(id).firstName(first).lastName(last).databaseDestination(destination).isActive(true).emails(new ArrayList<>(List.of(DatabaseEmail.builder().email(email).build()))).build();}

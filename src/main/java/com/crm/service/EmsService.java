@@ -267,7 +267,7 @@ public class EmsService {
                     && (destination == DatabaseDestination.PARTICIPANT || name.isBlank())) {
                 problem = "Email berulang pada nama berbeda di data EMS. Baris ini ditahan untuk ditinjau.";
             }
-            if (problem.isEmpty() && name.isBlank() && ContactPhone.normalizedNumbers(registration.phone()).stream()
+            if (problem.isEmpty() && ContactPhone.normalizedNumbers(registration.phone()).stream()
                     .anyMatch(number -> incomingPhoneNames.getOrDefault(number, Set.of()).size() > 1)) problem = "HP cocok dengan beberapa nama dalam data EMS; tinjau sebelum sync.";
             List<Database> owners = new ArrayList<>();
             if (problem.isEmpty()) {
@@ -283,7 +283,7 @@ public class EmsService {
                     contactOwners.add(contact);
                     String retainedName = identityName(safe(contact.getFirstName()) + " " + safe(contact.getLastName()));
                     if (name.isBlank() || retainedName.isBlank() || retainedName.equals(identityName(name))) owners.add(contact);
-                    else if (destination == DatabaseDestination.PARTICIPANT || ContactEmailCategory.isPublicPersonalEmail(email)) {
+                    else if (samePhone || destination == DatabaseDestination.PARTICIPANT || ContactEmailCategory.isPublicPersonalEmail(email)) {
                         problem = "Email atau HP sudah terdaftar pada nama berbeda. Tinjau profil sebelum sync.";
                     }
                 }
@@ -459,11 +459,10 @@ public class EmsService {
                 database.getEmails().add(address);
             }
 
-            // Determine status based on EMS registration_code, verified_at, declined_at, and checked_in_at
+            // EMS owns registration and attendance; client approval stays with CRM.
             Object checkedInAt = item.get("checked_in_at");
             Object verifiedAt = item.get("verified_at");
             Object declinedAt = item.get("declined_at");
-            Object regCode = item.get("registration_code");
             Object statusObj = item.get("status");
             Object paymentStatusObj = item.get("payment_status");
 
@@ -473,42 +472,15 @@ public class EmsService {
             java.time.LocalDateTime emsCreatedAt = parseEmsDateTime(createdAtObj, event.getEmsSource());
 
             boolean isCheckedIn = checkedInAt != null && !checkedInAt.toString().isEmpty() && !"null".equalsIgnoreCase(checkedInAt.toString());
-            boolean isVerified = verifiedAt != null && !verifiedAt.toString().isEmpty() && !"null".equalsIgnoreCase(verifiedAt.toString());
             boolean isDeclined = (declinedAt != null && !declinedAt.toString().isEmpty() && !"null".equalsIgnoreCase(declinedAt.toString()))
                     || "declined".equalsIgnoreCase(String.valueOf(statusObj))
                     || "decline".equalsIgnoreCase(String.valueOf(statusObj))
                     || "declined".equalsIgnoreCase(String.valueOf(paymentStatusObj))
                     || "decline".equalsIgnoreCase(String.valueOf(paymentStatusObj));
-            boolean hasRegCode = regCode != null && !regCode.toString().isEmpty() && !"null".equalsIgnoreCase(regCode.toString());
-
-            AttendanceStatus attendanceStatus;
-            if (isCheckedIn) {
-                attendanceStatus = AttendanceStatus.attended;
-            } else if (hasRegCode) {
-                attendanceStatus = AttendanceStatus.registered;
-            } else {
-                attendanceStatus = AttendanceStatus.registered;
-            }
-
-            String confirmationStatus;
-            ParticipantStatus participantStatus;
-
-            if (isDeclined) {
-                confirmationStatus = "decline";
-                participantStatus = ParticipantStatus.unable_to_attend;
-            } else if (isCheckedIn) {
-                confirmationStatus = "approve";
-                participantStatus = ParticipantStatus.confirm;
-            } else if (isVerified) {
-                confirmationStatus = "approve";
-                participantStatus = ParticipantStatus.registered;
-            } else {
-                confirmationStatus = "pending";
-                participantStatus = ParticipantStatus.registered;
-            }
-
-            // Check if database or participant is flagged as declined / inactive
-            boolean isDeclinedOrInactive = (database.getIsActive() != null && !database.getIsActive());
+            AttendanceStatus attendanceStatus = isDeclined ? AttendanceStatus.cancelled
+                    : isCheckedIn ? AttendanceStatus.attended : AttendanceStatus.registered;
+            ParticipantStatus participantStatus = isDeclined ? ParticipantStatus.unable_to_attend
+                    : isCheckedIn ? ParticipantStatus.confirm : ParticipantStatus.registered;
 
             // Link EventParticipant
             Optional<EventParticipant> existingParticipantOpt = eventParticipantRepository.findByEventIdAndDatabaseId(event.getId(), database.getId());
@@ -517,28 +489,10 @@ public class EmsService {
                 ep.setAttendanceStatus(attendanceStatus);
                 ep.setParticipantStatus(participantStatus);
                 
-                String targetApproval = isDeclined ? "decline" : confirmationStatus;
-                ep.setConfirmationStatus(targetApproval);
-                ep.setPreEventApprovalStatus(targetApproval);
-
-                String approvalTag = "[PreEventApproval: " + targetApproval + "]";
-
-                String currentNotes = ep.getNotes();
-                if (currentNotes == null || currentNotes.isEmpty()) {
-                    ep.setNotes("[Origin: EMS Sync] " + approvalTag);
-                } else {
-                    String updatedNotes = currentNotes;
-                    if (!updatedNotes.contains("[Origin: EMS Sync]") && !updatedNotes.contains("[EMS]")) {
-                        updatedNotes = "[Origin: EMS Sync] " + updatedNotes;
-                    }
-                    if (updatedNotes.contains("[PreEventApproval:")) {
-                        updatedNotes = updatedNotes.replaceAll("\\[PreEventApproval:\\s*([^\\]]+)\\]", approvalTag);
-                    } else {
-                        updatedNotes = approvalTag + " " + updatedNotes;
-                    }
-                    ep.setNotes(updatedNotes);
-                }
-                if (isCheckedIn) {
+                String preEventApproval = retainedPreEventApproval(ep);
+                ep.setPreEventApprovalStatus(preEventApproval);
+                ep.setNotes(emsSyncNotes(ep.getNotes(), preEventApproval, isDeclined));
+                if (isCheckedIn && !isDeclined) {
                     ep.setReminderHariH("on_location");
                 }
                 if (emsCreatedAt != null) {
@@ -558,18 +512,15 @@ public class EmsService {
                     eventParticipantActivityRepository.save(initAct);
                 }
             } else {
-                String targetApproval = isDeclined ? "decline" : confirmationStatus;
-                String approvalTag = "[PreEventApproval: " + targetApproval + "]";
-
                 EventParticipant ep = EventParticipant.builder()
                         .event(event)
                         .database(database)
                         .attendanceStatus(attendanceStatus)
                         .participantStatus(participantStatus)
-                        .confirmationStatus(targetApproval)
-                        .preEventApprovalStatus(targetApproval)
-                        .reminderHariH(isCheckedIn ? "on_location" : null)
-                        .notes("[Origin: EMS Sync] " + approvalTag)
+                        .confirmationStatus("pending")
+                        .preEventApprovalStatus("pending")
+                        .reminderHariH(isCheckedIn && !isDeclined ? "on_location" : null)
+                        .notes(emsSyncNotes("", "pending", isDeclined))
                         .createdAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
                         .requestedAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
                         .build();
@@ -588,6 +539,29 @@ public class EmsService {
             syncedCount++;
         }
         return syncedCount;
+    }
+
+    private String retainedPreEventApproval(EventParticipant participant) {
+        String status = safe(participant.getPreEventApprovalStatus()).trim().toLowerCase(Locale.ROOT);
+        if ("declined".equals(status)) return "decline";
+        if (Set.of("pending", "approve", "decline").contains(status)) return status;
+        var legacy = java.util.regex.Pattern.compile("(?i)\\[PreEventApproval:\\s*([^\\]]+)\\]")
+                .matcher(safe(participant.getNotes()));
+        status = legacy.find() ? legacy.group(1).trim().toLowerCase(Locale.ROOT) : "pending";
+        if ("declined".equals(status)) return "decline";
+        return Set.of("approve", "decline").contains(status) ? status : "pending";
+    }
+
+    private String emsSyncNotes(String notes, String preEventApproval, boolean declined) {
+        String updated = safe(notes).replaceAll("(?i)\\[EMS Declined\\]\\s*", "").trim();
+        if (!updated.contains("[Origin: EMS Sync]") && !updated.contains("[EMS]")) updated = "[Origin: EMS Sync] " + updated;
+        String approvalTag = "[PreEventApproval: " + preEventApproval + "]";
+        if (java.util.regex.Pattern.compile("(?i)\\[PreEventApproval:").matcher(updated).find()) {
+            updated = updated.replaceAll("(?i)\\[PreEventApproval:\\s*([^\\]]+)\\]", approvalTag);
+        } else {
+            updated = approvalTag + " " + updated;
+        }
+        return (declined ? "[EMS Declined] " + updated : updated).trim();
     }
 
     private Database findMatchingEventDatabase(List<EventParticipant> participants, String firstName, String lastName, String phone) {

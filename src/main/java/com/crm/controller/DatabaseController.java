@@ -345,10 +345,6 @@ public class DatabaseController {
             return ResponseEntity.badRequest().body("Cabang harus berasal dari perusahaan yang dipilih");
         }
         database.setDatabaseDestination(DatabaseDestination.effective(database.getDatabaseDestination()));
-        if (database.getDatabaseDestination() != DatabaseDestination.PARTICIPANT
-                && database.getEmails() != null && !database.getEmails().isEmpty()) {
-            return ResponseEntity.badRequest().body("Tambahkan email perusahaan melalui pengelolaan email setelah profil disimpan; email dalam body create hanya didukung untuk Database Peserta.");
-        }
         String metadataError = participantMetadataError(database);
         if (metadataError != null) return ResponseEntity.badRequest().body(metadataError);
         if (selected == DatabaseDestination.PARTICIPANT) {
@@ -371,6 +367,22 @@ public class DatabaseController {
         if (database.getDatabaseDestination() == DatabaseDestination.PARTICIPANT) {
             return createParticipantProfile(database, currentUser);
         }
+        if (database.getEmails() != null && !database.getEmails().isEmpty()) {
+            try {
+                List<EmailBatchEntry> supplied = new java.util.ArrayList<>();
+                for (DatabaseEmail email : database.getEmails()) {
+                    if (email == null || email.getId() != null || email.getDatabase() != null) {
+                        return ResponseEntity.badRequest().body("Email baru tidak boleh memuat ID atau pemilik email tersimpan.");
+                    }
+                    supplied.add(new EmailBatchEntry(null, email.getEmail(), email.getEmailType(),
+                            email.getIsCorporate(), email.getIsPrimary(), email.getIsVerified(), null));
+                }
+                database.setEmails(new java.util.ArrayList<>(planEmailBatch(database, supplied).stream()
+                        .map(write -> applyEmailWrite(database, write)).toList()));
+            } catch (IllegalArgumentException invalid) {
+                return ResponseEntity.badRequest().body(invalid.getMessage());
+            }
+        }
         database.setCreatedByUserId(currentUser.getId());
         database.setEntryMethod("manual");
         Database saved = databaseRepository.save(database);
@@ -392,20 +404,25 @@ public class DatabaseController {
         Map<String, DatabaseEmail> requested = new LinkedHashMap<>();
         Map<Long, Database> owners = new LinkedHashMap<>();
         for (DatabaseEmail supplied : incoming.getEmails() == null ? List.<DatabaseEmail>of() : incoming.getEmails()) {
-            if (supplied == null || supplied.getId() != null || !ContactEmailCategory.isValidEmail(supplied.getEmail())) {
+            if (supplied == null || supplied.getId() != null
+                    || ContactEmailCategory.splitEmails(supplied.getEmail()).isEmpty()) {
                 return ResponseEntity.badRequest().body("Email peserta tidak valid atau memuat ID email tersimpan");
             }
-            String address = supplied.getEmail().trim().toLowerCase(Locale.ROOT);
-            if (requested.putIfAbsent(address, supplied) != null) {
-                return ResponseEntity.badRequest().body("Email peserta yang sama hanya boleh diisi sekali");
-            }
-            for (DatabaseEmail existing : databaseEmailRepository.findAllByEmailIgnoreCase(address)) {
-                Database owner = existing.getDatabase();
-                if (owner != null && !DatabaseDestination.isExact(owner.getDatabaseDestination(), DatabaseDestination.PARTICIPANT)) continue;
-                if (owner == null || owner.getId() == null) {
-                    return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; periksa kontak lama");
+            for (String address : ContactEmailCategory.splitEmails(supplied.getEmail())) {
+                if (!ContactEmailCategory.isValidEmail(address) || address.length() > 255) {
+                    return ResponseEntity.badRequest().body("Format email peserta tidak valid: " + address);
                 }
-                owners.putIfAbsent(owner.getId(), owner);
+                if (requested.putIfAbsent(address, supplied) != null) {
+                    return ResponseEntity.badRequest().body("Email peserta yang sama hanya boleh diisi sekali");
+                }
+                for (DatabaseEmail existing : databaseEmailRepository.findAllByEmailIgnoreCase(address)) {
+                    Database owner = existing.getDatabase();
+                    if (owner != null && !DatabaseDestination.isExact(owner.getDatabaseDestination(), DatabaseDestination.PARTICIPANT)) continue;
+                    if (owner == null || owner.getId() == null) {
+                        return ResponseEntity.badRequest().body("Pemilik email belum dapat dipastikan; periksa kontak lama");
+                    }
+                    owners.putIfAbsent(owner.getId(), owner);
+                }
             }
         }
         if (!isBlank(incoming.getMobilePhone())) {
@@ -629,6 +646,140 @@ public class DatabaseController {
             suspiciousIdentityService.checkAndFlagDatabase(database);
             return ResponseEntity.ok(savedEmail);
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    public record EmailBatchRequest(List<EmailBatchEntry> emails) {}
+    public record EmailBatchEntry(Long id, String email, String emailType, Boolean isCorporate,
+                                  Boolean isPrimary, Boolean isVerified, Object database) {}
+    private record EmailWrite(DatabaseEmail existing, String address, String type, boolean corporate,
+                              boolean primary, boolean verified, boolean skip) {}
+
+    @PostMapping("/{databaseId}/emails/batch")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> saveDatabaseEmails(@PathVariable Long databaseId,
+            @RequestBody EmailBatchRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) return ResponseEntity.status(401).body("Unauthorized");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can edit emails");
+        }
+        Database database = databaseRepository.findById(databaseId).orElse(null);
+        if (database == null) return ResponseEntity.notFound().build();
+        if (DatabaseDestination.effective(database.getDatabaseDestination()) == DatabaseDestination.BOTH) {
+            return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+        }
+        if (request == null || request.emails() == null || request.emails().isEmpty()) {
+            return ResponseEntity.badRequest().body("Isi minimal satu alamat email.");
+        }
+        List<EmailWrite> writes;
+        try { writes = planEmailBatch(database, request.emails()); }
+        catch (IllegalArgumentException invalid) { return ResponseEntity.badRequest().body(invalid.getMessage()); }
+
+        int created = 0, updated = 0, retained = 0;
+        List<DatabaseEmail> result = new java.util.ArrayList<>();
+        List<DatabaseEmail> allEmails = new java.util.ArrayList<>(database.getEmails() == null ? List.of() : database.getEmails());
+        for (EmailWrite write : writes) {
+            if (write.skip()) {
+                retained++;
+                result.add(write.existing());
+                continue;
+            }
+            DatabaseEmail email = databaseEmailRepository.save(applyEmailWrite(database, write));
+            if (write.existing() == null) { created++; allEmails.add(email); }
+            else updated++;
+            result.add(email);
+        }
+        if (created > 0 || updated > 0) {
+            database.setEmails(allEmails);
+            suspiciousIdentityService.checkAndFlagDatabase(database);
+        }
+        return ResponseEntity.ok(Map.of("createdCount", created, "updatedCount", updated,
+                "existingCount", retained, "emails", result));
+    }
+
+    // Plan every address and ownership check before mutating any managed email/profile.
+    private List<EmailWrite> planEmailBatch(Database database, List<EmailBatchEntry> entries) {
+        DatabaseDestination kind = DatabaseDestination.effective(database.getDatabaseDestination());
+        Map<String, EmailWrite> writes = new LinkedHashMap<>();
+        Set<Long> ids = new java.util.HashSet<>();
+        for (EmailBatchEntry entry : entries) {
+            if (entry == null || entry.database() != null) throw new IllegalArgumentException("Pemilik email ditentukan oleh profil yang dipilih.");
+            DatabaseEmail existing = null;
+            if (entry.id() != null) {
+                if (database.getId() == null || !ids.add(entry.id())) throw new IllegalArgumentException("ID email baru/berulang tidak valid.");
+                existing = databaseEmailRepository.findById(entry.id()).orElse(null);
+                if (existing == null || existing.getDatabase() == null
+                        || !database.getId().equals(existing.getDatabase().getId())) {
+                    throw new IllegalArgumentException("Email bukan milik profil yang dipilih.");
+                }
+            }
+            List<String> addresses = ContactEmailCategory.splitEmails(entry.email());
+            if (addresses.isEmpty()) throw new IllegalArgumentException("Alamat email wajib diisi.");
+            String type = entry.emailType() != null ? entry.emailType().trim().toLowerCase(Locale.ROOT)
+                    : existing == null ? "other" : existing.getEmailType();
+            if (entry.emailType() != null && !Set.of("company", "personal", "other").contains(type)) {
+                throw new IllegalArgumentException("Tipe email tidak valid.");
+            }
+            boolean corporate = entry.isCorporate() != null ? entry.isCorporate()
+                    : entry.emailType() != null ? "company".equals(type)
+                    : existing != null && Boolean.TRUE.equals(existing.getIsCorporate());
+            boolean primary = entry.isPrimary() != null ? entry.isPrimary()
+                    : existing != null && Boolean.TRUE.equals(existing.getIsPrimary());
+            boolean verified = entry.isVerified() != null ? entry.isVerified()
+                    : existing != null && Boolean.TRUE.equals(existing.getIsVerified());
+            boolean canShare = kind == DatabaseDestination.COMPANY
+                    && ("company".equals(type) || !"personal".equals(type) && corporate);
+            for (int index = 0; index < addresses.size(); index++) {
+                String address = addresses.get(index);
+                DatabaseEmail target = index == 0 ? existing : null;
+                if (!ContactEmailCategory.isValidEmail(address) || address.length() > 255) {
+                    throw new IllegalArgumentException("Format email tidak valid: " + address);
+                }
+                if (kind == DatabaseDestination.COMPANY && (corporate || "company".equals(type))
+                        && ContactEmailCategory.isPublicPersonalEmail(address)) {
+                    throw new IllegalArgumentException("Email perusahaan wajib memakai domain institusi/perusahaan; simpan email pribadi sebagai Personal.");
+                }
+                EmailWrite previous = writes.get(address);
+                if (previous != null) {
+                    if (target != null || !java.util.Objects.equals(previous.type(), type) || previous.corporate() != corporate) {
+                        throw new IllegalArgumentException("Email yang sama memuat ID atau tipe berbeda: " + address);
+                    }
+                    continue;
+                }
+                DatabaseEmail retained = null;
+                for (DatabaseEmail owner : databaseEmailRepository.findAllByEmailIgnoreCase(address)) {
+                    if (owner.getDatabase() == null) throw new IllegalArgumentException("Pemilik email belum dapat dipastikan; tinjau data lama.");
+                    if (!DatabaseDestination.isExact(owner.getDatabase().getDatabaseDestination(), kind)) continue;
+                    if (target != null && java.util.Objects.equals(owner.getId(), target.getId())) continue;
+                    if (java.util.Objects.equals(owner.getDatabase().getId(), database.getId()) && database.getId() != null) {
+                        if (target != null) throw new IllegalArgumentException("Email sudah tersimpan pada entri lain di profil ini: " + address);
+                        retained = owner;
+                    } else {
+                        boolean ownerCompany = "company".equalsIgnoreCase(owner.getEmailType())
+                                || !"personal".equalsIgnoreCase(owner.getEmailType()) && Boolean.TRUE.equals(owner.getIsCorporate());
+                        if (!canShare || !ownerCompany) {
+                            throw new IllegalArgumentException("Email sudah digunakan profil lain pada database tujuan ini: " + address);
+                        }
+                    }
+                }
+                writes.put(address, new EmailWrite(retained != null ? retained : target, address, type,
+                        corporate, index == 0 && primary, verified, retained != null));
+            }
+        }
+        return new java.util.ArrayList<>(writes.values());
+    }
+
+    private DatabaseEmail applyEmailWrite(Database database, EmailWrite write) {
+        DatabaseEmail email = write.existing() == null ? new DatabaseEmail() : write.existing();
+        email.setDatabase(database);
+        email.setEmail(write.address());
+        email.setDomain(write.address().substring(write.address().indexOf('@') + 1));
+        email.setEmailType(write.type());
+        email.setIsCorporate(write.corporate());
+        email.setIsPrimary(write.primary());
+        email.setIsVerified(write.verified());
+        return email;
     }
 
     @GetMapping("/{databaseId}/emails")

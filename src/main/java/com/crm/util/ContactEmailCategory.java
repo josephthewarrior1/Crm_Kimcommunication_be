@@ -5,6 +5,8 @@ import com.crm.domain.DatabaseEmail;
 import com.crm.domain.DatabaseDestination;
 
 import java.util.Locale;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -24,6 +26,12 @@ public final class ContactEmailCategory {
 
     public static boolean isValidEmail(String email) {
         return email != null && EMAIL.matcher(email.trim()).matches();
+    }
+
+    public static List<String> splitEmails(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        return Arrays.stream(raw.toLowerCase(Locale.ROOT).split("(?U)[,;/\\s]+"))
+                .filter(token -> !token.isBlank()).distinct().toList();
     }
 
     public static boolean isPublicPersonalEmail(String email) {

@@ -931,9 +931,7 @@ public class ExcelImportController {
     }
 
     private static List<String> emailTokens(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
-        return Arrays.stream(raw.toLowerCase(Locale.ROOT).split("[,;/\\s]+"))
-                .filter(token -> !token.isBlank()).distinct().toList();
+        return ContactEmailCategory.splitEmails(raw);
     }
 
     static List<String> splitEmailTokens(String raw) {

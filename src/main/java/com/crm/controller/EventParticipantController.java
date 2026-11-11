@@ -3,6 +3,7 @@ package com.crm.controller;
 import com.crm.domain.*;
 import com.crm.repository.*;
 import com.crm.service.AuditLogService;
+import com.crm.service.EmsIdentityReview;
 import com.crm.service.SecurityHelper;
 import com.crm.util.EventApprovalPolicy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -130,6 +131,7 @@ public class EventParticipantController {
         }
 
         if (!savedParticipants.isEmpty()) {
+            EmsIdentityReview.refresh(eventParticipantRepository, event.getId());
             String eventName = event.getName() == null ? "Tanpa Nama Event" : event.getName();
             String description = savedParticipants.size() == 1
                     ? "Menambahkan 1 peserta ke event '" + eventName + "': " + participantDisplayName(savedParticipants.get(0))
@@ -148,6 +150,7 @@ public class EventParticipantController {
     }
 
     @PutMapping("/{id}/status")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> updateStatus(
             @PathVariable Long id,
             @RequestParam(required = false) String participantStatus,
@@ -255,6 +258,10 @@ public class EventParticipantController {
                 participant.setReminderHariH(reminderHariH.trim().isEmpty() ? null : reminderHariH);
             }
             EventParticipant savedParticipant = eventParticipantRepository.save(participant);
+            if (confirmationStatus != null) {
+                EmsIdentityReview.refresh(eventParticipantRepository, participant.getEvent().getId());
+                savedParticipant = eventParticipantRepository.findById(id).orElse(savedParticipant);
+            }
             List<String> changes = describeParticipantChanges(beforeValues, savedParticipant);
             if (!changes.isEmpty()) {
                 String eventName = savedParticipant.getEvent() != null && savedParticipant.getEvent().getName() != null
@@ -274,6 +281,7 @@ public class EventParticipantController {
     }
 
     @PatchMapping("/bulk")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> bulkUpdateParticipants(
             @RequestBody BulkUpdateRequest request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -386,6 +394,11 @@ public class EventParticipantController {
         }
 
         if (!updatedParticipants.isEmpty()) {
+            if (request.getConfirmationStatus() != null) {
+                updatedParticipants.stream().map(participant -> participant.getEvent().getId()).distinct()
+                        .forEach(eventId -> EmsIdentityReview.refresh(eventParticipantRepository, eventId));
+                updatedParticipants.replaceAll(participant -> eventParticipantRepository.findById(participant.getId()).orElse(participant));
+            }
             Event firstEvent = updatedParticipants.get(0).getEvent();
             String eventName = firstEvent != null && firstEvent.getName() != null ? firstEvent.getName() : "Tanpa Nama Event";
             auditLogService.recordUserAction(
@@ -594,6 +607,7 @@ public class EventParticipantController {
     }
 
     @DeleteMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> deleteEventParticipant(
             @PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -615,6 +629,7 @@ public class EventParticipantController {
                     ? participant.getEvent().getName()
                     : "Tanpa Nama Event";
             eventParticipantRepository.delete(participant);
+            if (participant.getEvent() != null) EmsIdentityReview.refresh(eventParticipantRepository, participant.getEvent().getId());
             auditLogService.recordUserAction(
                     currentUser,
                     "EVENT_PARTICIPANT",

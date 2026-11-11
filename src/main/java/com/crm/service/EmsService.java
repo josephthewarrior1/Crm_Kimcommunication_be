@@ -4,6 +4,7 @@ import com.crm.domain.*;
 import com.crm.repository.*;
 import com.crm.util.ContactEmailCategory;
 import com.crm.util.ContactPhone;
+import com.crm.util.EventApprovalPolicy;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -466,10 +467,16 @@ public class EmsService {
         }
         for (Map<String, Object> previewRow : rows) {
             if ("REJECTED".equals(previewRow.get("status"))) continue;
-            IdentityReview review = identityReviews.get(plannedKeys.get((Integer) previewRow.get("rowNum")));
-            previewRow.put("identityReviewMessage", review.message());
-            previewRow.put("clientDeclineReviewRequired", review.clientDecline());
-            if (!review.message().isBlank()) previewRow.put("message", previewRow.get("message") + " " + review.message());
+            String plannedKey = plannedKeys.get((Integer) previewRow.get("rowNum"));
+            IdentityReview review = identityReviews.get(plannedKey);
+            Database owner = matches.get(plannedKey);
+            String clientApproval = owner == null ? "pending" : participants.stream()
+                    .filter(participant -> Objects.equals(participant.getDatabase().getId(), owner.getId()))
+                    .map(EventParticipant::getConfirmationStatus).filter(Objects::nonNull).findFirst().orElse("pending");
+            String reviewMessage = EventApprovalPolicy.identityReviewMessage(review.message(), review.clientDecline(), clientApproval);
+            previewRow.put("identityReviewMessage", reviewMessage);
+            previewRow.put("clientDeclineReviewRequired", review.clientDecline() && !EventApprovalPolicy.isClientApproved(clientApproval));
+            if (!reviewMessage.isBlank()) previewRow.put("message", previewRow.get("message") + " " + reviewMessage);
         }
         List<Object> contactState = contacts.stream().sorted(Comparator.comparing(Database::getId, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(contact -> (Object) Arrays.asList(contact.getId(), contact.getUpdatedAt(), contact.getDatabaseDestination(), contact.getIsActive(),
@@ -484,7 +491,7 @@ public class EmsService {
                 participant.getDatabase() == null ? null : participant.getDatabase().getId(), participant.getUpdatedAt(),
                 participant.getEmsApprovalStatus(), participant.getPreEventApprovalStatus(), participant.getConfirmationStatus(),
                 participant.getEmsCompanyName(), participant.getEmsCompanyReviewRequired(),
-                participant.getEmsIdentityReviewMessage(), participant.getEmsClientDeclineReviewRequired())).toList();
+                participant.getRawEmsIdentityReviewMessage(), participant.getRawEmsClientDeclineReviewRequired())).toList();
         Map<String, Long> matchedIds = new TreeMap<>();
         matches.forEach((key, contact) -> matchedIds.put(key, contact.getId()));
         String token = fingerprint(Arrays.asList(event.getId(), event.getEmsEventId(), event.getEmsSource(), destination, raw, contactState, participantState, matchedIds, aliases));

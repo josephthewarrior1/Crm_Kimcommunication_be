@@ -223,6 +223,37 @@ class EmsCompanyReviewSyncTest {
         verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
     }
 
+    @Test void explicitClientApprovalResolvesOnlyTheSelectedProfilesAliasReviewAcrossRepeatedSyncs() {
+        EventParticipant current=existingLink();
+        Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")
+                .mobilePhone("+628123456789").company(company).isActive(true).build();contacts.add(alias);
+        EventParticipant historical=EventParticipant.builder().id(21L).event(event).database(alias).confirmationStatus("decline").build();links.add(historical);
+        JsonNode mastersBefore=json.valueToTree(contacts),historicalBefore=json.valueToTree(historical);
+        source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
+        for(String clientDecision:List.of("approve","confirmed")) {
+            current.setConfirmationStatus(clientDecision);
+            for(int repeat=0;repeat<2;repeat++) {
+                Map<String,Object> preview=service.previewParticipantsForEvent(event);
+                assertEquals(0,preview.get("rejectedCount"));
+                assertEquals(false,((Map<?,?>)((List<?>)preview.get("rows")).get(0)).get("clientDeclineReviewRequired"));
+                assertEquals(1,apply(preview).get("count"));
+                assertEquals(clientDecision,current.getConfirmationStatus());assertEquals(false,current.getEmsClientDeclineReviewRequired());
+                assertEquals("approve",current.getPreEventApprovalStatus());assertEquals("approve",current.getEmsApprovalStatus());
+                assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts));
+            }
+            current.setConfirmationStatus("pending");
+            assertEquals(true,current.getEmsClientDeclineReviewRequired(),"Revoking the selected approval must reactivate the retained alias review without another sync");
+        }
+        current.setConfirmationStatus("approve");
+        source(row("member@company.example","08123456789","Different Company","DECLINED",false));
+        assertEquals(1,apply(service.previewParticipantsForEvent(event)).get("count"));
+        assertEquals("approve",current.getConfirmationStatus());assertEquals("decline",current.getPreEventApprovalStatus());
+        assertEquals("decline",current.getEmsApprovalStatus());assertEquals(ParticipantStatus.unable_to_attend,current.getParticipantStatus());
+        assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts));
+        assertEquals(2,links.size());assertEquals(1,history.size());
+        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+    }
+
     @Test void historicalClientReviewRequiresFreshPreviewAndOnlyClearsAfterAnEligibleSyncSeesTheChangedDecision() {
         EventParticipant current=existingLink();current.setConfirmationStatus("pending");
         Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")

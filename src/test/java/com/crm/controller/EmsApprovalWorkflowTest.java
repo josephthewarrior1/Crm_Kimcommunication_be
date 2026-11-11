@@ -124,6 +124,43 @@ class EmsApprovalWorkflowTest {
         verify(participants, never()).save(any());
     }
 
+    @Test void approvingTheSelectedProfileResolvesOnlyItsAliasReviewAndRevokingApprovalRestoresTheHold() throws Exception {
+        EventParticipant exact=participant(1,"approve","pending");
+        exact.getDatabase().setMobilePhone("08123456789");
+        exact.setEmsIdentityReviewMessage("HP juga dipakai profil lama yang ditolak client; perlu ditinjau.");
+        exact.setEmsClientDeclineReviewRequired(true);
+        EventParticipant historical=participant(2,"pending","decline");
+        historical.getDatabase().setMobilePhone("+628123456789");
+        rows.addAll(List.of(exact,historical));
+        assertEquals(0,response("participants","reminder").path("total").asInt());
+
+        mvc.perform(put("/api/event-participants/1/status").param("confirmationStatus","approve")
+                .header("Authorization","Bearer test")).andExpect(status().isOk());
+        for(String tab:List.of("pre_event","reminder","reminder_dday")) {
+            assertEquals(List.of(1L),ids(response("participants",tab)),tab);
+            assertEquals(1,response("participants/export",tab).path("rows").size(),tab+" export");
+        }
+        assertEquals(List.of(2L),ids(response("participants","declined")));
+        assertEquals(false,exact.getEmsClientDeclineReviewRequired());
+        assertEquals("approve",exact.getConfirmationStatus());assertEquals("decline",historical.getConfirmationStatus());
+
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus","decline")
+                .header("Authorization","Bearer test")).andExpect(status().isOk());
+        assertEquals(0,response("participants","reminder").path("total").asInt(),"Client approval does not override the current Pre-Event decision");
+        assertEquals("approve",exact.getConfirmationStatus());assertEquals("decline",historical.getConfirmationStatus());
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus","approve")
+                .param("confirmationStatus","pending").header("Authorization","Bearer test")).andExpect(status().isOk());
+        assertEquals(true,exact.getEmsClientDeclineReviewRequired());
+        assertEquals(0,response("participants","reminder").path("total").asInt());
+        assertEquals(List.of(1L,2L),ids(response("participants","declined")));
+        assertEquals("decline",historical.getConfirmationStatus());
+
+        exact.setConfirmationStatus("approve");exact.setEmsApprovalStatus("decline");exact.setPreEventApprovalStatus("decline");
+        exact.setParticipantStatus(ParticipantStatus.unable_to_attend);exact.setAttendanceStatus(AttendanceStatus.cancelled);
+        assertEquals(0,response("participants","reminder").path("total").asInt(),"A source Decline still vetoes the approved profile");
+        assertEquals("decline",historical.getConfirmationStatus());
+    }
+
     @Test void manualEventsRetainManualApprovalAndExistingReminderRules() throws Exception {
         event.setEmsEventId(null);
         rows.add(participant(1, null, "approve"));

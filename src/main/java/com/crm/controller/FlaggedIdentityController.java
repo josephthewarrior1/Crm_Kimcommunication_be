@@ -10,6 +10,7 @@ import com.crm.domain.AppUser;
 import com.crm.repository.DatabaseRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SecurityHelper;
+import com.crm.service.EmsIdentityReview;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +22,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/flagged-identities")
+@org.springframework.transaction.annotation.Transactional
 public class FlaggedIdentityController {
 
     @Autowired
@@ -326,13 +328,16 @@ public class FlaggedIdentityController {
 
                     // Restore event participant confirmation status to approve if previously declined due to flag
                     List<com.crm.domain.EventParticipant> participants = eventParticipantRepository.findByDatabaseId(d.getId());
+                    java.util.Set<Long> affectedEvents = new java.util.HashSet<>();
                     for (com.crm.domain.EventParticipant ep : participants) {
                         if (ep.getEvent() != null && !DatabaseDestination.isExact(ep.getEvent().getSyncDestination(), DatabaseDestination.effective(d.getDatabaseDestination()))) continue;
                         if ("decline".equalsIgnoreCase(ep.getConfirmationStatus()) || "declined".equalsIgnoreCase(ep.getConfirmationStatus())) {
                             ep.setConfirmationStatus("approve");
                             eventParticipantRepository.save(ep);
+                            if (ep.getEvent() != null) affectedEvents.add(ep.getEvent().getId());
                         }
                     }
+                    affectedEvents.forEach(eventId -> EmsIdentityReview.refresh(eventParticipantRepository, eventId));
                 }
             }
             databaseRepository.save(d);

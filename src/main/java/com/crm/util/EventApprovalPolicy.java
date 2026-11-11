@@ -10,6 +10,16 @@ public final class EventApprovalPolicy {
         return event != null && event.getEmsEventId() != null && event.getEmsEventId() > 0;
     }
 
+    public static boolean isClientApproved(String approval) {
+        return approval != null && java.util.Set.of("approve", "confirmed").contains(approval.trim().toLowerCase(Locale.ROOT));
+    }
+
+    public static String identityReviewMessage(String message, Boolean declinedAlias, String clientApproval) {
+        return Boolean.TRUE.equals(declinedAlias) && isClientApproved(clientApproval)
+                ? "Client sudah meng-Approve profil ini. Profil terkait tetap terpisah dan keputusan client mereka dipertahankan."
+                : message;
+    }
+
     public static String normalizeApproval(String value) {
         if (value == null) return "pending";
         return switch (value.trim().toLowerCase(Locale.ROOT)) {

@@ -1,6 +1,7 @@
 package com.crm.domain;
 
 import com.crm.util.EventApprovalPolicy;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
@@ -85,6 +86,21 @@ public class EventParticipant {
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @Column(name = "ems_client_decline_review_required")
     private Boolean emsClientDeclineReviewRequired;
+
+    public Boolean getEmsClientDeclineReviewRequired() {
+        return Boolean.TRUE.equals(emsClientDeclineReviewRequired) && EventApprovalPolicy.isClientApproved(confirmationStatus)
+                ? Boolean.FALSE : emsClientDeclineReviewRequired;
+    }
+
+    public String getEmsIdentityReviewMessage() {
+        return EventApprovalPolicy.identityReviewMessage(emsIdentityReviewMessage, emsClientDeclineReviewRequired, confirmationStatus);
+    }
+
+    @JsonIgnore
+    public Boolean getRawEmsClientDeclineReviewRequired() { return emsClientDeclineReviewRequired; }
+
+    @JsonIgnore
+    public String getRawEmsIdentityReviewMessage() { return emsIdentityReviewMessage; }
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public String getApprovalSource() {

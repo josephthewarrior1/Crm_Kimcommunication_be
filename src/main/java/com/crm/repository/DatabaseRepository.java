@@ -7,6 +7,12 @@ import java.util.List;
 
 @Repository
 public interface DatabaseRepository extends JpaRepository<Database, Long> {
+    @org.springframework.data.jpa.repository.Query(value = "SELECT pg_try_advisory_xact_lock(1129467209, :destinationKey)", nativeQuery = true)
+    boolean tryLockImportDestination(@org.springframework.data.repository.query.Param("destinationKey") int destinationKey);
+
+    @org.springframework.data.jpa.repository.Query("select distinct d from Database d left join fetch d.emails where d.databaseDestination = :destination order by d.id")
+    List<Database> findForExcelImport(@org.springframework.data.repository.query.Param("destination") com.crm.domain.DatabaseDestination destination);
+
     boolean existsByBranchId(Long branchId);
     interface UploadCount {
         Long getUserId();

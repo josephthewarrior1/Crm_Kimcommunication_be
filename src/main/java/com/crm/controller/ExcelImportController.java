@@ -12,12 +12,16 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.InputStream;
+import java.sql.SQLException;
 import java.util.*;
 
 @RestController
 @RequestMapping("/api/databases")
 public class ExcelImportController {
+    private static final Logger log = LoggerFactory.getLogger(ExcelImportController.class);
 
     @Autowired
     private GroupRepository groupRepository;
@@ -59,6 +63,18 @@ public class ExcelImportController {
 
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("message", "Uploaded file is empty"));
+        }
+        if (!Set.of("company", "participant").contains(Objects.toString(destination, ""))) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Pilih tujuan import: Database Perusahaan atau Database Peserta."));
+        }
+        // A second upload must not validate against the first upload's uncommitted rows.
+        try {
+            if (!databaseRepository.tryLockImportDestination("company".equals(destination) ? 1 : 2)) {
+                return ResponseEntity.status(409).body(Map.of("code", "IMPORT_IN_PROGRESS", "message",
+                        "Import untuk database tujuan ini masih berjalan. Jangan upload ulang dulu; tunggu proses selesai lalu preview kembali."));
+            }
+        } catch (Exception failure) {
+            return importFailure(failure);
         }
 
         // Re-run exactly the preview validation inside the import transaction.
@@ -295,6 +311,8 @@ public class ExcelImportController {
                 successCount++;
             }
 
+            // Surface deferred constraints before returning, while this request can still report a rollback.
+            databaseRepository.flush();
             auditLogService.recordUserAction(
                     currentUser,
                     "DATABASE",
@@ -316,12 +334,22 @@ public class ExcelImportController {
             ));
             
         } catch (Exception e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-            return ResponseEntity.internalServerError().body(Map.of(
-                "message", "Import dibatalkan; seluruh perubahan di-rollback: " + e.getMessage(),
-                "error", Objects.toString(e.getMessage(), e.getClass().getSimpleName())
-            ));
+            return importFailure(e);
         }
+    }
+
+    private ResponseEntity<?> importFailure(Exception failure) {
+        TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+        log.error("CRM database import request rolled back", failure);
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof org.springframework.dao.DuplicateKeyException
+                    || cause instanceof SQLException sql && "23505".equals(sql.getSQLState())) {
+                return ResponseEntity.status(409).body(Map.of("code", "IMPORT_DATA_CHANGED", "message",
+                        "Data berubah saat import. Perubahan dari permintaan ini dibatalkan. Proses lain mungkin sudah selesai; preview ulang untuk melihat data terbaru sebelum mencoba lagi."));
+            }
+        }
+        return ResponseEntity.internalServerError().body(Map.of("code", "IMPORT_FAILED", "message",
+                "Import gagal. Perubahan dari permintaan ini dibatalkan. Preview ulang untuk mengecek data terbaru; jika masih gagal, minta admin memeriksa log server."));
     }
 
     @PostMapping("/import/preview")
@@ -339,7 +367,7 @@ public class ExcelImportController {
             Sheet sheet = prepareImportSheet(workbook, participantImport);
             int branchColumn = validateHeaders(sheet.getRow(0));
             // ponytail: one snapshot, O(rows * contacts); index identities if large imports become slow.
-            List<Database> databases = databaseRepository.findAll().stream()
+            List<Database> databases = databaseRepository.findForExcelImport(DatabaseDestination.fromValue(destination)).stream()
                     .filter(database -> DatabaseDestination.isExact(database.getDatabaseDestination(), DatabaseDestination.fromValue(destination)))
                     .toList();
             List<Company> knownCompanies = participantImport ? List.of() : companyRepository.findAll();

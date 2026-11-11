@@ -40,6 +40,8 @@ class ExcelImportControllerTest {
     void setup() {
         controller = new ExcelImportController();
         databases = mock(DatabaseRepository.class);
+        when(databases.tryLockImportDestination(anyInt())).thenReturn(true);
+        when(databases.findForExcelImport(any(DatabaseDestination.class))).thenAnswer(call -> databases.findAll());
         emails = mock(DatabaseEmailRepository.class);
         companies = mock(CompanyRepository.class);
         branches = mock(CompanyBranchRepository.class);
@@ -440,6 +442,87 @@ class ExcelImportControllerTest {
     }
 
     @Test
+    void busyImportReturnsImmediatelyBeforePreviewOrAnyWrite() throws Exception {
+        when(databases.tryLockImportDestination(1)).thenReturn(false);
+        var result = controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test");
+        assertEquals(409, result.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) result.getBody();
+        assertEquals("IMPORT_IN_PROGRESS", body.get("code"));
+        verify(databases).tryLockImportDestination(1);
+        verify(databases, never()).findForExcelImport(any());
+        verify(databases, never()).findAll();
+        verify(databases, never()).save(any());
+        verifyNoInteractions(emails, companies, branches, groups);
+    }
+
+    @Test
+    void importLocksTheExplicitDestinationBeforeFreshScopedPreview() throws Exception {
+        assertEquals(200, controller.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test").getStatusCode().value());
+        var sequence = inOrder(databases);
+        sequence.verify(databases).tryLockImportDestination(1);
+        sequence.verify(databases).findForExcelImport(DatabaseDestination.COMPANY);
+        assertEquals(200, controller.importDatabases(file(row("Student", "081234567891", "student@gmail.com", "")), "participant", "test").getStatusCode().value());
+        sequence.verify(databases).tryLockImportDestination(2);
+        sequence.verify(databases).findForExcelImport(DatabaseDestination.PARTICIPANT);
+        verify(databases, times(1)).tryLockImportDestination(1);
+        verify(databases, times(1)).tryLockImportDestination(2);
+    }
+
+    @Test
+    void invalidDestinationEmptyFileAndUnauthorizedRequestsDoNotAcquireImportLocks() throws Exception {
+        var upload = file(row("Andi", "081234567890", "office@example.com", ""));
+        assertEquals(400, controller.importDatabases(upload, "both", "test").getStatusCode().value());
+        assertEquals(400, controller.importDatabases(new MockMultipartFile("file", new byte[0]), "company", "test").getStatusCode().value());
+        assertEquals(401, controller.importDatabases(upload, "company", "unknown").getStatusCode().value());
+        verify(databases, never()).tryLockImportDestination(anyInt());
+        verify(databases, never()).findForExcelImport(any());
+    }
+
+    @Test
+    void concurrentWriterUniqueConflictRollsBackOnlyThisRequestWithoutReturningSqlDetails() throws Exception {
+        RecordingTransactionManager manager = new RecordingTransactionManager();
+        ProxyFactory factory = new ProxyFactory(controller);
+        factory.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        ExcelImportController proxy = (ExcelImportController) factory.getProxy();
+        doThrow(new org.springframework.dao.DataIntegrityViolationException(
+                "insert into database_emails private@example.invalid", new java.sql.SQLException("private unique detail", "23505")))
+                .when(databases).save(any());
+
+        var result = proxy.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test");
+
+        assertEquals(409, result.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) result.getBody();
+        assertEquals("IMPORT_DATA_CHANGED", body.get("code"));
+        assertTrue(body.get("message").toString().contains("permintaan ini"));
+        assertFalse(body.toString().contains("private"));
+        assertFalse(body.toString().contains("23505"));
+        assertFalse(body.containsKey("error"));
+        assertTrue(manager.rolledBack);
+        assertFalse(manager.committed);
+    }
+
+    @Test
+    void deferredUniqueConstraintIsFlushedInsideTheRollbackHandler() throws Exception {
+        RecordingTransactionManager manager = new RecordingTransactionManager();
+        ProxyFactory factory = new ProxyFactory(controller);
+        factory.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        ExcelImportController proxy = (ExcelImportController) factory.getProxy();
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("private constraint detail",
+                new java.sql.SQLException("private SQL detail", "23505"))).when(databases).flush();
+
+        var result = proxy.importDatabases(file(row("Andi", "081234567890", "office@example.com", "")), "company", "test");
+
+        assertEquals(409, result.getStatusCode().value());
+        assertEquals("IMPORT_DATA_CHANGED", ((java.util.Map<?, ?>) result.getBody()).get("code"));
+        assertFalse(result.getBody().toString().contains("private"));
+        assertTrue(manager.rolledBack);
+        assertFalse(manager.committed);
+        var sequence = inOrder(databases);
+        sequence.verify(databases).save(any());
+        sequence.verify(databases).flush();
+    }
+
+    @Test
     void failureAfterEarlierWritesRollsBackTheImportTransaction() throws Exception {
         RecordingTransactionManager manager = new RecordingTransactionManager();
         ProxyFactory factory = new ProxyFactory(controller);
@@ -454,6 +537,10 @@ class ExcelImportControllerTest {
         var result = proxy.importDatabases(file(row("Andi", "081234567890", "office@example.com", ""),
                 row("Budi", "081234567891", "office@example.com", "")), "company", "test");
         assertEquals(500, result.getStatusCode().value());
+        var body = (java.util.Map<?, ?>) result.getBody();
+        assertEquals("IMPORT_FAILED", body.get("code"));
+        assertTrue(body.get("message").toString().contains("permintaan ini"));
+        assertFalse(body.toString().contains("forced failure"));
         assertTrue(manager.rolledBack);
         assertFalse(manager.committed);
         verify(databases, times(2)).save(any());

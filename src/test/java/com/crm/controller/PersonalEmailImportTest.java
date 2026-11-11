@@ -40,6 +40,8 @@ class PersonalEmailImportTest {
     private final List<Database> saved = new ArrayList<>();
 
     @BeforeEach void setup() {
+        when(databases.tryLockImportDestination(anyInt())).thenReturn(true);
+        when(databases.findForExcelImport(any(DatabaseDestination.class))).thenAnswer(call -> databases.findAll());
         var security = mock(SecurityHelper.class);
         var user = AppUser.builder().id(1L).build();
         when(security.getAuthenticatedUser("test")).thenReturn(user);

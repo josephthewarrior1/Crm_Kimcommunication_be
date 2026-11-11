@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface FlaggedIdentityRepository extends JpaRepository<FlaggedIdentity, Long> {
+    java.util.List<FlaggedIdentity> findByDatabaseIsNull();
     boolean existsByDatabaseIdAndFlagReasonAndStatusNot(Long databaseId, FlagReason flagReason, FlagStatus status);
     void deleteByDatabaseId(Long databaseId);
 }

@@ -152,10 +152,10 @@ public class SuspiciousIdentityService {
         }
 
         // 3. Auto-flag and auto-link against existing manual FlaggedIdentity entries (by matching phone digits or email)
-        List<FlaggedIdentity> allFlags = flaggedIdentityRepository.findAll();
+        List<FlaggedIdentity> unlinkedFlags = flaggedIdentityRepository.findByDatabaseIsNull();
         String dbPhoneDigits = extractSubscriberDigits(database.getMobilePhone());
 
-        for (FlaggedIdentity flag : allFlags) {
+        for (FlaggedIdentity flag : unlinkedFlags) {
             DatabaseDestination flagKind = flag.getDatabase() != null ? flag.getDatabase().getDatabaseDestination()
                     : flag.getEvent() != null ? flag.getEvent().getSyncDestination() : DatabaseDestination.COMPANY;
             if (!DatabaseDestination.isExact(flagKind, DatabaseDestination.effective(database.getDatabaseDestination()))) continue;

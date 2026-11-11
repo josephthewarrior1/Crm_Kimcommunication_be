@@ -1333,6 +1333,8 @@ public class EventController {
                 participant.setEmsApprovalStatus(null);
                 participant.setEmsCompanyName(null);
                 participant.setEmsCompanyReviewRequired(null);
+                participant.setEmsIdentityReviewMessage(null);
+                participant.setEmsClientDeclineReviewRequired(null);
                 participant.setPreEventApprovalStatus("pending");
                 String notes = safe(participant.getNotes());
                 Matcher approvalTag = PRE_EVENT_APPROVAL_PATTERN.matcher(notes);
@@ -1924,7 +1926,8 @@ public class EventController {
 
     private boolean isDeclinedParticipant(EventParticipant participant) {
         if (EventApprovalPolicy.isEmsManaged(participant.getEvent())) {
-            return "decline".equals(getPreEventApprovalStatus(participant));
+            return Boolean.TRUE.equals(participant.getEmsClientDeclineReviewRequired())
+                    || "decline".equals(getPreEventApprovalStatus(participant));
         }
         String att = participant.getAttendanceStatus() != null ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT) : "";
         String notes = safe(participant.getNotes()).toLowerCase(Locale.ROOT);

@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-ems-identity-review-20261111
+      author: codex
+      changes:
+        - addColumn:
+            tableName: event_participants
+            columns:
+              - column:
+                  name: ems_identity_review_message
+                  type: TEXT
+              - column:
+                  name: ems_client_decline_review_required
+                  type: BOOLEAN

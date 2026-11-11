@@ -794,6 +794,116 @@ class EmsDestinationSyncTest {
         assertTrue(links.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
     }
 
+    @Test void companySyncMatchesAUniqueRepeatedWholeNameThroughItsStoredPhoneWithoutEditingTheMaster() {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        Event event = event(1, DatabaseDestination.COMPANY);
+        for (String name : List.of("Williem", "Adim")) {
+            String phone = name.equals("Williem") ? "081808232200" : "081210250800";
+            Database retained = contact(ids.incrementAndGet(), name, name, "", DatabaseDestination.COMPANY);
+            retained.getEmails().clear(); retained.setMobilePhone(phone);
+            Company company = Company.builder().id(ids.incrementAndGet()).name("Keep " + name).industry("Keep industry").build();
+            retained.setCompany(company); contacts.add(retained);
+            EventParticipant link = EventParticipant.builder().id(ids.incrementAndGet()).event(event).database(retained)
+                    .confirmationStatus("approve").preEventApprovalStatus("pending").build(); links.add(link);
+            var masterBefore = json.valueToTree(retained);
+            doReturn(List.of(namedPhoneRow(name, "", name.toLowerCase(Locale.ROOT) + "@gmail.com", phone, "ACCEPTED")))
+                    .when(service).getEventParticipants(1L, EmsSource.V2);
+            for (int repeat = 0; repeat < 2; repeat++) {
+                Map<String,Object> preview = service.previewParticipantsForEvent(event);
+                assertEquals(1, preview.get("existingCount")); assertEquals(0, preview.get("newCount")); assertEquals(0, preview.get("rejectedCount"));
+                assertEquals(1, apply(event, preview).get("count"));
+                assertEquals("approve", link.getPreEventApprovalStatus()); assertEquals("approve", link.getConfirmationStatus());
+                assertSame(retained, link.getDatabase()); assertEquals(masterBefore, json.valueToTree(retained));
+            }
+        }
+        assertEquals(2, contacts.size()); assertEquals(2, links.size()); assertEquals(2, history.size());
+        verify(databases, never()).save(any()); verifyNoInteractions(companies, emails);
+    }
+
+    @Test void companySyncPrefersAnExactNameEmailAndPhoneOverAWeakerLegacyPhoneAliasWithoutMergingMasters() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Database alias = contact(5, "Bobby", "Bobby", "old@example.invalid", DatabaseDestination.COMPANY);
+        Database exact = contact(6, "Bobby", "eribowo", "redaksi@easterfeeds.id", DatabaseDestination.COMPANY);
+        alias.setMobilePhone("081807077701"); exact.setMobilePhone("+6281807077701");
+        alias.setCompany(Company.builder().id(7L).name("Original agency").build());
+        exact.setCompany(Company.builder().id(8L).name("Original office").build());
+        contacts.addAll(List.of(alias, exact));
+        EventParticipant oldLink = EventParticipant.builder().id(10L).event(event).database(alias)
+                .confirmationStatus("approve").preEventApprovalStatus("pending").build();
+        EventParticipant target = EventParticipant.builder().id(11L).event(event).database(exact)
+                .confirmationStatus("pending").preEventApprovalStatus("pending").build(); links.addAll(List.of(oldLink, target));
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        var mastersBefore = json.valueToTree(List.of(alias, exact)); var oldLinkBefore = json.valueToTree(oldLink);
+        doReturn(List.of(namedPhoneRow("Bobby", "eribowo", "redaksi@easterfeeds.id", "81807077701", "ACCEPTED")))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        for (int repeat = 0; repeat < 2; repeat++) {
+            Collections.reverse(contacts);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(1, preview.get("existingCount")); assertEquals(0, preview.get("rejectedCount")); assertEquals(0, preview.get("newCount"));
+            assertEquals(1, apply(event, preview).get("count"));
+            assertSame(exact, target.getDatabase()); assertEquals("approve", target.getPreEventApprovalStatus());
+            assertEquals("pending", target.getConfirmationStatus()); assertFalse(Boolean.TRUE.equals(target.getEmsClientDeclineReviewRequired()));
+            assertNotNull(target.getEmsIdentityReviewMessage()); assertFalse(target.getEmsIdentityReviewMessage().isBlank());
+            assertEquals(mastersBefore, json.valueToTree(List.of(alias, exact))); assertEquals(oldLinkBefore, json.valueToTree(oldLink));
+        }
+        assertEquals(2, contacts.size()); assertEquals(2, links.size()); assertEquals(1, history.size());
+        verify(databases, never()).save(any()); verifyNoInteractions(companies, emails);
+    }
+
+    @Test void repeatedNamesWithoutPhoneEvidenceAndMultipleExactOwnersRemainHeld() {
+        Database repeated = contact(5, "Adim", "Adim", "playwithadim@gmail.com", DatabaseDestination.COMPANY);
+        contacts.add(repeated);
+        doReturn(List.of(namedPhoneRow("Adim", "", "playwithadim@gmail.com", "", "ACCEPTED")))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(1, preview.get("rejectedCount")); assertEquals(0, apply(event, preview).get("count"));
+        contacts.clear();
+        for (long id : List.of(5L, 6L)) {
+            Database duplicate = contact(id, "Michael", "Oktavianus", "collaboration@cobatech.id", DatabaseDestination.COMPANY);
+            duplicate.setMobilePhone("089503028384"); contacts.add(duplicate);
+        }
+        doReturn(List.of(namedPhoneRow("Michael", "Oktavianus", "collaboration@cobatech.id", "089503028384", "ACCEPTED")))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        preview = service.previewParticipantsForEvent(event);
+        assertEquals(1, preview.get("rejectedCount")); assertEquals(0, apply(event, preview).get("count"));
+        assertTrue(links.isEmpty()); verify(participants, never()).save(any()); verify(databases, never()).save(any());
+        verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void repeatedWholeNameResolutionDoesNotLoosenParticipantIdentityRules() {
+        Database repeated = contact(5, "Williem", "Williem", "okemudintech@gmail.com", DatabaseDestination.PARTICIPANT);
+        repeated.setMobilePhone("081808232200"); contacts.add(repeated);
+        doReturn(List.of(namedPhoneRow("Williem", "", "okemudintech@gmail.com", "081808232200", "ACCEPTED")))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.PARTICIPANT);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(1, preview.get("rejectedCount")); assertEquals(0, apply(event, preview).get("count"));
+        assertTrue(links.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void resolvingALegacyPhoneAliasDoesNotBypassMissingIdentityOnAnotherSharedMailboxOwner() {
+        Database exact = contact(5, "First", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        exact.setMobilePhone("08123456789");
+        Database legacy = contact(6, "Legacy", "Alias", "old@example.invalid", DatabaseDestination.COMPANY);
+        legacy.setMobilePhone("08123456789");
+        Database incompleteMailboxOwner = contact(7, "Second", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        doReturn(List.of(namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED")))
+                .when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY);
+        for (String missing : List.of("phone", "name")) {
+            incompleteMailboxOwner.setFirstName(missing.equals("name") ? null : "Second");
+            incompleteMailboxOwner.setLastName(missing.equals("name") ? null : "Person");
+            incompleteMailboxOwner.setMobilePhone(missing.equals("phone") ? null : "08139999999");
+            contacts.clear(); contacts.addAll(List.of(exact, legacy, incompleteMailboxOwner));
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(1, preview.get("rejectedCount"), missing); assertEquals(0, apply(event, preview).get("count"), missing);
+        }
+        assertTrue(links.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies, emails, activities);
+    }
+
     private static Map<String,Object> namedPhoneRow(String first, String last, String email, String phone, String status) {
         Map<String,Object> incoming = new HashMap<>(row(first, last, email, null));
         ((Map<String,Object>)incoming.get("user_profile")).put("phone", phone); incoming.put("status", status); return incoming;

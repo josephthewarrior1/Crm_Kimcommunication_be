@@ -106,6 +106,24 @@ class EmsApprovalWorkflowTest {
         assertEquals(0, response("participants", "reminder_dday").path("total").asInt());
     }
 
+    @Test void acceptedRegistrationWithAHistoricalClientDeclineReviewCannotEnterOperationalTabsOrTheirExports() throws Exception {
+        EventParticipant exact = participant(1, "approve", "pending");
+        exact.setEmsIdentityReviewMessage("HP juga dipakai profil lama yang ditolak client; perlu ditinjau.");
+        exact.setEmsClientDeclineReviewRequired(true);
+        EventParticipant historical = participant(2, "pending", "decline");
+        rows.addAll(List.of(exact, historical));
+        assertEquals(List.of(1L, 2L), ids(response("participants", "request")));
+        for (String tab : List.of("pre_event", "reminder", "reminder_dday")) {
+            assertEquals(0, response("participants", tab).path("total").asInt(), tab);
+            assertEquals(0, response("participants/export", tab).path("rows").size(), tab + " export");
+        }
+        assertEquals(List.of(1L, 2L), ids(response("participants", "declined")));
+        assertEquals(0, response("statistics", "reminder").at("/scopes/all/approvedRegisterTotal").asInt());
+        assertEquals("pending", exact.getConfirmationStatus()); assertEquals("decline", historical.getConfirmationStatus());
+        assertEquals("approve", exact.getEmsApprovalStatus()); assertEquals("approve", exact.getPreEventApprovalStatus());
+        verify(participants, never()).save(any());
+    }
+
     @Test void manualEventsRetainManualApprovalAndExistingReminderRules() throws Exception {
         event.setEmsEventId(null);
         rows.add(participant(1, null, "approve"));
@@ -196,7 +214,7 @@ class EmsApprovalWorkflowTest {
         assertTrue(manual.path("emsApprovalStatus").isNull());
 
         String response = mvc.perform(post("/api/event-participants").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"eventId\":1,\"databaseId\":1,\"emsApprovalStatus\":\"approve\",\"emsCompanyName\":\"Forged company\",\"emsCompanyReviewRequired\":true,\"notes\":\"[PreEventApproval: approve] CRM note\"}")
+                        .content("{\"eventId\":1,\"databaseId\":1,\"emsApprovalStatus\":\"approve\",\"emsCompanyName\":\"Forged company\",\"emsCompanyReviewRequired\":true,\"emsIdentityReviewMessage\":\"Forged review\",\"emsClientDeclineReviewRequired\":true,\"notes\":\"[PreEventApproval: approve] CRM note\"}")
                         .header("Authorization", "Bearer test")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         JsonNode saved = json.readTree(response).get(0);
@@ -204,6 +222,8 @@ class EmsApprovalWorkflowTest {
         assertTrue(saved.path("emsApprovalStatus").isNull());
         assertTrue(saved.path("emsCompanyName").isNull());
         assertTrue(saved.path("emsCompanyReviewRequired").isNull());
+        assertTrue(saved.path("emsIdentityReviewMessage").isNull());
+        assertTrue(saved.path("emsClientDeclineReviewRequired").isNull());
         assertEquals("pending", saved.path("preEventApprovalStatus").asText());
         assertEquals("[PreEventApproval: pending] CRM note", saved.path("notes").asText());
     }

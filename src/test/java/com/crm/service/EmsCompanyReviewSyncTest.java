@@ -134,6 +134,7 @@ class EmsCompanyReviewSyncTest {
         Map<String,Object> registration=row("member@company.example", "08123456789", "Different EMS Company", "ACCEPTED", false);
         source(registration);contact.setIsActive(false);assertHeld();contact.setIsActive(true);
         Database duplicate=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Member").lastName("Example").mobilePhone("+628123456789").isActive(true).build();
+        duplicate.setEmails(new ArrayList<>(List.of(DatabaseEmail.builder().email("member@company.example").build())));
         contacts.add(duplicate);assertHeld();contacts.remove(duplicate);
         Map<String,Object> wrongPhoneOwner=row("member@company.example","08123456789","Different EMS Company","ACCEPTED",false);
         ((Map<String,Object>)wrongPhoneOwner.get("user_profile")).put("registered_name","Different Name");source(wrongPhoneOwner);assertHeld();
@@ -192,15 +193,26 @@ class EmsCompanyReviewSyncTest {
         verify(participants,never()).save(any());verify(databases,never()).save(any());verifyNoInteractions(companies,emails,activities);
     }
 
-    @Test void aHistoricalClientDeclinedAliasCannotBeBypassedByAnExactCurrentProfileWithTheSamePhone() {
+    @Test void aHistoricalClientDeclinedAliasSyncsTheExactCurrentProfileWithAClientReviewVeto() {
         EventParticipant current=existingLink();current.setConfirmationStatus("pending");
         Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")
                 .mobilePhone("+628123456789").company(company).isActive(true).build();contacts.add(alias);
         EventParticipant declined=EventParticipant.builder().id(21L).event(event).database(alias).confirmationStatus("decline").build();links.add(declined);
-        JsonNode before=json.valueToTree(links);
+        JsonNode mastersBefore=json.valueToTree(contacts),declinedBefore=json.valueToTree(declined);
         source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
-        assertHeld();assertEquals(before,json.valueToTree(links));assertEquals("decline",declined.getConfirmationStatus());
-        verify(participants,never()).save(any());verify(databases,never()).save(any());verifyNoInteractions(companies,emails,activities);
+        for(int repeat=0;repeat<2;repeat++) {
+            Collections.reverse(contacts);
+            Map<String,Object> preview=service.previewParticipantsForEvent(event);
+            assertEquals(1,preview.get("existingCount"));assertEquals(0,preview.get("newCount"));assertEquals(0,preview.get("rejectedCount"));
+            assertEquals(1,apply(preview).get("count"));
+            assertEquals("approve",current.getEmsApprovalStatus());assertEquals("approve",current.getPreEventApprovalStatus());
+            assertEquals("pending",current.getConfirmationStatus());assertEquals(true,current.getEmsClientDeclineReviewRequired());
+            assertNotNull(current.getEmsIdentityReviewMessage());assertFalse(current.getEmsIdentityReviewMessage().isBlank());
+            assertEquals(declinedBefore,json.valueToTree(declined));assertEquals("decline",declined.getConfirmationStatus());
+        }
+        contacts.sort(Comparator.comparing(Database::getId));
+        assertEquals(mastersBefore,json.valueToTree(contacts));assertEquals(2,links.size());assertEquals(1,history.size());
+        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
     }
 
     @Test void matchedContactsWithoutACompanyStayDetachedAndRequireReviewInsteadOfCreatingAMaster() {
@@ -208,6 +220,41 @@ class EmsCompanyReviewSyncTest {
         source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
         Map<String,Object> preview=service.previewParticipantsForEvent(event);assertEquals(1,preview.get("companyReviewCount"));
         apply(preview);assertEquals(before,json.valueToTree(contact));assertEquals(true,links.get(0).getEmsCompanyReviewRequired());
+        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+    }
+
+    @Test void historicalClientReviewRequiresFreshPreviewAndOnlyClearsAfterAnEligibleSyncSeesTheChangedDecision() {
+        EventParticipant current=existingLink();current.setConfirmationStatus("pending");
+        Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")
+                .mobilePhone("08123456789").company(company).isActive(true).build();contacts.add(alias);
+        EventParticipant historical=EventParticipant.builder().id(21L).event(event).database(alias).confirmationStatus("decline").build();links.add(historical);
+        source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
+        apply(service.previewParticipantsForEvent(event));
+        assertEquals(true,current.getEmsClientDeclineReviewRequired());
+
+        source(row("member@company.example","08137777777","Different Company","ACCEPTED",false));
+        Map<String,Object> changedPhonePreview=service.previewParticipantsForEvent(event);
+        assertEquals(1,changedPhonePreview.get("existingCount"));assertEquals(1,apply(changedPhonePreview).get("count"));
+        assertEquals(true,current.getEmsClientDeclineReviewRequired());
+        assertEquals("08123456789",contact.getMobilePhone());
+
+        JsonNode protectedCurrent=json.valueToTree(current);
+        Map<String,Object> invalid=row("changed@example.invalid","08123456789","Different Company","ACCEPTED",false);
+        ((Map<String,Object>)invalid.get("user_profile")).put("registered_name","Unrecognized");
+        source(invalid);
+        assertHeld();
+        assertEquals(protectedCurrent,json.valueToTree(current));assertEquals(true,current.getEmsClientDeclineReviewRequired());
+
+        source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
+        Map<String,Object> stalePreview=service.previewParticipantsForEvent(event);
+        historical.setConfirmationStatus("approve");
+        assertEquals(409,assertThrows(ResponseStatusException.class,()->apply(stalePreview)).getStatusCode().value());
+        assertEquals(protectedCurrent,json.valueToTree(current));
+        Map<String,Object> freshPreview=service.previewParticipantsForEvent(event);
+        assertEquals(1,apply(freshPreview).get("count"));
+        assertEquals(false,current.getEmsClientDeclineReviewRequired());assertEquals("pending",current.getConfirmationStatus());
+        assertEquals("approve",historical.getConfirmationStatus());assertEquals("approve",current.getPreEventApprovalStatus());
+        verify(participants,times(3)).save(current);verify(participants,never()).save(historical);
         verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
     }
 
@@ -222,7 +269,7 @@ class EmsCompanyReviewSyncTest {
     private void source(Map<String,Object> row){doReturn(List.of(row)).when(service).getEventParticipants(event.getEmsEventId(),event.getEmsSource());}
     private Map<String,Object> apply(Map<String,Object> preview){return service.syncParticipantsForEvent(event,(String)preview.get("previewToken"));}
     private static String approval(String source){return source.equals("ACCEPTED")?"approve":source.equals("DECLINED")?"decline":"pending";}
-    private ObjectNode crmOwnedLink(EventParticipant link){ObjectNode state=json.valueToTree(link);state.remove(List.of("participantStatus","attendanceStatus","emsCompanyName","emsCompanyReviewRequired","emsApprovalStatus","preEventApprovalStatus","notes","reminderHariH"));return state;}
+    private ObjectNode crmOwnedLink(EventParticipant link){ObjectNode state=json.valueToTree(link);state.remove(List.of("participantStatus","attendanceStatus","emsCompanyName","emsCompanyReviewRequired","emsIdentityReviewMessage","emsClientDeclineReviewRequired","emsApprovalStatus","preEventApprovalStatus","notes","reminderHariH"));return state;}
     private EventParticipant existingLink(){
         EventParticipant link=EventParticipant.builder().id(20L).event(event).database(contact).participantStatus(ParticipantStatus.yellow).attendanceStatus(AttendanceStatus.invited)
                 .confirmationStatus("approve").preEventApprovalStatus("pending").callStatus("called").emailStatus("sent").whatsappStatus("replied").meetingStatus("scheduled")

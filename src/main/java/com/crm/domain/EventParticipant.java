@@ -1,10 +1,13 @@
 package com.crm.domain;
 
+import com.crm.util.EventApprovalPolicy;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "event_participants", 
        uniqueConstraints = @UniqueConstraint(name = "unique_event_participant_database", columnNames = {"event_id", "database_id"}))
 @Getter
@@ -61,6 +64,21 @@ public class EventParticipant {
     @Column(name = "pre_event_approval_status")
     @Builder.Default
     private String preEventApprovalStatus = "pending";
+
+    // Null is deliberately unknown: old manual approvals are not proof of EMS acceptance.
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column(name = "ems_approval_status", length = 20)
+    private String emsApprovalStatus;
+
+    public String getPreEventApprovalStatus() {
+        return EventApprovalPolicy.isEmsManaged(event)
+                ? EventApprovalPolicy.normalizeApproval(emsApprovalStatus) : preEventApprovalStatus;
+    }
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    public String getApprovalSource() {
+        return EventApprovalPolicy.isEmsManaged(event) ? "ems" : "crm";
+    }
 
     @Column(name = "call_status")
     private String callStatus;

@@ -327,7 +327,7 @@ class EmsDestinationSyncTest {
         verify(databases, never()).save(any()); verifyNoInteractions(companies);
     }
 
-    @Test void existingClientAndPreEventDecisionsSurviveEveryEmsStateAndRepeatSync() {
+    @Test void clientDecisionsSurviveWhilePreEventFollowsEveryEmsStateAndRepeatSync() {
         for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
             for (String client : List.of("pending", "approve", "decline")) {
                 for (String preEvent : List.of("pending", "approve", "decline")) {
@@ -345,8 +345,9 @@ class EmsDestinationSyncTest {
                             assertEquals(1, apply(event, service.previewParticipantsForEvent(event)).get("count"));
                             String context = destination + "/" + client + "/" + preEvent + "/" + state;
                             assertEquals(client, link.getConfirmationStatus(), context);
-                            assertEquals(preEvent, link.getPreEventApprovalStatus(), context);
-                            assertTrue(link.getNotes().contains("[PreEventApproval: " + preEvent + "]"), context);
+                            assertEquals(expectedApproval(state), link.getPreEventApprovalStatus(), context);
+                            assertEquals(expectedApproval(state), link.getEmsApprovalStatus(), context);
+                            assertTrue(link.getNotes().contains("[PreEventApproval: " + expectedApproval(state) + "]"), context);
                             assertTrue(link.getNotes().contains("[Origin: Request]"), context);
                             assertTrue(link.getNotes().contains("[PIC: Test Agent]"), context);
                             assertTrue(link.getNotes().contains("Staff note"), context);
@@ -363,7 +364,7 @@ class EmsDestinationSyncTest {
         verifyNoInteractions(companies);
     }
 
-    @Test void newEmsParticipantsStayPendingEvenWhenVerifiedCheckedInOrDeclined() {
+    @Test void newEmsParticipantsKeepClientPendingWhileTheirPreEventApprovalFollowsEms() {
         for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
             for (String state : List.of("pending", "accepted", "checked_in", "declined")) {
                 contacts.clear(); links.clear(); history.clear();
@@ -372,18 +373,19 @@ class EmsDestinationSyncTest {
                 apply(event, service.previewParticipantsForEvent(event));
                 EventParticipant link = links.get(0);
                 assertEquals("pending", link.getConfirmationStatus());
-                assertEquals("pending", link.getPreEventApprovalStatus());
-                assertTrue(link.getNotes().contains("[PreEventApproval: pending]"));
+                assertEquals(expectedApproval(state), link.getPreEventApprovalStatus());
+                assertEquals(expectedApproval(state), link.getEmsApprovalStatus());
+                assertTrue(link.getNotes().contains("[PreEventApproval: " + expectedApproval(state) + "]"));
                 assertEquals(state.equals("declined"), link.getNotes().contains("[EMS Declined]"));
                 apply(event, service.previewParticipantsForEvent(event));
                 assertEquals(1, contacts.size()); assertEquals(1, links.size());
                 assertEquals("pending", link.getConfirmationStatus());
-                assertEquals("pending", link.getPreEventApprovalStatus());
+                assertEquals(expectedApproval(state), link.getPreEventApprovalStatus());
             }
         }
     }
 
-    @Test void legacyPreEventNotesAreRetainedWhileAnExplicitPendingFieldWins() {
+    @Test void legacyManualPreEventValuesNeverOverrideTheConfirmedEmsSnapshot() {
         for (String legacy : List.of("approve", "decline", "declined", "pending")) {
             contacts.clear(); links.clear(); history.clear();
             Event event = event(1, DatabaseDestination.COMPANY);
@@ -393,16 +395,20 @@ class EmsDestinationSyncTest {
                     .confirmationStatus("decline").preEventApprovalStatus(null)
                     .notes("[preEventApproval: " + legacy.toUpperCase(Locale.ROOT) + "] Staff note").build();
             links.add(link);
+            assertNull(link.getEmsApprovalStatus());
+            assertEquals("pending", link.getPreEventApprovalStatus(), "Legacy notes are not EMS approval proof");
             doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
             apply(event, service.previewParticipantsForEvent(event));
             assertEquals("decline", link.getConfirmationStatus());
-            assertEquals(legacy.equals("declined") ? "decline" : legacy, link.getPreEventApprovalStatus());
+            assertEquals("approve", link.getPreEventApprovalStatus());
             link.setPreEventApprovalStatus("pending");
             link.setNotes("[PreEventApproval: decline] Staff note");
+            doReturn(List.of(approvalRow("pending"))).when(service).getEventParticipants(1L, EmsSource.V2);
             apply(event, service.previewParticipantsForEvent(event));
             assertEquals("pending", link.getPreEventApprovalStatus());
             assertTrue(link.getNotes().contains("[PreEventApproval: pending]"));
             link.setPreEventApprovalStatus(" DECLINED ");
+            doReturn(List.of(approvalRow("declined"))).when(service).getEventParticipants(1L, EmsSource.V2);
             apply(event, service.previewParticipantsForEvent(event));
             assertEquals("decline", link.getConfirmationStatus());
             assertEquals("decline", link.getPreEventApprovalStatus());
@@ -426,6 +432,140 @@ class EmsDestinationSyncTest {
         assertFalse(link.getNotes().contains("[EMS Declined]"));
         assertEquals("decline", link.getConfirmationStatus());
         assertEquals("approve", link.getPreEventApprovalStatus());
+    }
+
+    @Test void approvalMovesBothDirectionsOnTheSameProfileAndNeverRestoresClientApproval() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        doReturn(List.of(approvalRow("checked_in"))).when(service).getEventParticipants(1L, EmsSource.V2);
+        apply(event, service.previewParticipantsForEvent(event));
+        EventParticipant link = links.get(0);
+        Long originalId = link.getId();
+        link.setConfirmationStatus("decline");
+        link.setReminderH7("confirm"); link.setReminderH3("tentative"); link.setReminderH1("on_the_way");
+        assertEquals("on_location", link.getReminderHariH());
+        for (String state : List.of("pending", "declined", "accepted", "pending", "accepted")) {
+            Map<String,Object> incoming = approvalRow(state);
+            if (state.equals("pending")) {
+                incoming.put("verified_at", "2026-11-10T01:00:00Z");
+                incoming.put("checked_in_at", "2026-11-10T01:00:00Z");
+            }
+            doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+            apply(event, service.previewParticipantsForEvent(event));
+            assertEquals(originalId, link.getId());
+            assertEquals(expectedApproval(state), link.getEmsApprovalStatus());
+            assertEquals(expectedApproval(state), link.getPreEventApprovalStatus());
+            assertEquals("decline", link.getConfirmationStatus());
+            assertEquals("confirm", link.getReminderH7()); assertEquals("tentative", link.getReminderH3()); assertEquals("on_the_way", link.getReminderH1());
+            assertEquals(1, contacts.size()); assertEquals(1, links.size());
+        }
+        assertNull(link.getReminderHariH(), "A removed EMS check-in must not leave stale On Location after acceptance");
+        link.setReminderHariH("on_the_way");
+        apply(event, service.previewParticipantsForEvent(event));
+        assertEquals("on_the_way", link.getReminderHariH(), "Other CRM follow-up choices remain unchanged");
+        verifyNoInteractions(companies);
+    }
+
+    @Test void v2RequiresAnExplicitAcceptedStatusWhileLegacyMayUseAValidVerificationTimestamp() {
+        for (EmsSource source : EmsSource.values()) {
+            for (Object verification : List.of("2026-11-10T01:00:00Z", "not-a-date", false)) {
+                contacts.clear(); links.clear(); history.clear();
+                Event event = event(1, DatabaseDestination.PARTICIPANT); event.setEmsSource(source);
+                Map<String,Object> incoming = new HashMap<>(row("Approval", "Example", "approval@company.example", null));
+                incoming.put("verified_at", verification);
+                incoming.put("checked_in_at", "2026-11-10T01:00:00Z");
+                doReturn(List.of(incoming)).when(service).getEventParticipants(1L, source);
+                apply(event, service.previewParticipantsForEvent(event));
+                String expected = source == EmsSource.LEGACY && verification.equals("2026-11-10T01:00:00Z") ? "approve" : "pending";
+                assertEquals(expected, links.get(0).getEmsApprovalStatus());
+                incoming.put("status", "PENDING");
+                apply(event, service.previewParticipantsForEvent(event));
+                assertEquals("pending", links.get(0).getPreEventApprovalStatus(), "Explicit pending overrides retained dates");
+                incoming.put("status", "unexpected");
+                apply(event, service.previewParticipantsForEvent(event));
+                assertEquals("pending", links.get(0).getPreEventApprovalStatus(), "Unknown state fails closed");
+            }
+        }
+    }
+
+    @Test void conflictingApprovalsForOnePlannedProfileHoldAllRowsRegardlessOfOrder() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            for (boolean stored : List.of(false, true)) for (boolean reverse : List.of(false, true)) {
+                contacts.clear(); links.clear(); history.clear();
+                Event event = event(1, destination);
+                EventParticipant previous = null;
+                if (stored) {
+                    Database contact = contact(9, "Approval", "Example", "approval@company.example", destination);
+                    contact.getEmails().add(DatabaseEmail.builder().email("alias@company.example").build());
+                    contacts.add(contact);
+                    previous = EventParticipant.builder().id(10L).event(event).database(contact)
+                            .emsApprovalStatus("approve").preEventApprovalStatus("approve").confirmationStatus("decline")
+                            .notes("Staff note").build();
+                    links.add(previous);
+                }
+                Map<String,Object> accepted = approvalRow("accepted");
+                Map<String,Object> pending = new HashMap<>(row("Approval", "Example", "alias@company.example", null));
+                pending.put("status", "PENDING");
+                if (!stored) {
+                    ((Map<String,Object>) accepted.get("user_profile")).put("phone", "08123456789");
+                    ((Map<String,Object>) pending.get("user_profile")).put("phone", "+628123456789");
+                }
+                doReturn(reverse ? List.of(pending, accepted) : List.of(accepted, pending))
+                        .when(service).getEventParticipants(1L, EmsSource.V2);
+                Map<String,Object> preview = service.previewParticipantsForEvent(event);
+                assertEquals(2, preview.get("rejectedCount"));
+                assertEquals(0, preview.get("newCount")); assertEquals(0, preview.get("existingCount"));
+                assertTrue(((List<Map<String,Object>>) preview.get("rows")).stream()
+                        .allMatch(row -> row.get("message").toString().contains("approval EMS berbeda")));
+                assertEquals(0, apply(event, preview).get("count"));
+                assertEquals(stored ? 1 : 0, contacts.size()); assertEquals(stored ? 1 : 0, links.size());
+                if (previous != null) {
+                    assertEquals("approve", previous.getEmsApprovalStatus());
+                    assertEquals("decline", previous.getConfirmationStatus());
+                    assertEquals("Staff note", previous.getNotes());
+                }
+            }
+        }
+        verify(databases, never()).save(any()); verify(emails, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies, activities);
+    }
+
+    @Test void anyApprovalBearingSourceChangeInvalidatesPreviewBeforeWrites() {
+        for (String field : List.of("status", "declined_at", "verified_at", "checked_in_at")) {
+            contacts.clear(); links.clear(); history.clear();
+            Event event = event(1, DatabaseDestination.PARTICIPANT);
+            Map<String,Object> incoming = approvalRow("pending");
+            doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            incoming.put(field, field.equals("status") ? "ACCEPTED" : "2026-11-10T01:00:00Z");
+            assertEquals(409, assertThrows(ResponseStatusException.class, () -> apply(event, preview)).getStatusCode().value(), field);
+            assertTrue(contacts.isEmpty()); assertTrue(links.isEmpty());
+        }
+        verify(databases, never()).save(any()); verify(emails, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies, activities);
+    }
+
+    @Test void changedSnapshotClientDecisionOrEmsBindingAlsoInvalidatesPreviewBeforeWrites() {
+        for (String change : List.of("snapshot", "client", "emsId", "emsSource")) {
+            contacts.clear(); links.clear(); history.clear();
+            Event event = event(1, DatabaseDestination.PARTICIPANT);
+            Database contact = contact(9, "Approval", "Example", "approval@company.example", DatabaseDestination.PARTICIPANT);
+            contacts.add(contact);
+            EventParticipant link = EventParticipant.builder().id(10L).event(event).database(contact)
+                    .emsApprovalStatus("pending").confirmationStatus("pending").build();
+            links.add(link);
+            doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            switch (change) {
+                case "snapshot" -> link.setEmsApprovalStatus("approve");
+                case "client" -> link.setConfirmationStatus("decline");
+                case "emsId" -> event.setEmsEventId(2L);
+                case "emsSource" -> event.setEmsSource(EmsSource.LEGACY);
+            }
+            assertEquals(409, assertThrows(ResponseStatusException.class, () -> apply(event, preview)).getStatusCode().value(), change);
+            assertEquals(1, contacts.size()); assertEquals(1, links.size());
+        }
+        verify(databases, never()).save(any()); verify(emails, never()).save(any()); verify(participants, never()).save(any());
+        verifyNoInteractions(companies, activities);
     }
 
     @Test void sameCorporateMobileUnderDifferentNamesIsHeldAgainstStoredProfilesAndWithinTheBatch() {
@@ -464,10 +604,15 @@ class EmsDestinationSyncTest {
 
     private Map<String,Object> approvalRow(String state) {
         Map<String,Object> incoming = new HashMap<>(row("Approval", "Example", "approval@company.example", null));
+        incoming.put("status", state.equals("checked_in") ? "ACCEPTED" : state.toUpperCase(Locale.ROOT));
         if (state.equals("accepted")) incoming.put("verified_at", "2026-11-10T01:00:00Z");
         if (state.equals("checked_in")) incoming.put("checked_in_at", "2026-11-10T01:00:00Z");
         if (state.equals("declined")) incoming.put("declined_at", "2026-11-10T01:00:00Z");
         return incoming;
+    }
+
+    private static String expectedApproval(String state) {
+        return state.equals("declined") ? "decline" : state.equals("accepted") || state.equals("checked_in") ? "approve" : "pending";
     }
 
     private Map<String,Object> apply(Event event,Map<String,Object> preview){return service.syncParticipantsForEvent(event,(String)preview.get("previewToken"));}

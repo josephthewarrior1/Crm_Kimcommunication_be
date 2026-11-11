@@ -12,6 +12,7 @@ import com.crm.domain.DatabaseEmail;
 import com.crm.domain.DatabaseDestination;
 import com.crm.util.ContactPhone;
 import com.crm.util.ContactEmailCategory;
+import com.crm.util.EventApprovalPolicy;
 import com.crm.domain.DatabaseSource;
 import com.crm.domain.DatabaseType;
 import com.crm.domain.EventParticipant;
@@ -1320,6 +1321,24 @@ public class EventController {
         if (destinationError != null) return destinationError;
         ResponseEntity<?> pmsError = pmsEventIdError(existing, eventDetails.getPmsEventId());
         if (pmsError != null) return pmsError;
+        EmsSource nextEmsSource = eventDetails.getEmsSource() != null ? eventDetails.getEmsSource() : existing.getEmsSource();
+        boolean hasEmsLink = EventApprovalPolicy.isEmsManaged(existing)
+                || eventDetails.getEmsEventId() != null && eventDetails.getEmsEventId() > 0;
+        boolean bindingChanged = !Objects.equals(existing.getEmsEventId(), eventDetails.getEmsEventId())
+                || (existing.getEmsSource() == null ? EmsSource.LEGACY : existing.getEmsSource())
+                    != (nextEmsSource == null ? EmsSource.LEGACY : nextEmsSource);
+        if (hasEmsLink && bindingChanged) {
+            List<EventParticipant> affected = eventParticipantRepository.findByEventId(id);
+            for (EventParticipant participant : affected) {
+                participant.setEmsApprovalStatus(null);
+                participant.setPreEventApprovalStatus("pending");
+                String notes = safe(participant.getNotes());
+                Matcher approvalTag = PRE_EVENT_APPROVAL_PATTERN.matcher(notes);
+                participant.setNotes(approvalTag.find() ? approvalTag.replaceAll("[PreEventApproval: pending]")
+                        : "[PreEventApproval: pending] " + notes);
+            }
+            eventParticipantRepository.saveAll(affected);
+        }
         if (eventDetails.getPmsEventId() != null) existing.setPmsEventId(eventDetails.getPmsEventId());
         if (eventDetails.getSyncDestination() != null) {
             classifyLegacyEventProfiles(existing, eventDetails.getSyncDestination());
@@ -1622,10 +1641,7 @@ public class EventController {
             }
             case "reminder" -> {
                 stats.put("approvedRegisterTotal", participants.stream()
-                        .filter(participant -> {
-                            String conf = getEffectiveConfirmationStatus(participant);
-                            return ("approve".equals(conf) || "confirmed".equals(conf)) && isRegisteredParticipant(participant);
-                        })
+                        .filter(participant -> matchesTab(participant, "reminder"))
                         .count());
                 stats.put("confirmToAttend", participants.stream().filter(participant -> "confirm".equals(getLatestReminderStatus(participant))).count());
                 stats.put("tentative", participants.stream().filter(participant -> "tentative".equals(getLatestReminderStatus(participant))).count());
@@ -1691,7 +1707,7 @@ public class EventController {
                             ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
                             : "";
                     if ("not_respond_yet".equals(targetStatus)) {
-                        return status.isBlank() || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
+                        return status.isBlank() || "white".equals(status) || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
                     }
                     return "not_interest".equals(targetStatus) && ("not_interest".equals(status) || "red".equals(status));
                 })
@@ -1763,7 +1779,9 @@ public class EventController {
             }
             case "declined" -> declined;
             case "reminder", "reminder_dday" -> !declined
-                    && ("approve".equals(confirmation) || "confirmed".equals(confirmation))
+                    && (EventApprovalPolicy.isEmsManaged(participant.getEvent())
+                        ? "approve".equals(preEvent)
+                        : "approve".equals(confirmation) || "confirmed".equals(confirmation))
                     && isRegisteredParticipant(participant);
             default -> true;
         };
@@ -1886,10 +1904,13 @@ public class EventController {
                 ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT)
                 : "";
         String notes = safe(participant.getNotes());
-        return notes.contains("[Origin: EMS Sync]")
+        boolean emsEvidence = participant.getEmsApprovalStatus() != null
+                || notes.contains("[Origin: EMS Sync]")
                 || notes.contains("[EMS]")
                 || (participant.getDatabase() != null
-                && participant.getDatabase().getSource() == DatabaseSource.event_registration)
+                && participant.getDatabase().getSource() == DatabaseSource.event_registration);
+        if (EventApprovalPolicy.isEmsManaged(participant.getEvent())) return emsEvidence;
+        return emsEvidence
                 || "registered".equals(attendanceStatus)
                 || "attended".equals(attendanceStatus);
     }

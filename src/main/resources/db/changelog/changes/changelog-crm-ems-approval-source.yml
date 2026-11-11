@@ -1,0 +1,17 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-ems-approval-source-20261111
+      author: codex
+      changes:
+        - addColumn:
+            tableName: event_participants
+            columns:
+              - column:
+                  name: ems_approval_status
+                  type: varchar(20)
+                  constraints:
+                    nullable: true
+      rollback:
+        - dropColumn:
+            tableName: event_participants
+            columnName: ems_approval_status

@@ -118,7 +118,7 @@ class EmsServiceRoutingTest {
     @Test void repeatedCorporateRegistrationInOneBatchReusesTheNewContactAndParticipant() {
         var event = Event.builder().syncDestination(DatabaseDestination.COMPANY).id(1L).emsEventId(42L).emsSource(EmsSource.V2).build();
         var company = Company.builder().id(50L).name("Fixture Company").industry("Technology").build();
-        Map<String, Object> registration = Map.of("id", 70L, "created_at", "2026-10-22T03:04:05Z",
+        Map<String, Object> registration = Map.of("id", 70L, "status", "ACCEPTED", "created_at", "2026-10-22T03:04:05Z",
                 "registration_code", "FIXTURE", "user_profile", Map.of(
                         "registered_name", "Fixture", "registered_last_name", "Contact",
                         "registered_email", "team@corp.example", "phone", "0800000000",
@@ -179,6 +179,8 @@ class EmsServiceRoutingTest {
         assertSame(database, savedEmails.get(database.getId()).getDatabase());
         assertSame(company, database.getCompany());
         assertSame(event, participant.getEvent());
+        assertEquals("approve", participant.getEmsApprovalStatus());
+        assertEquals("approve", participant.getPreEventApprovalStatus());
         assertEquals(LocalDateTime.of(2026, 10, 22, 10, 4, 5), participant.getCreatedAt());
         assertEquals(participant.getCreatedAt(), participant.getRequestedAt());
         verify(databases).save(database);

@@ -4,6 +4,7 @@ import com.crm.domain.*;
 import com.crm.repository.*;
 import com.crm.service.AuditLogService;
 import com.crm.service.SecurityHelper;
+import com.crm.util.EventApprovalPolicy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,7 @@ import java.util.regex.Pattern;
 @RequestMapping("/api/event-participants")
 public class EventParticipantController {
     private static final Pattern PIC_PATTERN = Pattern.compile("\\[PIC:\\s*[^\\]]+\\]", Pattern.CASE_INSENSITIVE);
+    private static final String EMS_APPROVAL_READ_ONLY = "Approval Pre-Event mengikuti EMS. Ubah approval registrasi di EMS, lalu Preview & Sync EMS.";
 
     @Autowired
     private EventParticipantRepository eventParticipantRepository;
@@ -85,6 +87,10 @@ public class EventParticipantController {
         if (event.getSyncDestination() != DatabaseDestination.COMPANY && event.getSyncDestination() != DatabaseDestination.PARTICIPANT) {
             return ResponseEntity.status(409).body("Tipe event belum dipilih. Pilih Korporat atau Peserta melalui Edit Event terlebih dahulu.");
         }
+        if (EventApprovalPolicy.isEmsManaged(event) && request.getPreEventApprovalStatus() != null
+                && !"pending".equalsIgnoreCase(request.getPreEventApprovalStatus().trim())) {
+            return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
+        }
         java.util.List<Long> databasesToProcess = new java.util.ArrayList<>();
         if (request.getDatabaseIds() != null && !request.getDatabaseIds().isEmpty()) {
             databasesToProcess.addAll(request.getDatabaseIds());
@@ -119,7 +125,8 @@ public class EventParticipantController {
                     .attendanceStatus(request.getAttendanceStatus() != null ? AttendanceStatus.valueOf(request.getAttendanceStatus()) : AttendanceStatus.registered)
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
                     .preEventApprovalStatus(request.getPreEventApprovalStatus() != null ? request.getPreEventApprovalStatus() : "pending")
-                    .notes(request.getNotes())
+                    .notes(EventApprovalPolicy.isEmsManaged(event)
+                            ? setPreEventApprovalStatus(request.getNotes(), "pending") : request.getNotes())
                     .build();
             savedParticipants.add(eventParticipantRepository.save(eventParticipant));
         }
@@ -183,6 +190,15 @@ public class EventParticipantController {
             if (!canUpdateParticipant(currentUser, participant)) {
                 return ResponseEntity.status(403).body("Forbidden: You cannot update another PIC's participant");
             }
+            if (confirmationStatus != null && !isValidConfirmationStatus(confirmationStatus)) {
+                return ResponseEntity.badRequest().body("Invalid confirmationStatus. Must be pending, approve, or decline.");
+            }
+            if (preEventApprovalStatus != null && !isValidConfirmationStatus(preEventApprovalStatus)) {
+                return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus. Must be pending, approve, or decline.");
+            }
+            if (changesEmsApproval(participant, preEventApprovalStatus)) {
+                return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
+            }
             if (participantStatus != null) {
                 try {
                     participant.setParticipantStatus(ParticipantStatus.valueOf(participantStatus));
@@ -198,19 +214,13 @@ public class EventParticipantController {
                 }
             }
             if (notes != null) {
-                participant.setNotes(notes);
+                participant.setNotes(protectedApprovalNotes(participant, notes));
             }
             if (confirmationStatus != null) {
-                if (!isValidConfirmationStatus(confirmationStatus)) {
-                    return ResponseEntity.badRequest().body("Invalid confirmationStatus. Must be pending, approve, or decline.");
-                }
                 participant.setConfirmationStatus(confirmationStatus);
             }
             if (preEventApprovalStatus != null) {
-                if (!isValidConfirmationStatus(preEventApprovalStatus)) {
-                    return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus. Must be pending, approve, or decline.");
-                }
-                participant.setPreEventApprovalStatus(preEventApprovalStatus);
+                if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) participant.setPreEventApprovalStatus(preEventApprovalStatus);
             }
             if (participantCategory != null) {
                 participant.setParticipantCategory(participantCategory);
@@ -281,11 +291,14 @@ public class EventParticipantController {
         if (request.getParticipantIds() == null || request.getParticipantIds().isEmpty()) {
             return ResponseEntity.badRequest().body("participantIds is required");
         }
+        if (request.getPreEventApprovalStatus() != null && !isValidConfirmationStatus(request.getPreEventApprovalStatus())) {
+            return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus");
+        }
 
         List<EventParticipant> updatedParticipants = new ArrayList<>();
         List<String> updatedNames = new ArrayList<>();
         int skippedCount = 0;
-
+        List<EventParticipant> selectedParticipants = new ArrayList<>();
         for (Long participantId : request.getParticipantIds()) {
             EventParticipant participant = eventParticipantRepository.findById(participantId).orElse(null);
             if (participant == null) {
@@ -300,7 +313,13 @@ public class EventParticipantController {
                 skippedCount++;
                 continue;
             }
+            if (changesEmsApproval(participant, request.getPreEventApprovalStatus())) {
+                return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
+            }
+            selectedParticipants.add(participant);
+        }
 
+        for (EventParticipant participant : selectedParticipants) {
             if (request.getParticipantStatus() != null) {
                 try {
                     participant.setParticipantStatus(ParticipantStatus.valueOf(request.getParticipantStatus()));
@@ -322,11 +341,10 @@ public class EventParticipantController {
                 participant.setConfirmationStatus(request.getConfirmationStatus());
             }
             if (request.getPreEventApprovalStatus() != null) {
-                if (!isValidConfirmationStatus(request.getPreEventApprovalStatus())) {
-                    return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus");
+                if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) {
+                    participant.setPreEventApprovalStatus(request.getPreEventApprovalStatus());
+                    participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), request.getPreEventApprovalStatus()));
                 }
-                participant.setPreEventApprovalStatus(request.getPreEventApprovalStatus());
-                participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), request.getPreEventApprovalStatus()));
             }
             if (request.getReminderH7() != null) {
                 participant.setReminderH7(request.getReminderH7().trim().isEmpty() ? null : request.getReminderH7());
@@ -365,7 +383,7 @@ public class EventParticipantController {
                 participant.setTimeline(request.getTimeline());
             }
             if (request.getNotes() != null) {
-                participant.setNotes(request.getNotes());
+                participant.setNotes(protectedApprovalNotes(participant, request.getNotes()));
             }
             if (request.getPicName() != null) {
                 participant.setNotes(setPic(participant.getNotes(), request.getPicName()));
@@ -861,7 +879,7 @@ public class EventParticipantController {
                             ? participant.getParticipantStatus().name().toLowerCase(Locale.ROOT)
                             : "";
                     if ("not_respond_yet".equals(targetStatus)) {
-                        return status.isBlank() || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
+                        return status.isBlank() || "white".equals(status) || "not_respond_yet".equals(status) || "not_respon_yet".equals(status) || status.startsWith("not_respond_");
                     }
                     return "not_interest".equals(targetStatus) && ("not_interest".equals(status) || "red".equals(status));
                 })
@@ -960,6 +978,16 @@ public class EventParticipantController {
         return "pending".equalsIgnoreCase(confirmationStatus)
                 || "approve".equalsIgnoreCase(confirmationStatus)
                 || "decline".equalsIgnoreCase(confirmationStatus);
+    }
+
+    private boolean changesEmsApproval(EventParticipant participant, String requested) {
+        return requested != null && EventApprovalPolicy.isEmsManaged(participant.getEvent())
+                && !participant.getPreEventApprovalStatus().equalsIgnoreCase(requested.trim());
+    }
+
+    private String protectedApprovalNotes(EventParticipant participant, String notes) {
+        return EventApprovalPolicy.isEmsManaged(participant.getEvent())
+                ? setPreEventApprovalStatus(notes, participant.getPreEventApprovalStatus()) : notes;
     }
 
     private String setPic(String notes, String picName) {

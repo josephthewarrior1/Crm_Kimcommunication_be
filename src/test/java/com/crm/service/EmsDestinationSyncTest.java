@@ -642,6 +642,163 @@ class EmsDestinationSyncTest {
         assertEquals(2, contacts.size()); assertNotSame(known, links.get(0).getDatabase());
     }
 
+    @Test void sharedCompanyGmailKeepsDifferentNamedPhonesSeparateAcrossNewAndRepeatedSyncs() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Map<String,Object> first = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+        Map<String,Object> second = namedPhoneRow("Second", "Person", "TEAM@gmail.com", "08139999999", "PENDING");
+        Map<String,Object> alternate = namedPhoneRow("First", "Person", "first@gmail.com", "+628123456789", "ACCEPTED");
+        doReturn(List.of(first, second, alternate)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(2, preview.get("newCount")); assertEquals(1, preview.get("existingCount")); assertEquals(0, preview.get("rejectedCount"));
+        assertTrue(contacts.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any());
+        assertEquals(3, apply(event, preview).get("count")); assertEquals(2, contacts.size()); assertEquals(2, links.size());
+        EventParticipant firstLink = links.stream().filter(link -> link.getDatabase().getFirstName().equals("First")).findFirst().orElseThrow();
+        EventParticipant secondLink = links.stream().filter(link -> link.getDatabase().getFirstName().equals("Second")).findFirst().orElseThrow();
+        assertEquals("approve", firstLink.getPreEventApprovalStatus()); assertEquals("pending", secondLink.getPreEventApprovalStatus());
+        assertNotEquals(firstLink.getDatabase().getId(), secondLink.getDatabase().getId());
+        assertEquals("08123456789", firstLink.getDatabase().getMobilePhone()); assertEquals("08139999999", secondLink.getDatabase().getMobilePhone());
+        Long firstId = firstLink.getId(), secondId = secondLink.getId();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        var before = json.valueToTree(contacts);
+        firstLink.setConfirmationStatus("decline");
+        for (int i = 0; i < 2; i++) {
+            Collections.reverse(contacts);
+            doReturn(i == 0 ? List.of(second, alternate, first) : List.of(first, second, alternate)).when(service).getEventParticipants(1L, EmsSource.V2);
+            preview = service.previewParticipantsForEvent(event);
+            assertEquals(3, preview.get("existingCount")); assertEquals(0, preview.get("newCount")); assertEquals(0, preview.get("rejectedCount"));
+            assertEquals(3, apply(event, preview).get("count")); assertEquals(2, contacts.size()); assertEquals(2, links.size()); assertEquals(2, history.size());
+            assertEquals(firstId, firstLink.getId()); assertEquals(secondId, secondLink.getId());
+            assertEquals("decline", firstLink.getConfirmationStatus()); assertEquals("approve", firstLink.getPreEventApprovalStatus());
+            assertEquals("pending", secondLink.getPreEventApprovalStatus());
+        }
+        assertEquals(before, json.valueToTree(contacts));
+        verifyNoInteractions(companies);
+    }
+
+    @Test void aPublicCompanyMailboxMatchesKnownPeopleByTheirOwnPhonesRegardlessOfOwnerOrder() {
+        Database first = contact(5, "First", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        Database second = contact(6, "Second", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        first.setMobilePhone("08123456789"); second.setMobilePhone("08139999999"); contacts.addAll(List.of(first, second));
+        Map<String,Object> a = namedPhoneRow("First", "Person", "team@gmail.com", "+628123456789", "ACCEPTED");
+        Map<String,Object> b = namedPhoneRow("Second", "Person", "team@gmail.com", "08139999999", "DECLINED");
+        Event event = event(1, DatabaseDestination.COMPANY);
+        for (int i = 0; i < 2; i++) {
+            Collections.reverse(contacts);
+            doReturn(i == 0 ? List.of(a, b) : List.of(b, a)).when(service).getEventParticipants(1L, EmsSource.V2);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(2, preview.get("existingCount")); assertEquals(0, preview.get("rejectedCount")); apply(event, preview);
+            assertEquals(2, links.size());
+            assertEquals("approve", links.stream().filter(link -> link.getDatabase() == first).findFirst().orElseThrow().getPreEventApprovalStatus());
+            assertEquals("decline", links.stream().filter(link -> link.getDatabase() == second).findFirst().orElseThrow().getPreEventApprovalStatus());
+        }
+        verify(databases, never()).save(any()); verifyNoInteractions(emails, companies);
+    }
+
+    @Test void aSharedPublicCompanyMailboxDoesNotPermitMissingOrChangedPersonIdentity() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        Database first = contact(5, "First", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        Database second = contact(6, "Second", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        first.setMobilePhone("08123456789"); second.setMobilePhone("08139999999"); contacts.addAll(List.of(first, second));
+        Map<String,Object> incoming = namedPhoneRow("First", "Person", "team@gmail.com", "08127777777", "ACCEPTED");
+        doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+        assertEquals(400, assertThrows(ResponseStatusException.class, () -> service.previewParticipantsForEvent(event)).getStatusCode().value());
+        for (String missing : List.of("source-phone", "source-name", "stored-phone", "stored-name")) {
+            first.setFirstName("First"); first.setLastName("Person"); first.setMobilePhone("08123456789"); second.setMobilePhone("08139999999");
+            incoming = namedPhoneRow(missing.equals("source-name") ? "" : "First", missing.equals("source-name") ? "" : "Person", "team@gmail.com", missing.equals("source-phone") ? "" : "08123456789", "ACCEPTED");
+            if (missing.equals("stored-phone")) second.setMobilePhone(null);
+            if (missing.equals("stored-name")) { first.setFirstName(null); first.setLastName(null); }
+            doReturn(List.of(incoming)).when(service).getEventParticipants(1L, EmsSource.V2);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(1, preview.get("rejectedCount"), missing); assertEquals(0, apply(event, preview).get("count"));
+        }
+        assertTrue(links.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void aFreshSharedPublicMailboxRequiresDistinctKnownPhonesForEveryNamedPerson() {
+        Event event = event(1, DatabaseDestination.COMPANY);
+        for (String missing : List.of("name", "phone")) {
+            Map<String,Object> first = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+            Map<String,Object> second = namedPhoneRow(missing.equals("name") ? "" : "Second", missing.equals("name") ? "" : "Person", "team@gmail.com", missing.equals("phone") ? "" : "08139999999", "PENDING");
+            doReturn(List.of(first, second)).when(service).getEventParticipants(1L, EmsSource.V2);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(2, preview.get("rejectedCount"), missing); assertEquals(0, apply(event, preview).get("count"));
+        }
+        assertTrue(contacts.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void sharedPublicEmailNeverBypassesDifferentNamesUsingTheSamePhoneOrParticipantScope() {
+        Map<String,Object> first = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+        Map<String,Object> second = namedPhoneRow("Second", "Person", "team@gmail.com", "+628123456789", "ACCEPTED");
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            doReturn(List.of(first, second)).when(service).getEventParticipants(1L, EmsSource.V2);
+            Event event = event(1, destination); Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(2, preview.get("rejectedCount")); assertEquals(0, apply(event, preview).get("count"));
+        }
+        ((Map<String,Object>)second.get("user_profile")).put("phone", "08139999999");
+        doReturn(List.of(first, second)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event participant = event(1, DatabaseDestination.PARTICIPANT);
+        assertEquals(2, service.previewParticipantsForEvent(participant).get("rejectedCount"));
+        assertTrue(contacts.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void sharedPublicMailboxDoesNotAliasANewSameNameOntoAnotherDisjointPhone() {
+        Map<String,Object> first = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+        Map<String,Object> second = namedPhoneRow("Second", "Person", "team@gmail.com", "08139999999", "ACCEPTED");
+        Map<String,Object> changed = namedPhoneRow("First", "Person", "team@gmail.com", "08127777777", "ACCEPTED");
+        doReturn(List.of(first, second, changed)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY);
+        assertEquals(400, assertThrows(ResponseStatusException.class, () -> service.previewParticipantsForEvent(event)).getStatusCode().value());
+        verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void aKnownSharedMailboxProfileMayUseEitherOfItsTwoAlreadyStoredNumbers() {
+        Database first = contact(5, "First", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        Database second = contact(6, "Second", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        first.setMobilePhone("08123456789, 08127777777"); second.setMobilePhone("08139999999"); contacts.addAll(List.of(first, second));
+        Map<String,Object> a = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+        Map<String,Object> b = namedPhoneRow("Second", "Person", "team@gmail.com", "08139999999", "PENDING");
+        Map<String,Object> another = namedPhoneRow("First", "Person", "team@gmail.com", "08127777777", "ACCEPTED");
+        doReturn(List.of(a, b, another)).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY); Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(3, preview.get("existingCount")); assertEquals(0, preview.get("rejectedCount")); apply(event, preview);
+        assertEquals(2, links.size()); assertEquals("08123456789, 08127777777", first.getMobilePhone());
+        verify(databases, never()).save(any()); verifyNoInteractions(companies, emails);
+    }
+
+    @Test void aSharedMailboxAliasCannotAddADisjointPhoneToAPhoneMatchedStoredProfile() {
+        Database first = contact(5, "First", "Person", "other@gmail.com", DatabaseDestination.COMPANY);
+        first.setMobilePhone("08123456789"); contacts.add(first);
+        Map<String,Object> a = namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED");
+        Map<String,Object> b = namedPhoneRow("Second", "Person", "team@gmail.com", "08139999999", "PENDING");
+        Map<String,Object> changed = namedPhoneRow("First", "Person", "team@gmail.com", "08127777777", "ACCEPTED");
+        Event event = event(1, DatabaseDestination.COMPANY);
+        for (List<Map<String,Object>> incoming : List.of(List.of(a, b, changed), List.of(changed, b, a))) {
+            doReturn(incoming).when(service).getEventParticipants(1L, EmsSource.V2);
+            assertEquals(400, assertThrows(ResponseStatusException.class, () -> service.previewParticipantsForEvent(event)).getStatusCode().value());
+        }
+        Map<String,Object> alternate = namedPhoneRow("First", "Person", "other@gmail.com", "08123456789, 08127777777", "ACCEPTED");
+        doReturn(List.of(changed, b, alternate)).when(service).getEventParticipants(1L, EmsSource.V2);
+        assertEquals(400, assertThrows(ResponseStatusException.class, () -> service.previewParticipantsForEvent(event)).getStatusCode().value());
+        assertEquals("08123456789", first.getMobilePhone()); assertTrue(links.isEmpty());
+        verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    @Test void changingAnotherSharedMailboxOwnersPhoneInvalidatesThePreviewWithoutSyncWrites() {
+        Database first = contact(5, "First", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        Database second = contact(6, "Second", "Person", "team@gmail.com", DatabaseDestination.COMPANY);
+        first.setMobilePhone("08123456789"); second.setMobilePhone("08139999999"); contacts.addAll(List.of(first, second));
+        doReturn(List.of(namedPhoneRow("First", "Person", "team@gmail.com", "08123456789", "ACCEPTED"))).when(service).getEventParticipants(1L, EmsSource.V2);
+        Event event = event(1, DatabaseDestination.COMPANY); Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        second.setMobilePhone("08128888888");
+        assertEquals(409, assertThrows(ResponseStatusException.class, () -> apply(event, preview)).getStatusCode().value());
+        assertTrue(links.isEmpty()); verify(databases, never()).save(any()); verify(participants, never()).save(any()); verifyNoInteractions(companies, emails, activities);
+    }
+
+    private static Map<String,Object> namedPhoneRow(String first, String last, String email, String phone, String status) {
+        Map<String,Object> incoming = new HashMap<>(row(first, last, email, null));
+        ((Map<String,Object>)incoming.get("user_profile")).put("phone", phone); incoming.put("status", status); return incoming;
+    }
+
     private Map<String,Object> approvalRow(String state) {
         Map<String,Object> incoming = new HashMap<>(row("Approval", "Example", "approval@company.example", null));
         incoming.put("status", state.equals("checked_in") ? "ACCEPTED" : state.toUpperCase(Locale.ROOT));

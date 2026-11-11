@@ -237,6 +237,8 @@ public class EmsService {
         Map<String, String> companyNames = new HashMap<>();
         Map<String, Set<String>> incomingNames = new HashMap<>();
         Map<String, Set<String>> incomingPhoneNames = new HashMap<>();
+        Set<String> incompleteSharedEmails = new HashSet<>();
+        Map<String, Set<String>> plannedSharedPhones = new HashMap<>();
         for (Object item : (List) raw) {
             if (!(item instanceof Map)) continue;
             Registration incoming = registration((Map) item);
@@ -244,10 +246,13 @@ public class EmsService {
                 for (String number : ContactPhone.normalizedNumbers(incoming.phone())) incomingPhoneNames.computeIfAbsent(number, ignored -> new HashSet<>())
                         .add(identityName(incoming.firstName() + " " + incoming.lastName()));
             }
-            if (ContactEmailCategory.isValidEmail(incoming.email()) && !incoming.firstName().isBlank()) {
+            boolean publicCompanyEmail = destination == DatabaseDestination.COMPANY && ContactEmailCategory.isPublicPersonalEmail(incoming.email());
+            if (ContactEmailCategory.isValidEmail(incoming.email()) && (!incoming.firstName().isBlank() || publicCompanyEmail)) {
                 incomingNames.computeIfAbsent(incoming.email(), ignored -> new HashSet<>())
                         .add(identityName(incoming.firstName() + " " + incoming.lastName()));
             }
+            if (publicCompanyEmail && (identityName(incoming.firstName() + " " + incoming.lastName()).isBlank()
+                    || ContactPhone.normalizedNumbers(incoming.phone()).isEmpty())) incompleteSharedEmails.add(incoming.email());
         }
         int created = 0, existing = 0, rejected = 0, row = 0;
         for (Object item : (List) raw) {
@@ -273,6 +278,8 @@ public class EmsService {
             if (problem.isEmpty() && ContactPhone.normalizedNumbers(registration.phone()).stream()
                     .anyMatch(number -> incomingPhoneNames.getOrDefault(number, Set.of()).size() > 1)) problem = "HP cocok dengan beberapa nama dalam data EMS; tinjau sebelum sync.";
             List<Database> owners = new ArrayList<>();
+            Set<String> mailboxNames = new HashSet<>(incomingNames.getOrDefault(email, Set.of()));
+            boolean publicCompanyEmail = destination == DatabaseDestination.COMPANY && ContactEmailCategory.isPublicPersonalEmail(email);
             if (problem.isEmpty()) {
                 Set<String> numbers = ContactPhone.normalizedNumbers(registration.phone());
                 List<Database> contactOwners = new ArrayList<>();
@@ -285,8 +292,11 @@ public class EmsService {
                     if (!sameEmail && !samePhone) continue;
                     contactOwners.add(contact);
                     String retainedName = identityName(safe(contact.getFirstName()) + " " + safe(contact.getLastName()));
+                    if (sameEmail) mailboxNames.add(retainedName);
                     if (name.isBlank() || retainedName.isBlank() || retainedName.equals(identityName(name))) owners.add(contact);
-                    else if (samePhone || destination == DatabaseDestination.PARTICIPANT || ContactEmailCategory.isPublicPersonalEmail(email)) {
+                    else if (samePhone || destination == DatabaseDestination.PARTICIPANT
+                            || ContactEmailCategory.isPublicPersonalEmail(email) && !(publicCompanyEmail && sameEmail
+                            && !numbers.isEmpty() && !storedNumbers.isEmpty())) {
                         problem = "Email atau HP sudah terdaftar pada nama berbeda. Tinjau profil sebelum sync.";
                     }
                 }
@@ -296,6 +306,10 @@ public class EmsService {
                 }
             }
             Database match = owners.size() == 1 ? owners.get(0) : null;
+            boolean sharedCompanyEmail = publicCompanyEmail && mailboxNames.size() > 1;
+            if (problem.isEmpty() && sharedCompanyEmail && incompleteSharedEmails.contains(email)) {
+                problem = "Email bersama memerlukan nama dan HP yang jelas untuk masing-masing orang. Tinjau sebelum sync.";
+            }
             if (problem.isEmpty() && match != null && Boolean.FALSE.equals(match.getIsActive())) problem = "Kontak nonaktif; tinjau sebelum sync.";
             if (problem.isEmpty() && !isBlank(registration.phone())) {
                 try { ContactPhone.merge(destination == DatabaseDestination.PARTICIPANT && match != null ? match.getMobilePhone() : "", registration.phone()); }
@@ -320,11 +334,27 @@ public class EmsService {
                 }
                 String canonicalKey = knownEmailKey != null ? knownEmailKey : knownPhoneKey != null ? knownPhoneKey : key;
                 Database knownMatch = matches.get(canonicalKey);
+                Database retained = match != null ? match : knownMatch;
+                if (retained != null && (sharedCompanyEmail || plannedSharedPhones.containsKey(canonicalKey))) {
+                    Set<String> storedNumbers = ContactPhone.normalizedNumbers(retained.getMobilePhone());
+                    storedNumbers.addAll(ContactPhone.normalizedNumbers(retained.getNormalizedPhone()));
+                    if (sharedCompanyEmail && (identityName(safe(retained.getFirstName()) + " " + safe(retained.getLastName())).isBlank()
+                            || Collections.disjoint(storedNumbers, ContactPhone.normalizedNumbers(registration.phone())))
+                            || plannedSharedPhones.containsKey(canonicalKey) && Collections.disjoint(storedNumbers, plannedSharedPhones.get(canonicalKey))) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nama pada email bersama belum cocok dengan HP profil. Tinjau sebelum sync.");
+                    }
+                }
+                if (sharedCompanyEmail && match == null && knownMatch == null) {
+                    Set<String> numbers = ContactPhone.normalizedNumbers(registration.phone());
+                    Set<String> overlap = plannedSharedPhones.computeIfAbsent(canonicalKey, ignored -> new HashSet<>(numbers));
+                    overlap.retainAll(numbers);
+                    if (overlap.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Nama dan email bersama memiliki beberapa HP tanpa profil yang pasti. Tinjau sebelum sync.");
+                }
                 if (knownMatch != null && match != null && !Objects.equals(knownMatch.getId(), match.getId())) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nama dan nomor cocok dengan beberapa profil lama. Tinjau duplikat sebelum sync.");
                 }
                 boolean exists = match != null || seen.contains(canonicalKey);
-                Database retained = match != null ? match : knownMatch;
                 String crmCompanyName = retained != null
                         ? retained.getCompany() == null ? "" : safe(retained.getCompany().getName())
                         : companyNames.getOrDefault(canonicalKey, safe(registration.companyName()));
@@ -337,6 +367,7 @@ public class EmsService {
                 previewRow.put("status", exists ? "EXISTING" : "NEW");
                 String message = exists ? "Profil dipakai kembali; riwayat event dipertahankan." : "Profil baru di tujuan yang dipilih.";
                 message += " Approval setelah sync: " + emsApprovalStatus(event, (Map) item) + ".";
+                if (sharedCompanyEmail) message += " Email bersama; profil dipisahkan berdasarkan nama dan HP.";
                 if (reviewCompany) message += " Perusahaan di registrasi berbeda; perlu ditinjau. Profil dan perusahaan CRM dipertahankan.";
                 if (isBlank(registration.phone())) message += " HP/WhatsApp belum diisi; peserta belum bisa ditelepon.";
                 previewRow.put("message", message);

@@ -196,12 +196,14 @@ class EmsApprovalWorkflowTest {
         assertTrue(manual.path("emsApprovalStatus").isNull());
 
         String response = mvc.perform(post("/api/event-participants").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"eventId\":1,\"databaseId\":1,\"emsApprovalStatus\":\"approve\",\"notes\":\"[PreEventApproval: approve] CRM note\"}")
+                        .content("{\"eventId\":1,\"databaseId\":1,\"emsApprovalStatus\":\"approve\",\"emsCompanyName\":\"Forged company\",\"emsCompanyReviewRequired\":true,\"notes\":\"[PreEventApproval: approve] CRM note\"}")
                         .header("Authorization", "Bearer test")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         JsonNode saved = json.readTree(response).get(0);
         assertEquals("ems", saved.path("approvalSource").asText());
         assertTrue(saved.path("emsApprovalStatus").isNull());
+        assertTrue(saved.path("emsCompanyName").isNull());
+        assertTrue(saved.path("emsCompanyReviewRequired").isNull());
         assertEquals("pending", saved.path("preEventApprovalStatus").asText());
         assertEquals("[PreEventApproval: pending] CRM note", saved.path("notes").asText());
     }
@@ -278,6 +280,7 @@ class EmsApprovalWorkflowTest {
         event.setEmsSource(EmsSource.V2);
         EventParticipant row = participant(1, "approve", "pending");
         row.setNotes("[Origin: EMS Sync] [PreEventApproval: approve] Keep CRM note");
+        row.setEmsCompanyName("Source company");row.setEmsCompanyReviewRequired(true);
         row.setReminderH7("confirm");
         row.setReminderHariH("on_location");
         rows.add(row);
@@ -288,6 +291,7 @@ class EmsApprovalWorkflowTest {
                         .content("{\"name\":\"Renamed fixture\",\"emsEventId\":14,\"emsSource\":\"V2\"}")
                         .header("Authorization", "Bearer test")).andExpect(status().isOk());
         assertEquals("approve", row.getEmsApprovalStatus(), "Normal edits preserve the current EMS snapshot");
+        assertEquals("Source company",row.getEmsCompanyName());assertEquals(true,row.getEmsCompanyReviewRequired());
         verify(participants, never()).saveAll(any());
 
         for (String nextBinding : List.of("\"emsEventId\":15,\"emsSource\":\"V2\"",
@@ -295,10 +299,12 @@ class EmsApprovalWorkflowTest {
                 "\"emsEventId\":null,\"emsSource\":\"LEGACY\"")) {
             row.setEmsApprovalStatus("approve");
             row.setPreEventApprovalStatus("approve");
+            row.setEmsCompanyName("Source company");row.setEmsCompanyReviewRequired(true);
             mvc.perform(put("/api/events/1").contentType(MediaType.APPLICATION_JSON)
                             .content("{\"name\":\"Renamed fixture\"," + nextBinding + "}")
                             .header("Authorization", "Bearer test")).andExpect(status().isOk());
             assertNull(row.getEmsApprovalStatus());
+            assertNull(row.getEmsCompanyName());assertNull(row.getEmsCompanyReviewRequired());
             assertEquals("pending", row.getPreEventApprovalStatus());
             assertEquals("[Origin: EMS Sync] [PreEventApproval: pending] Keep CRM note", row.getNotes());
             assertEquals("pending", row.getConfirmationStatus());

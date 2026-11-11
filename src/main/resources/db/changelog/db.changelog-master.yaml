@@ -48,3 +48,5 @@ databaseChangeLog:
       file: db/changelog/changes/changelog-crm-participant-organization-fields.yml
   - include:
       file: db/changelog/changes/changelog-crm-ems-approval-source.yml
+  - include:
+      file: db/changelog/changes/changelog-crm-ems-company-review.yml

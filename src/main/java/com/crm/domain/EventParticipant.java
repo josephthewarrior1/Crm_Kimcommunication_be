@@ -71,6 +71,14 @@ public class EventParticipant {
     private String emsApprovalStatus;
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column(name = "ems_company_name", columnDefinition = "TEXT")
+    private String emsCompanyName;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column(name = "ems_company_review_required")
+    private Boolean emsCompanyReviewRequired;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public String getApprovalSource() {
         return EventApprovalPolicy.isEmsManaged(event) ? "ems" : "crm";
     }

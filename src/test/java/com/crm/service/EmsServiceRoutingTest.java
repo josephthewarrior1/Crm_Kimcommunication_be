@@ -191,8 +191,8 @@ class EmsServiceRoutingTest {
         legacy.verify();
     }
 
-    @Test void v2ResyncRepairsOnlyTheExactOriginalIndustryCode() throws Exception {
-        assertCompanyIndustryAfterSync(EmsSource.V2, "technology", "technology", "Technology");
+    @Test void v2ResyncPreservesRawIndustryOnAnExistingCompanyContact() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "technology", "technology", "technology");
     }
 
     @Test void v2ResyncPreservesAnExistingHumanIndustry() throws Exception {
@@ -207,8 +207,8 @@ class EmsServiceRoutingTest {
         assertCompanyIndustryAfterSync(EmsSource.LEGACY, "technology", "technology", "technology");
     }
 
-    @Test void industryStillHydratesAnEmptyCompanyValue() throws Exception {
-        assertCompanyIndustryAfterSync(EmsSource.V2, "", "technology", "Technology");
+    @Test void existingCompanyMasterIsPreservedEvenWhenItsIndustryIsEmpty() throws Exception {
+        assertCompanyIndustryAfterSync(EmsSource.V2, "", "technology", "");
     }
 
     private int sync(Event event) {

@@ -234,6 +234,7 @@ public class EmsService {
         Map<Integer, String> plannedKeys = new HashMap<>();
         List<Integer> acceptedRows = new ArrayList<>();
         Map<String, String> phoneAliases = new HashMap<>();
+        Map<String, String> companyNames = new HashMap<>();
         Map<String, Set<String>> incomingNames = new HashMap<>();
         Map<String, Set<String>> incomingPhoneNames = new HashMap<>();
         for (Object item : (List) raw) {
@@ -297,15 +298,14 @@ public class EmsService {
             Database match = owners.size() == 1 ? owners.get(0) : null;
             if (problem.isEmpty() && match != null && Boolean.FALSE.equals(match.getIsActive())) problem = "Kontak nonaktif; tinjau sebelum sync.";
             if (problem.isEmpty() && !isBlank(registration.phone())) {
-                try { ContactPhone.merge(match == null ? "" : match.getMobilePhone(), registration.phone()); }
+                try { ContactPhone.merge(destination == DatabaseDestination.PARTICIPANT && match != null ? match.getMobilePhone() : "", registration.phone()); }
                 catch (IllegalArgumentException invalid) { problem = invalid.getMessage(); }
-            }
-            if (problem.isEmpty() && destination == DatabaseDestination.COMPANY && match != null && match.getCompany() != null
-                    && !isBlank(registration.companyName()) && !normalizeText(match.getCompany().getName()).equals(normalizeText(registration.companyName()))) {
-                problem = "Kontak sudah terdaftar di perusahaan lain; pindahkan melalui Edit kontak sebelum sync.";
             }
             Map<String, Object> previewRow = new LinkedHashMap<>();
             previewRow.put("rowNum", row); previewRow.put("name", name); previewRow.put("email", email);
+            previewRow.put("companyReviewRequired", false);
+            previewRow.put("crmCompanyName", match != null && match.getCompany() != null ? safe(match.getCompany().getName()) : "");
+            previewRow.put("emsCompanyName", safe(registration.companyName()));
             if (!problem.isEmpty()) {
                 previewRow.put("status", "REJECTED"); previewRow.put("message", problem); rejected++;
             } else {
@@ -324,11 +324,20 @@ public class EmsService {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nama dan nomor cocok dengan beberapa profil lama. Tinjau duplikat sebelum sync.");
                 }
                 boolean exists = match != null || seen.contains(canonicalKey);
+                Database retained = match != null ? match : knownMatch;
+                String crmCompanyName = retained != null
+                        ? retained.getCompany() == null ? "" : safe(retained.getCompany().getName())
+                        : companyNames.getOrDefault(canonicalKey, safe(registration.companyName()));
+                companyNames.putIfAbsent(canonicalKey, crmCompanyName);
+                boolean reviewCompany = companyReviewRequired(destination, crmCompanyName, registration.companyName());
+                previewRow.put("companyReviewRequired", reviewCompany);
+                previewRow.put("crmCompanyName", crmCompanyName);
                 aliases.put(key, canonicalKey);
                 for (String phoneKey : phoneKeys) phoneAliases.put(phoneKey, canonicalKey);
                 previewRow.put("status", exists ? "EXISTING" : "NEW");
                 String message = exists ? "Profil dipakai kembali; riwayat event dipertahankan." : "Profil baru di tujuan yang dipilih.";
                 message += " Approval setelah sync: " + emsApprovalStatus(event, (Map) item) + ".";
+                if (reviewCompany) message += " Perusahaan di registrasi berbeda; perlu ditinjau. Profil dan perusahaan CRM dipertahankan.";
                 if (isBlank(registration.phone())) message += " HP/WhatsApp belum diisi; peserta belum bisa ditelepon.";
                 previewRow.put("message", message);
                 if (match != null) { previewRow.put("existingDatabaseId", match.getId()); matches.put(canonicalKey, match); }
@@ -357,6 +366,7 @@ public class EmsService {
             if ("NEW".equals(previewRow.get("status"))) created--; else existing--;
             rejected++;
             previewRow.put("status", "REJECTED");
+            previewRow.put("companyReviewRequired", false);
             previewRow.put("message", "Beberapa registrasi untuk kontak yang sama memiliki approval EMS berbeda. Tinjau data EMS sebelum sync.");
         }
         for (int i = accepted.size() - 1; i >= 0; i--) {
@@ -365,6 +375,7 @@ public class EmsService {
         List<Object> contactState = contacts.stream().sorted(Comparator.comparing(Database::getId, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(contact -> (Object) Arrays.asList(contact.getId(), contact.getUpdatedAt(), contact.getDatabaseDestination(), contact.getIsActive(),
                         contact.getFirstName(), contact.getLastName(), contact.getMobilePhone(), contact.getNormalizedPhone(), contact.getCompany() == null ? null : contact.getCompany().getId(),
+                        contact.getCompany() == null ? null : contact.getCompany().getName(),
                         contact.getInstitutionName(), contact.getSalutation(), contact.getPositionLevel(), contact.getSpecialityDivision(), contact.getJobTitle(),
                         contact.getOrganizationGroupName(), contact.getOrganizationBrandName(), contact.getOrganizationAddress(), contact.getOrganizationOfficePhone(),
                         contact.getOrganizationIndustry(), contact.getOrganizationSizeRevenue(), contact.getOrganizationSizeEmployee(), contact.getOrganizationBranchName(),
@@ -372,13 +383,16 @@ public class EmsService {
                         contact.getEmails() == null ? List.of() : contact.getEmails().stream().filter(Objects::nonNull).map(email -> safe(email.getEmail())).sorted().toList())).toList();
         List<Object> participantState = participants.stream().sorted(Comparator.comparing(EventParticipant::getId, Comparator.nullsFirst(Comparator.naturalOrder()))).map(participant -> (Object) Arrays.asList(participant.getId(),
                 participant.getDatabase() == null ? null : participant.getDatabase().getId(), participant.getUpdatedAt(),
-                participant.getEmsApprovalStatus(), participant.getPreEventApprovalStatus(), participant.getConfirmationStatus())).toList();
+                participant.getEmsApprovalStatus(), participant.getPreEventApprovalStatus(), participant.getConfirmationStatus(),
+                participant.getEmsCompanyName(), participant.getEmsCompanyReviewRequired())).toList();
         Map<String, Long> matchedIds = new TreeMap<>();
         matches.forEach((key, contact) -> matchedIds.put(key, contact.getId()));
         String token = fingerprint(Arrays.asList(event.getId(), event.getEmsEventId(), event.getEmsSource(), destination, raw, contactState, participantState, matchedIds, aliases));
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("destination", destination); preview.put("totalRows", rows.size()); preview.put("newCount", created);
-        preview.put("existingCount", existing); preview.put("rejectedCount", rejected); preview.put("rows", rows); preview.put("previewToken", token);
+        preview.put("existingCount", existing); preview.put("rejectedCount", rejected);
+        preview.put("companyReviewCount", (int) rows.stream().filter(item -> Boolean.TRUE.equals(item.get("companyReviewRequired"))).count());
+        preview.put("rows", rows); preview.put("previewToken", token);
         return new SyncPlan(accepted, matches, aliases, preview);
     }
 
@@ -431,30 +445,16 @@ public class EmsService {
             String companyName = registration.companyName(), jobTitle = registration.jobTitle(), industry = registration.industry();
             boolean participantDestination = event.getSyncDestination() == DatabaseDestination.PARTICIPANT;
 
-            // Find/Create Company
-            Company company = null;
-            if (!participantDestination && companyName != null && !companyName.isEmpty()) {
-                Optional<Company> compOpt = companyRepository.findByNameIgnoreCase(companyName);
-                if (compOpt.isPresent()) {
-                    company = compOpt.get();
-                    Object rawIndustry = profile == null ? null : profile.get("ems_v2_industry_raw");
-                    boolean replaceV2RawIndustry = event.getEmsSource() == EmsSource.V2
-                            && rawIndustry instanceof String
-                            && rawIndustry.equals(company.getIndustry()) && !rawIndustry.equals(industry);
-                    if (industry != null && !industry.isEmpty()
-                            && (company.getIndustry() == null || company.getIndustry().isEmpty() || replaceV2RawIndustry)) {
-                        company.setIndustry(industry);
-                        company = companyRepository.save(company);
-                    }
-                } else {
-                    company = companyRepository.save(Company.builder().name(companyName).industry(industry).build());
-                }
-            }
-
             String contactKey = registrationContactKey(registration);
             contactKey = plan.aliases().getOrDefault(contactKey, contactKey);
             Database database = matchedContacts.get(contactKey);
+            boolean retainedCompanyProfile = database != null && !participantDestination;
             if (database == null) {
+                Company company = null;
+                if (!participantDestination && !isBlank(companyName)) {
+                    company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
+                    if (company == null) company = companyRepository.save(Company.builder().name(companyName).industry(industry).build());
+                }
                 database = Database.builder().salutation(salutation).firstName(firstName).lastName(lastName)
                         .company(company).jobTitle(participantDestination ? null : jobTitle).mobilePhone(isBlank(phone) ? null : ContactPhone.clean(phone))
                         .normalizedPhone(normalizePhone(phone)).databaseType(DatabaseType.end_user)
@@ -473,13 +473,9 @@ public class EmsService {
                 }
                 hydrateParticipantOrganization(database, registration);
                 databaseRepository.save(database);
-            } else {
-                boolean changed = false;
-                if (isBlank(database.getFirstName()) && !isBlank(firstName)) { database.setFirstName(firstName); changed = true; }
-                changed |= hydrateDatabaseFromEms(database, company, salutation, lastName, phone, jobTitle, profile);
-                if (changed) databaseRepository.save(database);
             }
-            if (!email.isBlank() && !databaseEmailRepository.existsByDatabaseIdAndEmailIgnoreCase(database.getId(), email)) {
+            // A matched Company contact and every master/email field remain CRM-owned.
+            if (!retainedCompanyProfile && !email.isBlank() && !databaseEmailRepository.existsByDatabaseIdAndEmailIgnoreCase(database.getId(), email)) {
                 DatabaseEmail address = DatabaseEmail.builder().database(database).email(email)
                         .emailType(participantDestination ? "personal" : "company").isCorporate(!participantDestination)
                         .isPrimary(database.getEmails() == null || database.getEmails().isEmpty()).build();
@@ -514,6 +510,9 @@ public class EmsService {
                 
                 ep.setEmsApprovalStatus(preEventApproval);
                 ep.setPreEventApprovalStatus(preEventApproval);
+                ep.setEmsCompanyName(companyName);
+                ep.setEmsCompanyReviewRequired(companyReviewRequired(event.getSyncDestination(),
+                        database.getCompany() == null ? "" : database.getCompany().getName(), companyName));
                 ep.setNotes(emsSyncNotes(ep.getNotes(), preEventApproval, isDeclined));
                 if (isCheckedIn && !isDeclined) {
                     ep.setReminderHariH("on_location");
@@ -545,6 +544,9 @@ public class EmsService {
                         .confirmationStatus("pending")
                         .emsApprovalStatus(preEventApproval)
                         .preEventApprovalStatus(preEventApproval)
+                        .emsCompanyName(companyName)
+                        .emsCompanyReviewRequired(companyReviewRequired(event.getSyncDestination(),
+                                database.getCompany() == null ? "" : database.getCompany().getName(), companyName))
                         .reminderHariH(isCheckedIn && !isDeclined ? "on_location" : null)
                         .notes(emsSyncNotes("", preEventApproval, isDeclined))
                         .createdAt(emsCreatedAt != null ? emsCreatedAt : java.time.LocalDateTime.now())
@@ -565,6 +567,11 @@ public class EmsService {
             syncedCount++;
         }
         return syncedCount;
+    }
+
+    private boolean companyReviewRequired(DatabaseDestination destination, String crmCompanyName, String emsCompanyName) {
+        return destination == DatabaseDestination.COMPANY && !isBlank(emsCompanyName)
+                && !normalizeText(crmCompanyName).equals(normalizeText(emsCompanyName));
     }
 
     private boolean hasEmsTimestamp(Object value) {

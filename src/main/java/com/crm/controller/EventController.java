@@ -1331,6 +1331,8 @@ public class EventController {
             List<EventParticipant> affected = eventParticipantRepository.findByEventId(id);
             for (EventParticipant participant : affected) {
                 participant.setEmsApprovalStatus(null);
+                participant.setEmsCompanyName(null);
+                participant.setEmsCompanyReviewRequired(null);
                 participant.setPreEventApprovalStatus("pending");
                 String notes = safe(participant.getNotes());
                 Matcher approvalTag = PRE_EVENT_APPROVAL_PATTERN.matcher(notes);

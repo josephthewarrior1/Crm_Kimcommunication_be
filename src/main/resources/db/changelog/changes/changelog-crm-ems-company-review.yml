@@ -1,0 +1,14 @@
+databaseChangeLog:
+  - changeSet:
+      id: crm-ems-company-review-20261111
+      author: codex
+      changes:
+        - addColumn:
+            tableName: event_participants
+            columns:
+              - column:
+                  name: ems_company_name
+                  type: TEXT
+              - column:
+                  name: ems_company_review_required
+                  type: BOOLEAN

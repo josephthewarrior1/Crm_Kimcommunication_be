@@ -385,7 +385,7 @@ class EmsDestinationSyncTest {
         }
     }
 
-    @Test void legacyManualPreEventValuesNeverOverrideTheConfirmedEmsSnapshot() {
+    @Test void confirmedSyncOverwritesLegacyAndCurrentManualPreEventValues() {
         for (String legacy : List.of("approve", "decline", "declined", "pending")) {
             contacts.clear(); links.clear(); history.clear();
             Event event = event(1, DatabaseDestination.COMPANY);
@@ -396,7 +396,8 @@ class EmsDestinationSyncTest {
                     .notes("[preEventApproval: " + legacy.toUpperCase(Locale.ROOT) + "] Staff note").build();
             links.add(link);
             assertNull(link.getEmsApprovalStatus());
-            assertEquals("pending", link.getPreEventApprovalStatus(), "Legacy notes are not EMS approval proof");
+            assertNull(link.getPreEventApprovalStatus(), "An absent stored decision stays unset until manual input or sync");
+            assertTrue(link.getNotes().contains(legacy.toUpperCase(Locale.ROOT)), "Legacy manual notes are retained before sync");
             doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
             apply(event, service.previewParticipantsForEvent(event));
             assertEquals("decline", link.getConfirmationStatus());
@@ -462,6 +463,44 @@ class EmsDestinationSyncTest {
         link.setReminderHariH("on_the_way");
         apply(event, service.previewParticipantsForEvent(event));
         assertEquals("on_the_way", link.getReminderHariH(), "Other CRM follow-up choices remain unchanged");
+        verifyNoInteractions(companies);
+    }
+
+    @Test void everySyncOverwritesManualApprovalEvenWhenTheEmsStateHasNotChanged() {
+        for (DatabaseDestination destination : List.of(DatabaseDestination.COMPANY, DatabaseDestination.PARTICIPANT)) {
+            for (String client : List.of("pending", "decline")) {
+                contacts.clear(); links.clear(); history.clear();
+                Event event = event(1, destination);
+                doReturn(List.of(approvalRow("accepted"))).when(service).getEventParticipants(1L, EmsSource.V2);
+                apply(event, service.previewParticipantsForEvent(event));
+                EventParticipant link = links.get(0);
+                Long originalId = link.getId();
+                link.setConfirmationStatus(client);
+                link.setReminderH7("confirm");
+
+                for (String sourceState : List.of("accepted", "pending", "declined")) {
+                    doReturn(List.of(approvalRow(sourceState))).when(service).getEventParticipants(1L, EmsSource.V2);
+                    apply(event, service.previewParticipantsForEvent(event));
+                    String sourceApproval = expectedApproval(sourceState);
+                    String manualApproval = sourceApproval.equals("approve") ? "decline" : "approve";
+                    link.setPreEventApprovalStatus(manualApproval);
+                    link.setNotes("[Origin: EMS Sync] [PIC: Operator] [PreEventApproval: " + manualApproval + "] Staff correction");
+                    assertEquals(manualApproval, link.getPreEventApprovalStatus(), "Manual choice takes effect between syncs");
+                    assertEquals(sourceApproval, link.getEmsApprovalStatus(), "Manual choice does not forge the last source snapshot");
+
+                    apply(event, service.previewParticipantsForEvent(event));
+                    assertEquals(sourceApproval, link.getPreEventApprovalStatus(), "Fresh sync overwrites the manual choice, even with unchanged source data");
+                    assertEquals(sourceApproval, link.getEmsApprovalStatus());
+                    assertTrue(link.getNotes().contains("[PreEventApproval: " + sourceApproval + "]"));
+                    assertTrue(link.getNotes().contains("[PIC: Operator]"));
+                    assertTrue(link.getNotes().contains("Staff correction"));
+                    assertEquals(client, link.getConfirmationStatus(), "Source sync must not overwrite Client Approval");
+                    assertEquals("confirm", link.getReminderH7());
+                    assertEquals(originalId, link.getId());
+                    assertEquals(1, contacts.size()); assertEquals(1, links.size()); assertEquals(1, history.size());
+                }
+            }
+        }
         verifyNoInteractions(companies);
     }
 
@@ -544,8 +583,8 @@ class EmsDestinationSyncTest {
         verifyNoInteractions(companies, activities);
     }
 
-    @Test void changedSnapshotClientDecisionOrEmsBindingAlsoInvalidatesPreviewBeforeWrites() {
-        for (String change : List.of("snapshot", "client", "emsId", "emsSource")) {
+    @Test void changedSnapshotManualApprovalClientDecisionOrEmsBindingAlsoInvalidatesPreviewBeforeWrites() {
+        for (String change : List.of("snapshot", "preEvent", "client", "emsId", "emsSource")) {
             contacts.clear(); links.clear(); history.clear();
             Event event = event(1, DatabaseDestination.PARTICIPANT);
             Database contact = contact(9, "Approval", "Example", "approval@company.example", DatabaseDestination.PARTICIPANT);
@@ -557,6 +596,7 @@ class EmsDestinationSyncTest {
             Map<String,Object> preview = service.previewParticipantsForEvent(event);
             switch (change) {
                 case "snapshot" -> link.setEmsApprovalStatus("approve");
+                case "preEvent" -> link.setPreEventApprovalStatus("approve");
                 case "client" -> link.setConfirmationStatus("decline");
                 case "emsId" -> event.setEmsEventId(2L);
                 case "emsSource" -> event.setEmsSource(EmsSource.LEGACY);

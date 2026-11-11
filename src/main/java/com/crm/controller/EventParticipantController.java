@@ -24,7 +24,6 @@ import java.util.regex.Pattern;
 @RequestMapping("/api/event-participants")
 public class EventParticipantController {
     private static final Pattern PIC_PATTERN = Pattern.compile("\\[PIC:\\s*[^\\]]+\\]", Pattern.CASE_INSENSITIVE);
-    private static final String EMS_APPROVAL_READ_ONLY = "Approval Pre-Event mengikuti EMS. Ubah approval registrasi di EMS, lalu Preview & Sync EMS.";
 
     @Autowired
     private EventParticipantRepository eventParticipantRepository;
@@ -87,9 +86,8 @@ public class EventParticipantController {
         if (event.getSyncDestination() != DatabaseDestination.COMPANY && event.getSyncDestination() != DatabaseDestination.PARTICIPANT) {
             return ResponseEntity.status(409).body("Tipe event belum dipilih. Pilih Korporat atau Peserta melalui Edit Event terlebih dahulu.");
         }
-        if (EventApprovalPolicy.isEmsManaged(event) && request.getPreEventApprovalStatus() != null
-                && !"pending".equalsIgnoreCase(request.getPreEventApprovalStatus().trim())) {
-            return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
+        if (request.getPreEventApprovalStatus() != null && !isValidConfirmationStatus(request.getPreEventApprovalStatus())) {
+            return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus");
         }
         java.util.List<Long> databasesToProcess = new java.util.ArrayList<>();
         if (request.getDatabaseIds() != null && !request.getDatabaseIds().isEmpty()) {
@@ -126,7 +124,7 @@ public class EventParticipantController {
                     .confirmationStatus(request.getConfirmationStatus() != null ? request.getConfirmationStatus() : "pending")
                     .preEventApprovalStatus(request.getPreEventApprovalStatus() != null ? request.getPreEventApprovalStatus() : "pending")
                     .notes(EventApprovalPolicy.isEmsManaged(event)
-                            ? setPreEventApprovalStatus(request.getNotes(), "pending") : request.getNotes())
+                            ? setPreEventApprovalStatus(request.getNotes(), request.getPreEventApprovalStatus()) : request.getNotes())
                     .build();
             savedParticipants.add(eventParticipantRepository.save(eventParticipant));
         }
@@ -196,9 +194,6 @@ public class EventParticipantController {
             if (preEventApprovalStatus != null && !isValidConfirmationStatus(preEventApprovalStatus)) {
                 return ResponseEntity.badRequest().body("Invalid preEventApprovalStatus. Must be pending, approve, or decline.");
             }
-            if (changesEmsApproval(participant, preEventApprovalStatus)) {
-                return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
-            }
             if (participantStatus != null) {
                 try {
                     participant.setParticipantStatus(ParticipantStatus.valueOf(participantStatus));
@@ -220,7 +215,8 @@ public class EventParticipantController {
                 participant.setConfirmationStatus(confirmationStatus);
             }
             if (preEventApprovalStatus != null) {
-                if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) participant.setPreEventApprovalStatus(preEventApprovalStatus);
+                participant.setPreEventApprovalStatus(preEventApprovalStatus);
+                participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), preEventApprovalStatus));
             }
             if (participantCategory != null) {
                 participant.setParticipantCategory(participantCategory);
@@ -313,9 +309,6 @@ public class EventParticipantController {
                 skippedCount++;
                 continue;
             }
-            if (changesEmsApproval(participant, request.getPreEventApprovalStatus())) {
-                return ResponseEntity.status(409).body(EMS_APPROVAL_READ_ONLY);
-            }
             selectedParticipants.add(participant);
         }
 
@@ -341,10 +334,8 @@ public class EventParticipantController {
                 participant.setConfirmationStatus(request.getConfirmationStatus());
             }
             if (request.getPreEventApprovalStatus() != null) {
-                if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) {
-                    participant.setPreEventApprovalStatus(request.getPreEventApprovalStatus());
-                    participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), request.getPreEventApprovalStatus()));
-                }
+                participant.setPreEventApprovalStatus(request.getPreEventApprovalStatus());
+                participant.setNotes(setPreEventApprovalStatus(participant.getNotes(), request.getPreEventApprovalStatus()));
             }
             if (request.getReminderH7() != null) {
                 participant.setReminderH7(request.getReminderH7().trim().isEmpty() ? null : request.getReminderH7());
@@ -980,14 +971,14 @@ public class EventParticipantController {
                 || "decline".equalsIgnoreCase(confirmationStatus);
     }
 
-    private boolean changesEmsApproval(EventParticipant participant, String requested) {
-        return requested != null && EventApprovalPolicy.isEmsManaged(participant.getEvent())
-                && !participant.getPreEventApprovalStatus().equalsIgnoreCase(requested.trim());
-    }
-
     private String protectedApprovalNotes(EventParticipant participant, String notes) {
-        return EventApprovalPolicy.isEmsManaged(participant.getEvent())
-                ? setPreEventApprovalStatus(notes, participant.getPreEventApprovalStatus()) : notes;
+        if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) return notes;
+        String current = participant.getPreEventApprovalStatus();
+        if (!isValidConfirmationStatus(current)) {
+            var legacy = Pattern.compile("(?i)\\[PreEventApproval:\\s*([^\\]]+)\\]").matcher(safe(participant.getNotes()));
+            current = legacy.find() ? legacy.group(1) : "pending";
+        }
+        return setPreEventApprovalStatus(notes, EventApprovalPolicy.normalizeApproval(current));
     }
 
     private String setPic(String notes, String picName) {

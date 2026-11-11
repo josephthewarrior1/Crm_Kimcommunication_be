@@ -328,7 +328,7 @@ public class EmsService {
                 for (String phoneKey : phoneKeys) phoneAliases.put(phoneKey, canonicalKey);
                 previewRow.put("status", exists ? "EXISTING" : "NEW");
                 String message = exists ? "Profil dipakai kembali; riwayat event dipertahankan." : "Profil baru di tujuan yang dipilih.";
-                message += " Approval EMS: " + emsApprovalStatus(event, (Map) item) + ".";
+                message += " Approval setelah sync: " + emsApprovalStatus(event, (Map) item) + ".";
                 if (isBlank(registration.phone())) message += " HP/WhatsApp belum diisi; peserta belum bisa ditelepon.";
                 previewRow.put("message", message);
                 if (match != null) { previewRow.put("existingDatabaseId", match.getId()); matches.put(canonicalKey, match); }

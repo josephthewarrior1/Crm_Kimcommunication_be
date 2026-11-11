@@ -13,19 +13,22 @@ import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.*;
 
 class EventParticipantApprovalTest {
-    @Test void linkedEventsRequireAnEmsSnapshotInsteadOfLegacyManualApprovalOrNotes() {
+    @Test void linkedEventsKeepEditableApprovalSeparateFromLastSyncSnapshot() {
         for (EmsSource source : EmsSource.values()) {
             Event event = Event.builder().emsEventId(42L).emsSource(source).build();
             EventParticipant participant = EventParticipant.builder().event(event)
                     .confirmationStatus("decline").preEventApprovalStatus("approve")
                     .notes("[PreEventApproval: approve] Staff note").build();
             assertEquals("ems", participant.getApprovalSource());
-            assertEquals("pending", participant.getPreEventApprovalStatus());
+            assertEquals("approve", participant.getPreEventApprovalStatus());
             for (String status : List.of("approve", "pending", "decline")) {
                 participant.setEmsApprovalStatus(status);
-                assertEquals(status, participant.getPreEventApprovalStatus());
+                assertEquals("approve", participant.getPreEventApprovalStatus());
                 assertEquals("decline", participant.getConfirmationStatus());
             }
+            participant.setPreEventApprovalStatus("pending");
+            assertEquals("pending", participant.getPreEventApprovalStatus());
+            assertEquals("decline", participant.getEmsApprovalStatus());
         }
     }
 
@@ -40,16 +43,16 @@ class EventParticipantApprovalTest {
         }
     }
 
-    @Test void jsonCannotInjectAnEmsSnapshotAndSerializesTheCanonicalPreEventStatus() throws Exception {
+    @Test void jsonCannotInjectAnEmsSnapshotButCurrentApprovalIsEditable() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         EventParticipant participant = mapper.readValue("{\"emsApprovalStatus\":\"approve\",\"approvalSource\":\"crm\","
                 + "\"preEventApprovalStatus\":\"approve\",\"notes\":\"[PreEventApproval: approve]\","
                 + "\"event\":{\"emsEventId\":42}}", EventParticipant.class);
         assertNull(participant.getEmsApprovalStatus());
-        assertEquals("pending", participant.getPreEventApprovalStatus());
+        assertEquals("approve", participant.getPreEventApprovalStatus());
         var json = mapper.readTree(mapper.writeValueAsString(participant));
         assertEquals("ems", json.get("approvalSource").asText());
-        assertEquals("pending", json.get("preEventApprovalStatus").asText());
+        assertEquals("approve", json.get("preEventApprovalStatus").asText());
         assertTrue(json.get("emsApprovalStatus").isNull());
     }
 

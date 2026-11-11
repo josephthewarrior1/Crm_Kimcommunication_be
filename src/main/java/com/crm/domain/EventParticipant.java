@@ -65,15 +65,10 @@ public class EventParticipant {
     @Builder.Default
     private String preEventApprovalStatus = "pending";
 
-    // Null is deliberately unknown: old manual approvals are not proof of EMS acceptance.
+    // Last synced approval; the editable Pre-Event decision can differ until the next sync.
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @Column(name = "ems_approval_status", length = 20)
     private String emsApprovalStatus;
-
-    public String getPreEventApprovalStatus() {
-        return EventApprovalPolicy.isEmsManaged(event)
-                ? EventApprovalPolicy.normalizeApproval(emsApprovalStatus) : preEventApprovalStatus;
-    }
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public String getApprovalSource() {

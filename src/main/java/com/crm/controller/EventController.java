@@ -1776,7 +1776,8 @@ public class EventController {
                 if (declined) {
                     yield false;
                 }
-                if (!isEms && !"approve".equals(confirmation) && !"confirmed".equals(confirmation)) {
+                if (!isEms && !"approve".equals(confirmation) && !"confirmed".equals(confirmation)
+                        && !(EventApprovalPolicy.isEmsManaged(participant.getEvent()) && "approve".equals(preEvent))) {
                     yield false;
                 }
                 yield true;
@@ -1920,6 +1921,9 @@ public class EventController {
     }
 
     private boolean isDeclinedParticipant(EventParticipant participant) {
+        if (EventApprovalPolicy.isEmsManaged(participant.getEvent())) {
+            return "decline".equals(getPreEventApprovalStatus(participant));
+        }
         String att = participant.getAttendanceStatus() != null ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT) : "";
         String notes = safe(participant.getNotes()).toLowerCase(Locale.ROOT);
         return Objects.equals(att, "cancelled")

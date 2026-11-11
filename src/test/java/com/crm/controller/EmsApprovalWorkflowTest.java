@@ -79,14 +79,14 @@ class EmsApprovalWorkflowTest {
 
         assertEquals(List.of(1L, 2L, 3L, 4L, 5L, 6L), ids(response("participants", "request")));
         assertEquals(List.of(1L, 3L, 5L), ids(response("participants", "pre_event")));
-        assertEquals(List.of(1L), ids(response("participants", "reminder")));
-        assertEquals(List.of(1L), ids(response("participants", "reminder_dday")));
+        assertEquals(List.of(1L, 5L), ids(response("participants", "reminder")));
+        assertEquals(List.of(1L, 5L), ids(response("participants", "reminder_dday")));
         assertEquals(List.of(2L, 4L), ids(response("participants", "declined")));
-        assertEquals(1, response("statistics", "reminder").at("/scopes/all/approvedRegisterTotal").asInt());
-        assertEquals(1, response("statistics", "pre_event").at("/scopes/all/approve").asInt());
-        assertEquals(2, response("statistics", "pre_event").at("/scopes/all/pending").asInt());
+        assertEquals(2, response("statistics", "reminder").at("/scopes/all/approvedRegisterTotal").asInt());
+        assertEquals(2, response("statistics", "pre_event").at("/scopes/all/approve").asInt());
+        assertEquals(1, response("statistics", "pre_event").at("/scopes/all/pending").asInt());
         assertEquals("pending", rows.get(0).getConfirmationStatus(), "EMS approval does not overwrite Client Approval");
-        assertEquals("pending", legacy.getPreEventApprovalStatus(), "Legacy manual approve is not EMS evidence");
+        assertEquals("approve", legacy.getPreEventApprovalStatus(), "Stored manual decisions stay effective until the next sync");
         assertEquals("approve", response("participants/export", "pre_event").path("rows").get(0).path("Pre Event Approval").asText());
         verify(participants, never()).save(any());
     }
@@ -119,27 +119,29 @@ class EmsApprovalWorkflowTest {
         assertEquals("crm", rows.get(0).getApprovalSource());
     }
 
-    @Test void explicitManualEmsApprovalChangeFailsBeforeAnyOtherFieldMutation() throws Exception {
+    @Test void explicitManualApprovalChangesCurrentDecisionWithoutChangingLastSyncOrClientApproval() throws Exception {
         EventParticipant row = participant(1, "pending", "pending");
         rows.add(row);
-        String notesBefore = row.getNotes();
-        mvc.perform(put("/api/event-participants/1/status").param("participantStatus", "red")
-                        .param("confirmationStatus", "approve").param("preEventApprovalStatus", "approve")
+        mvc.perform(put("/api/event-participants/1/status").param("callStatus", "CONNECTED")
+                        .param("preEventApprovalStatus", "approve")
                         .header("Authorization", "Bearer test"))
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk());
         assertEquals(ParticipantStatus.registered, row.getParticipantStatus());
         assertEquals("pending", row.getConfirmationStatus());
-        assertEquals(notesBefore, row.getNotes());
-        assertEquals("pending", row.getPreEventApprovalStatus());
-        verify(participants, never()).save(any());
+        assertTrue(row.getNotes().contains("[PreEventApproval: approve]"));
+        assertEquals("approve", row.getPreEventApprovalStatus());
+        assertEquals("pending", row.getEmsApprovalStatus());
+        assertEquals("CONNECTED", row.getCallStatus());
+        assertEquals(List.of(1L), ids(response("participants", "reminder")));
 
         mvc.perform(put("/api/event-participants/1/status").param("confirmationStatus", "decline")
                         .header("Authorization", "Bearer test")).andExpect(status().isOk());
         assertEquals("decline", row.getConfirmationStatus(), "CRM can still reject the client decision");
         assertEquals("pending", row.getEmsApprovalStatus());
+        assertEquals(0, response("participants", "reminder").path("total").asInt());
     }
 
-    @Test void legacyNotesCannotOverrideEmsApprovalAndUnchangedPreValueAllowsProfileEdits() throws Exception {
+    @Test void notesEditingRetainsCurrentApprovalUntilAnExplicitManualChange() throws Exception {
         EventParticipant row = participant(1, "pending", "pending");
         rows.add(row);
         mvc.perform(put("/api/event-participants/1/status")
@@ -152,30 +154,46 @@ class EmsApprovalWorkflowTest {
         assertEquals("[PreEventApproval: pending] Keep this CRM note", row.getNotes());
         assertEquals("CONNECTED", row.getCallStatus());
         assertEquals(0, response("participants", "reminder").path("total").asInt());
+
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus", "decline")
+                        .param("notes", "Updated CRM note").header("Authorization", "Bearer test"))
+                .andExpect(status().isOk());
+        assertEquals("decline", row.getPreEventApprovalStatus());
+        assertEquals("pending", row.getEmsApprovalStatus());
+        assertEquals("[PreEventApproval: decline] Updated CRM note", row.getNotes());
     }
 
-    @Test void bulkRejectsMixedAuthorityChangeBeforeSavingAnyParticipant() throws Exception {
+    @Test void bulkEditsCurrentApprovalsWithoutRewritingSnapshotsOrClientDecisions() throws Exception {
         EventParticipant accepted = participant(1, "approve", "pending");
         EventParticipant pending = participant(2, "pending", "pending");
         rows.addAll(List.of(accepted, pending));
         mvc.perform(patch("/api/event-participants/bulk").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"participantIds\":[1,2],\"participantStatus\":\"red\",\"preEventApprovalStatus\":\"approve\"}")
+                        .content("{\"participantIds\":[1,2],\"preEventApprovalStatus\":\"decline\"}")
                         .header("Authorization", "Bearer test"))
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk());
         assertEquals(ParticipantStatus.registered, accepted.getParticipantStatus());
         assertEquals(ParticipantStatus.registered, pending.getParticipantStatus());
         assertEquals("approve", accepted.getEmsApprovalStatus());
         assertEquals("pending", pending.getEmsApprovalStatus());
-        verify(participants, never()).save(any());
+        assertEquals("decline", accepted.getPreEventApprovalStatus());
+        assertEquals("decline", pending.getPreEventApprovalStatus());
+        assertEquals("pending", accepted.getConfirmationStatus());
+        assertEquals("pending", pending.getConfirmationStatus());
+        assertTrue(pending.getNotes().contains("[PreEventApproval: decline]"));
+        assertEquals(0, response("participants", "reminder").path("total").asInt());
+        verify(participants, times(2)).save(any());
     }
 
-    @Test void addingManualParticipantToEmsEventCannotSeedAnApprovedSnapshot() throws Exception {
+    @Test void addingManualParticipantAllowsCurrentApprovalButCannotSeedAnEmsSnapshot() throws Exception {
         Database database = contact(1);
         when(databases.findById(1L)).thenReturn(Optional.of(database));
-        mvc.perform(post("/api/event-participants").contentType(MediaType.APPLICATION_JSON)
+        String created = mvc.perform(post("/api/event-participants").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"eventId\":1,\"databaseId\":1,\"preEventApprovalStatus\":\"approve\"}")
-                        .header("Authorization", "Bearer test")).andExpect(status().isConflict());
-        verify(participants, never()).save(any());
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        JsonNode manual = json.readTree(created).get(0);
+        assertEquals("approve", manual.path("preEventApprovalStatus").asText());
+        assertTrue(manual.path("emsApprovalStatus").isNull());
 
         String response = mvc.perform(post("/api/event-participants").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"eventId\":1,\"databaseId\":1,\"emsApprovalStatus\":\"approve\",\"notes\":\"[PreEventApproval: approve] CRM note\"}")
@@ -186,6 +204,64 @@ class EmsApprovalWorkflowTest {
         assertTrue(saved.path("emsApprovalStatus").isNull());
         assertEquals("pending", saved.path("preEventApprovalStatus").asText());
         assertEquals("[PreEventApproval: pending] CRM note", saved.path("notes").asText());
+    }
+
+    @Test void manualApproveEntersPreEventButStillRequiresRegistrationBeforeReminder() throws Exception {
+        EventParticipant row = participant(1, null, "pending");
+        row.setParticipantStatus(ParticipantStatus.white);
+        row.setAttendanceStatus(AttendanceStatus.invited);
+        rows.add(row);
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus", "approve")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk());
+        assertEquals(List.of(1L), ids(response("participants", "pre_event")));
+        assertEquals(0, response("participants", "reminder").path("total").asInt());
+        assertEquals(ParticipantStatus.white, row.getParticipantStatus());
+        assertEquals(AttendanceStatus.invited, row.getAttendanceStatus());
+        assertNull(row.getEmsApprovalStatus());
+
+        mvc.perform(put("/api/event-participants/1/status").param("participantStatus", "registered")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk());
+        assertEquals(List.of(1L), ids(response("participants", "reminder")));
+        assertEquals(List.of(1L), ids(response("participants", "reminder_dday")));
+        assertEquals("pending", row.getConfirmationStatus());
+    }
+
+    @Test void currentManualApprovalCanOverrideHistoricalSourceDeclineWithoutErasingIt() throws Exception {
+        EventParticipant row = participant(1, "decline", "pending");
+        row.setParticipantStatus(ParticipantStatus.unable_to_attend);
+        row.setAttendanceStatus(AttendanceStatus.cancelled);
+        row.setNotes("[EMS Declined] [Origin: EMS Sync] [PreEventApproval: decline]");
+        rows.add(row);
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus", "approve")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk());
+        assertEquals(List.of(1L), ids(response("participants", "pre_event")));
+        assertEquals(0, response("participants", "reminder").path("total").asInt());
+        mvc.perform(put("/api/event-participants/1/status").param("participantStatus", "registered")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk());
+        assertEquals(List.of(1L), ids(response("participants", "reminder")));
+        assertEquals(0, response("participants", "declined").path("total").asInt());
+        assertEquals("decline", row.getEmsApprovalStatus());
+        assertEquals(AttendanceStatus.cancelled, row.getAttendanceStatus());
+
+        mvc.perform(put("/api/event-participants/1/status").param("confirmationStatus", "decline")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk());
+        assertEquals(0, response("participants", "reminder").path("total").asInt());
+        assertEquals(List.of(1L), ids(response("participants", "declined")));
+    }
+
+    @Test void allowingManualApprovalsDoesNotGiveViewerPermissionToEditThem() throws Exception {
+        EventParticipant row = participant(1, "pending", "pending");
+        rows.add(row);
+        doReturn(AppUser.builder().id(8L).username("viewer").fullName("Viewer")
+                .roles(Set.of(Role.USER)).allowedEventIds(Set.of(1L)).build())
+                .when(security).getAuthenticatedUser("Bearer test");
+        mvc.perform(put("/api/event-participants/1/status").param("preEventApprovalStatus", "approve")
+                        .header("Authorization", "Bearer test")).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/event-participants/bulk").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"participantIds\":[1],\"preEventApprovalStatus\":\"approve\"}")
+                        .header("Authorization", "Bearer test")).andExpect(status().isForbidden());
+        assertEquals("pending", row.getPreEventApprovalStatus());
+        verify(participants, never()).save(any());
     }
 
     @Test void legacyWhiteRowsAreIncludedInNotRespondYetStatistics() throws Exception {
@@ -243,6 +319,7 @@ class EmsApprovalWorkflowTest {
         assertEquals(1, activitySummary().at("/participantsSummary/notRespond").asInt());
 
         legacy.setEmsApprovalStatus("approve");
+        legacy.setPreEventApprovalStatus("approve");
         assertEquals(List.of(1L), ids(response("participants", "reminder")), "Statistics must not change the operational attendance gate");
         legacy.setEmsApprovalStatus(null);
         rows.add(participant(2, "pending", "pending"));
@@ -263,7 +340,7 @@ class EmsApprovalWorkflowTest {
     private EventParticipant participant(long id, String emsApproval, String clientApproval) {
         return EventParticipant.builder().id(id).event(event).database(contact(id))
                 .participantStatus(ParticipantStatus.registered).attendanceStatus(AttendanceStatus.registered)
-                .confirmationStatus(clientApproval).preEventApprovalStatus("pending").emsApprovalStatus(emsApproval)
+                .confirmationStatus(clientApproval).preEventApprovalStatus(emsApproval == null ? "pending" : emsApproval).emsApprovalStatus(emsApproval)
                 .notes("[Origin: Request] [PIC: Operator]").build();
     }
 

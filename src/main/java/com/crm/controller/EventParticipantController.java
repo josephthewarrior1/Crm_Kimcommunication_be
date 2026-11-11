@@ -893,12 +893,12 @@ public class EventParticipantController {
         String attendanceStatus = participant.getAttendanceStatus() != null
                 ? participant.getAttendanceStatus().name().toLowerCase(Locale.ROOT)
                 : "";
-        return Objects.equals(participantStatus, "registered")
+        boolean registeredRemark = Objects.equals(participantStatus, "registered")
                 || Objects.equals(participantStatus, "green")
                 || Objects.equals(participantStatus, "confirm")
-                || Objects.equals(participantStatus, "confirmed")
-                || Objects.equals(attendanceStatus, "registered")
-                || Objects.equals(attendanceStatus, "attended");
+                || Objects.equals(participantStatus, "confirmed");
+        return registeredRemark || !EventApprovalPolicy.isEmsManaged(participant.getEvent())
+                && (Objects.equals(attendanceStatus, "registered") || Objects.equals(attendanceStatus, "attended"));
     }
 
     private Set<String> resolveActivityPicAliases(String pic) {

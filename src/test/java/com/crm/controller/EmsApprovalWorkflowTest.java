@@ -29,6 +29,7 @@ class EmsApprovalWorkflowTest {
     private final EventRepository events = mock(EventRepository.class);
     private final EventParticipantRepository participants = mock(EventParticipantRepository.class);
     private final DatabaseRepository databases = mock(DatabaseRepository.class);
+    private final EventParticipantActivityRepository activities = mock(EventParticipantActivityRepository.class);
     private final UserRepository users = mock(UserRepository.class);
     private final SecurityHelper security = spy(new SecurityHelper());
     private final ObjectMapper json = new ObjectMapper();
@@ -45,6 +46,7 @@ class EmsApprovalWorkflowTest {
         ReflectionTestUtils.setField(editor, "eventRepository", events);
         ReflectionTestUtils.setField(editor, "eventParticipantRepository", participants);
         ReflectionTestUtils.setField(editor, "databaseRepository", databases);
+        ReflectionTestUtils.setField(editor, "eventParticipantActivityRepository", activities);
         ReflectionTestUtils.setField(editor, "securityHelper", security);
         ReflectionTestUtils.setField(editor, "auditLogService", mock(AuditLogService.class));
         when(events.findById(1L)).thenReturn(Optional.of(event));
@@ -55,6 +57,7 @@ class EmsApprovalWorkflowTest {
         when(participants.findById(anyLong())).thenAnswer(call -> rows.stream()
                 .filter(row -> row.getId().equals(call.getArgument(0))).findFirst());
         when(participants.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(activities.findByEventParticipantEventId(1L)).thenReturn(List.of());
         doReturn(AppUser.builder().id(7L).username("operator").fullName("Operator")
                 .roles(Set.of(Role.ADMIN)).allowedEventIds(Set.of(1L)).build())
                 .when(security).getAuthenticatedUser("Bearer test");
@@ -228,6 +231,33 @@ class EmsApprovalWorkflowTest {
             assertEquals(profileBefore, json.writeValueAsString(row.getDatabase()));
             assertEquals(0, response("participants", "reminder").path("total").asInt());
         }
+    }
+
+    @Test void emsRegisteredStatisticsFollowRemarksWithoutChangingManualCountsOrReminderEligibility() throws Exception {
+        EventParticipant legacy = participant(1, null, "approve");
+        legacy.setParticipantStatus(ParticipantStatus.white);
+        rows.add(legacy);
+        assertEquals(0, response("statistics", "pre_event").at("/scopes/all/totalRegister").asInt());
+        assertEquals(1, response("statistics", "pre_event").at("/scopes/all/notRespondYet").asInt());
+        assertEquals(0, activitySummary().at("/participantsSummary/registered").asInt());
+        assertEquals(1, activitySummary().at("/participantsSummary/notRespond").asInt());
+
+        legacy.setEmsApprovalStatus("approve");
+        assertEquals(List.of(1L), ids(response("participants", "reminder")), "Statistics must not change the operational attendance gate");
+        legacy.setEmsApprovalStatus(null);
+        rows.add(participant(2, "pending", "pending"));
+        assertEquals(1, response("statistics", "pre_event").at("/scopes/all/totalRegister").asInt(), "Pending EMS registrations are still Registered");
+        assertEquals(1, activitySummary().at("/participantsSummary/registered").asInt());
+
+        event.setEmsEventId(null);
+        assertEquals(2, response("statistics", "pre_event").at("/scopes/all/totalRegister").asInt(), "Manual events retain their attendance fallback");
+        assertEquals(2, activitySummary().at("/participantsSummary/registered").asInt());
+    }
+
+    private JsonNode activitySummary() throws Exception {
+        return json.readTree(mvc.perform(get("/api/event-participants/event/1/activity-summary")
+                        .header("Authorization", "Bearer test")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
     }
 
     private EventParticipant participant(long id, String emsApproval, String clientApproval) {

@@ -1686,7 +1686,11 @@ public class EventController {
     }
 
     private long countRegistered(List<EventParticipant> participants) {
-        return participants.stream().filter(this::isRegisteredParticipant).count();
+        return participants.stream().filter(participant -> {
+            if (!EventApprovalPolicy.isEmsManaged(participant.getEvent())) return isRegisteredParticipant(participant);
+            String status = participant.getParticipantStatus() == null ? "" : participant.getParticipantStatus().name().toLowerCase(Locale.ROOT);
+            return Set.of("registered", "green", "confirm", "confirmed").contains(status);
+        }).count();
     }
 
     private long countTentative(List<EventParticipant> participants) {

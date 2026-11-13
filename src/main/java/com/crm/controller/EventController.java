@@ -292,6 +292,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestParam(required = false, defaultValue = "1") Integer page,
@@ -320,6 +323,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -351,6 +357,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -377,6 +386,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -438,6 +450,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -465,6 +480,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -791,6 +809,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -820,6 +841,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -898,6 +922,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -927,6 +954,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -942,6 +972,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -966,6 +999,9 @@ public class EventController {
             @RequestParam(required = false) String industry,
             @RequestParam(required = false) String confirmationStatus,
             @RequestParam(required = false) String reminderHariH,
+            @RequestParam(required = false) String reminderH7,
+            @RequestParam(required = false) String reminderH3,
+            @RequestParam(required = false) String reminderH1,
             @RequestParam(required = false) String remarks,
             @RequestParam(required = false) String search,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -995,6 +1031,9 @@ public class EventController {
                 industry,
                 confirmationStatus,
                 reminderHariH,
+                reminderH7,
+                reminderH3,
+                reminderH1,
                 remarks,
                 search
         );
@@ -1457,6 +1496,9 @@ public class EventController {
             String industry,
             String confirmationStatus,
             String reminderHariH,
+            String reminderH7,
+            String reminderH3,
+            String reminderH1,
             String remarks,
             String search) {
         String scopedPic = resolveMinePic(currentUser, tab);
@@ -1469,6 +1511,9 @@ public class EventController {
                 .filter(participant -> matchesIndustry(participant, industry))
                 .filter(participant -> matchesConfirmationStatus(participant, tab, confirmationStatus))
                 .filter(participant -> matchesReminderHariH(participant, tab, reminderHariH))
+                .filter(participant -> matchesReminderStage(participant.getReminderH7(), tab, reminderH7))
+                .filter(participant -> matchesReminderStage(participant.getReminderH3(), tab, reminderH3))
+                .filter(participant -> matchesReminderStage(participant.getReminderH1(), tab, reminderH1))
                 .filter(participant -> matchesRemarks(participant, tab, remarks))
                 .filter(participant -> matchesPic(participant, effectivePic))
                 .filter(participant -> matchesSearch(participant, search))
@@ -1858,6 +1903,22 @@ public class EventController {
             case "red", "notinterest" -> "not_interest";
             case "unableattend", "unabletoattend" -> "unable_to_attend";
             default -> safe(value).trim().toLowerCase(Locale.ROOT);
+        };
+    }
+
+    private boolean matchesReminderStage(String status, String tab, String filter) {
+        if (!"reminder".equalsIgnoreCase(safe(tab)) || filter == null || filter.isBlank()) return true;
+        String current = normalizeReminderStage(status);
+        if ("__empty__".equals(filter.trim())) return current.isBlank();
+        return current.equals(normalizeReminderStage(filter));
+    }
+
+    private String normalizeReminderStage(String value) {
+        return switch (normalizeStatus(value)) {
+            case "confirmed" -> "confirm";
+            case "notresponyet", "notrespondyet" -> "not_respond_yet";
+            case "unableattend", "unabletoattend" -> "unable_to_attend";
+            default -> normalizeStatus(value);
         };
     }
 

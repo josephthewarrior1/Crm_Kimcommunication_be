@@ -184,6 +184,7 @@ public class EmsV2Client {
         normalized.put("registration_code", requiredText(row, "referenceCode"));
         normalized.put("status", status);
         normalized.put("created_at", createdAt);
+        put(normalized, "updated_at", updatedAt);
         if ("ACCEPTED".equals(status)) normalized.put("verified_at", updatedAt != null ? updatedAt : createdAt);
         if ("DECLINED".equals(status)) normalized.put("declined_at", updatedAt != null ? updatedAt : createdAt);
         if (attendance != null) {

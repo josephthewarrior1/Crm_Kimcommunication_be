@@ -83,6 +83,27 @@ class EmsServiceRoutingTest {
         verifyNoInteractions(v2, participants, databases, emails, companies, activities);
     }
 
+    @Test void missingLegacyCredentialsFailBeforeHttpOrCrmWritesWithoutDisablingV2() {
+        for (String[] credentials : new String[][] { {null, "fixture-only"}, {" ", "fixture-only"},
+                {"fixture@example.invalid", null}, {"fixture@example.invalid", " "} }) {
+            ReflectionTestUtils.setField(service, "emsAdminEmail", credentials[0]);
+            ReflectionTestUtils.setField(service, "emsAdminPassword", credentials[1]);
+            var eventsFailure = assertThrows(ResponseStatusException.class, service::getUpcomingEvents);
+            var participantsFailure = assertThrows(ResponseStatusException.class, () -> service.getEventParticipants(42L));
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, eventsFailure.getStatusCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, participantsFailure.getStatusCode());
+            assertEquals("Konfigurasi login EMS lama belum lengkap. Isi EMS_ADMIN_EMAIL dan EMS_ADMIN_PASSWORD di server.",
+                    eventsFailure.getReason());
+            assertEquals(eventsFailure.getReason(), participantsFailure.getReason());
+        }
+        when(v2.getEvents()).thenReturn(List.of());
+        when(v2.getEventParticipants(42L)).thenReturn(List.of());
+        assertEquals(List.of(), service.getUpcomingEvents(EmsSource.V2));
+        assertEquals(List.of(), service.getEventParticipants(42L, EmsSource.V2));
+        legacy.verify();
+        verifyNoInteractions(participants, databases, emails, companies, activities);
+    }
+
     @Test void v2UsesTheDedicatedClientAndPropagatesFailuresBeforeAnyCrmWrites() {
         List<Map<String, Object>> result = List.of(Map.of("id", 42L));
         when(v2.getEvents()).thenReturn(result);
@@ -111,6 +132,7 @@ class EmsServiceRoutingTest {
         verify(participants, times(3)).findByEventId(1L);
         verify(participants, times(3)).findByEventId(2L);
         verify(databases, times(4)).findAll();
+        verify(databases, times(2)).flush();
         verifyNoMoreInteractions(v2, participants, databases);
         verifyNoInteractions(emails, companies, activities);
     }
@@ -183,7 +205,7 @@ class EmsServiceRoutingTest {
         assertEquals("approve", participant.getPreEventApprovalStatus());
         assertEquals(LocalDateTime.of(2026, 10, 22, 10, 4, 5), participant.getCreatedAt());
         assertEquals(participant.getCreatedAt(), participant.getRequestedAt());
-        verify(databases).save(database);
+        verify(databases, atLeastOnce()).save(database);
         verify(emails).save(any(DatabaseEmail.class));
         verify(participants, times(2)).save(participant);
         verify(activities).save(any(EventParticipantActivity.class));

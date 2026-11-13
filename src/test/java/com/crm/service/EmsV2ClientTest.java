@@ -62,6 +62,7 @@ class EmsV2ClientTest {
         assertEquals(List.of(11L, 12L, 13L, 14L), result.stream().map(row -> row.get("id")).toList());
         assertEquals(UPDATED, result.get(0).get("checked_in_at"));
         assertEquals(UPDATED, result.get(0).get("verified_at"));
+        assertEquals(UPDATED, result.get(0).get("updated_at"), "Contact snapshot ordering preserves the actual EMS update timestamp");
         Map<?, ?> profile = (Map<?, ?>) result.get(0).get("user_profile");
         assertEquals("Alex Example", profile.get("registered_name"));
         assertEquals("Dr", profile.get("registered_salutation"));
@@ -70,6 +71,7 @@ class EmsV2ClientTest {
         assertFalse(profile.containsKey("registered_last_name"));
         assertFalse(result.get(1).containsKey("checked_in_at"));
         assertFalse(result.get(1).containsKey("verified_at"));
+        assertEquals(UPDATED, result.get(1).get("updated_at"), "Pending rows retain update timestamps independently from approval");
         assertFalse(((Map<?, ?>) result.get(1).get("user_profile")).containsKey("phone"));
         assertFalse(((Map<?, ?>) result.get(1).get("user_profile")).containsKey("company"));
         assertEquals(UPDATED, result.get(2).get("declined_at"));

@@ -65,7 +65,7 @@ class EmsCompanyReviewSyncTest {
 
     @Test void reviewAcceptsTheSameIdentityAndPreservesEveryCrmOwnedFieldAcrossClientAndSourceDecisions() {
         EventParticipant link = existingLink();
-        JsonNode originalContact = json.valueToTree(contact), originalCompany = json.valueToTree(company);
+        JsonNode originalContact = crmOwnedContact(contact), originalCompany = json.valueToTree(company);
         for (String request : List.of("approve", "decline", "pending")) for (String client : List.of("approve", "decline", "pending")) {
             link.setConfirmationStatus(request);link.setPreEventApprovalStatus(client);
             link.setNotes("[Origin: Request] [PIC: Local Agent] [PreEventApproval: " + client + "] Keep exact notes  spacing.");
@@ -82,31 +82,33 @@ class EmsCompanyReviewSyncTest {
                 assertEquals(source.equals("DECLINED") ? AttendanceStatus.cancelled : checkedIn ? AttendanceStatus.attended : AttendanceStatus.registered,link.getAttendanceStatus());
                 assertEquals(before,crmOwnedLink(link),"Only EMS metadata and factual attendance may change");
                 assertTrue(link.getNotes().contains("Keep exact notes  spacing."));assertTrue(link.getNotes().contains("[PIC: Local Agent]"));
-                assertEquals(originalContact,json.valueToTree(contact));assertEquals(originalCompany,json.valueToTree(company));
+                assertEquals(originalContact,crmOwnedContact(contact));assertEquals("Source Job",contact.getJobTitle());assertEquals(originalCompany,json.valueToTree(company));
                 assertEquals(1,apply(service.previewParticipantsForEvent(event)).get("count"));
                 assertEquals(before,crmOwnedLink(link));assertEquals(1,contacts.size());assertEquals(1,links.size());assertEquals(1,history.size());
             }
         }
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);verify(activities,never()).save(any());
+        verify(databases,atLeastOnce()).save(contact);verifyNoInteractions(companies);verify(emails,never()).save(any());verify(activities,never()).save(any());
     }
 
-    @Test void phoneMatchedCompanyIdentityNeverAppendsNewSourceEmailOrPhoneOrHydratesTheCompany() {
-        existingLink();JsonNode before=json.valueToTree(contact), master=json.valueToTree(company);
+    @Test void phoneMatchedCompanyIdentityUpdatesOnlyContactFieldsAndPreservesTheCompany() {
+        existingLink();JsonNode before=crmOwnedContact(contact), master=json.valueToTree(company);
         source(row("new-source@employer.example", "08123456789, 08139999999", "Different EMS Company", "ACCEPTED", false));
         Map<String,Object> preview=service.previewParticipantsForEvent(event);
         assertEquals(1,preview.get("existingCount"));assertEquals(1,preview.get("companyReviewCount"));apply(preview);
-        assertEquals(before,json.valueToTree(contact));assertEquals(master,json.valueToTree(company));
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);verify(activities,never()).save(any());
+        assertEquals(before,crmOwnedContact(contact));assertEquals(master,json.valueToTree(company));
+        assertEquals("08123456789, 08139999999",contact.getMobilePhone());assertEquals("Source Job",contact.getJobTitle());
+        assertEquals(2,contact.getEmails().size());assertTrue(contact.getEmails().stream().anyMatch(address -> address.getEmail().equals("new-source@employer.example")));
+        verify(databases,atLeastOnce()).save(contact);verifyNoInteractions(companies);verify(emails).save(any());verify(activities,never()).save(any());
     }
 
-    @Test void independentValidSourcePhonesDoNotNeedToFitTheUnchangedStoredPhoneList() {
+    @Test void sourcePhoneReplacementDoesNotConcatenateTheOldAndNewPhoneLists() {
         existingLink();contact.setMobilePhone("+441234567890123, +331234567890123");
         String incoming="+811234567890123, +121234567890123";
         assertThrows(IllegalArgumentException.class,()->ContactPhone.merge(contact.getMobilePhone(),incoming));
-        JsonNode before=json.valueToTree(contact);
+        JsonNode before=crmOwnedContact(contact);
         source(row("member@company.example",incoming,"Different EMS Company","ACCEPTED",false));
         Map<String,Object> preview=service.previewParticipantsForEvent(event);assertEquals(0,preview.get("rejectedCount"));assertEquals(1,preview.get("existingCount"));apply(preview);
-        assertEquals(before,json.valueToTree(contact));verify(databases,never()).save(any());verifyNoInteractions(companies,emails);verify(activities,never()).save(any());
+        assertEquals(before,crmOwnedContact(contact));assertEquals(incoming,contact.getMobilePhone());verify(databases,atLeastOnce()).save(contact);verifyNoInteractions(companies);verify(emails,never()).save(any());verify(activities,never()).save(any());
     }
 
     @Test void newLinksDefaultToClientPendingAndSourceDeclineOrCheckinCannotApproveThem() {
@@ -120,7 +122,7 @@ class EmsCompanyReviewSyncTest {
             assertEquals(source.equals("DECLINED")?AttendanceStatus.cancelled:checkedIn?AttendanceStatus.attended:AttendanceStatus.registered,link.getAttendanceStatus());
             apply(service.previewParticipantsForEvent(event));assertEquals(1,links.size());assertEquals(id,links.get(0).getId());assertEquals(1,history.size());
         }
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
     @Test void existingNullClientDecisionIsPreservedWhileSourceApprovalAndMissingSystemHistoryAreRecorded() {
@@ -136,11 +138,10 @@ class EmsCompanyReviewSyncTest {
         Database duplicate=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Member").lastName("Example").mobilePhone("+628123456789").isActive(true).build();
         duplicate.setEmails(new ArrayList<>(List.of(DatabaseEmail.builder().email("member@company.example").build())));
         contacts.add(duplicate);assertHeld();contacts.remove(duplicate);
-        Map<String,Object> wrongPhoneOwner=row("member@company.example","08123456789","Different EMS Company","ACCEPTED",false);
+        Database disjoint=Database.builder().id(7L).databaseDestination(DatabaseDestination.COMPANY).firstName("Other").lastName("Owner").mobilePhone("08139999999").isActive(true).build();
+        disjoint.setEmails(new ArrayList<>(List.of(DatabaseEmail.builder().email("other@gmail.com").emailType("personal").build())));contacts.add(disjoint);
+        Map<String,Object> wrongPhoneOwner=row("other@gmail.com","08123456789","Different EMS Company","ACCEPTED",false);
         ((Map<String,Object>)wrongPhoneOwner.get("user_profile")).put("registered_name","Different Name");source(wrongPhoneOwner);assertHeld();
-        contact.getEmails().get(0).setEmail("member@gmail.com");
-        registration=row("member@gmail.com", "08123456789", "Different EMS Company", "ACCEPTED", false);
-        ((Map<String,Object>)registration.get("user_profile")).put("registered_name","Different Name");source(registration);assertHeld();
         verify(databases,never()).save(any());verify(participants,never()).save(any());verifyNoInteractions(companies,emails,activities);
     }
 
@@ -148,8 +149,8 @@ class EmsCompanyReviewSyncTest {
         JsonNode before=json.valueToTree(contact);when(companies.findByNameIgnoreCase(company.getName())).thenReturn(Optional.of(company));
         Map<String,Object> registration=row("member@company.example","",company.getName(),"PENDING",false);
         ((Map<String,Object>)registration.get("user_profile")).put("registered_name","Another Person");source(registration);
-        Map<String,Object> preview=service.previewParticipantsForEvent(event);assertEquals(0,preview.get("rejectedCount"));assertEquals(1,preview.get("newCount"));apply(preview);
-        assertEquals(2,contacts.size());assertNotEquals(contact.getId(),links.get(0).getDatabase().getId());assertEquals(before,json.valueToTree(contact));
+        Map<String,Object> preview=service.previewParticipantsForEvent(event);assertEquals(1,preview.get("rejectedCount"));assertEquals(0,apply(preview).get("count"));
+        assertEquals(1,contacts.size());assertTrue(links.isEmpty());assertEquals(before,json.valueToTree(contact));
         verify(companies,never()).save(any());
     }
 
@@ -179,7 +180,7 @@ class EmsCompanyReviewSyncTest {
             assertEquals("approve",link.getPreEventApprovalStatus());assertEquals("decline",link.getConfirmationStatus());
             assertEquals(sourceCompany,link.getEmsCompanyName());assertEquals(sourceCompany.equals("Different Company"),link.getEmsCompanyReviewRequired());
         }
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
     @Test void conflictingSourceApprovalsStayRejectedAndAreExcludedFromReviewCounts() {
@@ -198,7 +199,7 @@ class EmsCompanyReviewSyncTest {
         Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")
                 .mobilePhone("+628123456789").company(company).isActive(true).build();contacts.add(alias);
         EventParticipant declined=EventParticipant.builder().id(21L).event(event).database(alias).confirmationStatus("decline").build();links.add(declined);
-        JsonNode mastersBefore=json.valueToTree(contacts),declinedBefore=json.valueToTree(declined);
+        JsonNode mastersBefore=json.valueToTree(contacts.stream().map(this::crmOwnedContact).toList()),declinedBefore=json.valueToTree(declined);
         source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
         for(int repeat=0;repeat<2;repeat++) {
             Collections.reverse(contacts);
@@ -211,16 +212,16 @@ class EmsCompanyReviewSyncTest {
             assertEquals(declinedBefore,json.valueToTree(declined));assertEquals("decline",declined.getConfirmationStatus());
         }
         contacts.sort(Comparator.comparing(Database::getId));
-        assertEquals(mastersBefore,json.valueToTree(contacts));assertEquals(2,links.size());assertEquals(1,history.size());
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        assertEquals(mastersBefore,json.valueToTree(contacts.stream().map(this::crmOwnedContact).toList()));assertEquals(2,links.size());assertEquals(1,history.size());
+        verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
     @Test void matchedContactsWithoutACompanyStayDetachedAndRequireReviewInsteadOfCreatingAMaster() {
-        existingLink();contact.setCompany(null);JsonNode before=json.valueToTree(contact);
+        existingLink();contact.setCompany(null);JsonNode before=crmOwnedContact(contact);
         source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
         Map<String,Object> preview=service.previewParticipantsForEvent(event);assertEquals(1,preview.get("companyReviewCount"));
-        apply(preview);assertEquals(before,json.valueToTree(contact));assertEquals(true,links.get(0).getEmsCompanyReviewRequired());
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        apply(preview);assertEquals(before,crmOwnedContact(contact));assertEquals("Source Job",contact.getJobTitle());assertNull(contact.getCompany());assertEquals(true,links.get(0).getEmsCompanyReviewRequired());
+        verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
     @Test void explicitClientApprovalResolvesOnlyTheSelectedProfilesAliasReviewAcrossRepeatedSyncs() {
@@ -228,7 +229,7 @@ class EmsCompanyReviewSyncTest {
         Database alias=Database.builder().id(6L).databaseDestination(DatabaseDestination.COMPANY).firstName("Historical").lastName("Alias")
                 .mobilePhone("+628123456789").company(company).isActive(true).build();contacts.add(alias);
         EventParticipant historical=EventParticipant.builder().id(21L).event(event).database(alias).confirmationStatus("decline").build();links.add(historical);
-        JsonNode mastersBefore=json.valueToTree(contacts),historicalBefore=json.valueToTree(historical);
+        JsonNode mastersBefore=json.valueToTree(contacts.stream().map(this::crmOwnedContact).toList()),historicalBefore=json.valueToTree(historical);
         source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
         for(String clientDecision:List.of("approve","confirmed")) {
             current.setConfirmationStatus(clientDecision);
@@ -239,7 +240,7 @@ class EmsCompanyReviewSyncTest {
                 assertEquals(1,apply(preview).get("count"));
                 assertEquals(clientDecision,current.getConfirmationStatus());assertEquals(false,current.getEmsClientDeclineReviewRequired());
                 assertEquals("approve",current.getPreEventApprovalStatus());assertEquals("approve",current.getEmsApprovalStatus());
-                assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts));
+                assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts.stream().map(this::crmOwnedContact).toList()));
             }
             current.setConfirmationStatus("pending");
             assertEquals(true,current.getEmsClientDeclineReviewRequired(),"Revoking the selected approval must reactivate the retained alias review without another sync");
@@ -249,9 +250,9 @@ class EmsCompanyReviewSyncTest {
         assertEquals(1,apply(service.previewParticipantsForEvent(event)).get("count"));
         assertEquals("approve",current.getConfirmationStatus());assertEquals("decline",current.getPreEventApprovalStatus());
         assertEquals("decline",current.getEmsApprovalStatus());assertEquals(ParticipantStatus.unable_to_attend,current.getParticipantStatus());
-        assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts));
+        assertEquals(historicalBefore,json.valueToTree(historical));assertEquals(mastersBefore,json.valueToTree(contacts.stream().map(this::crmOwnedContact).toList()));
         assertEquals(2,links.size());assertEquals(1,history.size());
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
     @Test void historicalClientReviewRequiresFreshPreviewAndOnlyClearsAfterAnEligibleSyncSeesTheChangedDecision() {
@@ -267,26 +268,27 @@ class EmsCompanyReviewSyncTest {
         Map<String,Object> changedPhonePreview=service.previewParticipantsForEvent(event);
         assertEquals(1,changedPhonePreview.get("existingCount"));assertEquals(1,apply(changedPhonePreview).get("count"));
         assertEquals(true,current.getEmsClientDeclineReviewRequired());
-        assertEquals("08123456789",contact.getMobilePhone());
+        assertEquals("08137777777",contact.getMobilePhone());
 
         JsonNode protectedCurrent=json.valueToTree(current);
-        Map<String,Object> invalid=row("changed@example.invalid","08123456789","Different Company","ACCEPTED",false);
+        Map<String,Object> invalid=row("not-an-email","","Different Company","ACCEPTED",false);
         ((Map<String,Object>)invalid.get("user_profile")).put("registered_name","Unrecognized");
         source(invalid);
         assertHeld();
         assertEquals(protectedCurrent,json.valueToTree(current));assertEquals(true,current.getEmsClientDeclineReviewRequired());
 
-        source(row("member@company.example","08123456789","Different Company","ACCEPTED",false));
+        source(row("member@company.example","08137777777","Different Company","ACCEPTED",false));
         Map<String,Object> stalePreview=service.previewParticipantsForEvent(event);
         historical.setConfirmationStatus("approve");
         assertEquals(409,assertThrows(ResponseStatusException.class,()->apply(stalePreview)).getStatusCode().value());
         assertEquals(protectedCurrent,json.valueToTree(current));
+        current.setConfirmationStatus("approve");
         Map<String,Object> freshPreview=service.previewParticipantsForEvent(event);
         assertEquals(1,apply(freshPreview).get("count"));
-        assertEquals(false,current.getEmsClientDeclineReviewRequired());assertEquals("pending",current.getConfirmationStatus());
+        assertEquals(false,current.getEmsClientDeclineReviewRequired());assertEquals("approve",current.getConfirmationStatus());
         assertEquals("approve",historical.getConfirmationStatus());assertEquals("approve",current.getPreEventApprovalStatus());
         verify(participants,times(3)).save(current);verify(participants,never()).save(historical);
-        verify(databases,never()).save(any());verifyNoInteractions(companies,emails);
+        assertEquals("08137777777", contact.getMobilePhone()); verify(emails,never()).save(any()); verifyNoInteractions(companies);
     }
 
     @Test void changingReviewMetadataAfterPreviewRequiresAFreshConfirmation() {
@@ -300,7 +302,8 @@ class EmsCompanyReviewSyncTest {
     private void source(Map<String,Object> row){doReturn(List.of(row)).when(service).getEventParticipants(event.getEmsEventId(),event.getEmsSource());}
     private Map<String,Object> apply(Map<String,Object> preview){return service.syncParticipantsForEvent(event,(String)preview.get("previewToken"));}
     private static String approval(String source){return source.equals("ACCEPTED")?"approve":source.equals("DECLINED")?"decline":"pending";}
-    private ObjectNode crmOwnedLink(EventParticipant link){ObjectNode state=json.valueToTree(link);state.remove(List.of("participantStatus","attendanceStatus","emsCompanyName","emsCompanyReviewRequired","emsIdentityReviewMessage","emsClientDeclineReviewRequired","emsApprovalStatus","preEventApprovalStatus","notes","reminderHariH"));return state;}
+    private ObjectNode crmOwnedLink(EventParticipant link){ObjectNode state=json.valueToTree(link);state.remove(List.of("database","participantStatus","attendanceStatus","emsCompanyName","emsCompanyReviewRequired","emsIdentityReviewMessage","emsClientDeclineReviewRequired","emsApprovalStatus","preEventApprovalStatus","notes","reminderHariH"));return state;}
+    private ObjectNode crmOwnedContact(Database value){ObjectNode state=json.valueToTree(value);state.remove(List.of("firstName","lastName","salutation","positionLevel","specialityDivision","jobTitle","mobilePhone","normalizedPhone","emails","updatedAt"));return state;}
     private EventParticipant existingLink(){
         EventParticipant link=EventParticipant.builder().id(20L).event(event).database(contact).participantStatus(ParticipantStatus.yellow).attendanceStatus(AttendanceStatus.invited)
                 .confirmationStatus("approve").preEventApprovalStatus("pending").callStatus("called").emailStatus("sent").whatsappStatus("replied").meetingStatus("scheduled")

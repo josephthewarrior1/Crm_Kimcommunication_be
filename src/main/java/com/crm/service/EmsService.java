@@ -21,10 +21,10 @@ public class EmsService {
     @Value("${EMS_API_URL:https://api.admin.event.kimcommunication.com}")
     private String emsApiUrl;
 
-    @Value("${EMS_ADMIN_EMAIL:admin_staff@kim-marketing.com}")
+    @Value("${EMS_ADMIN_EMAIL:}")
     private String emsAdminEmail;
 
-    @Value("${EMS_ADMIN_PASSWORD:!QAZkim123}")
+    @Value("${EMS_ADMIN_PASSWORD:}")
     private String emsAdminPassword;
 
     @Autowired
@@ -48,6 +48,10 @@ public class EmsService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     private String getEmsAccessToken() {
+        if (isBlank(emsAdminEmail) || isBlank(emsAdminPassword)) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Konfigurasi login EMS lama belum lengkap. Isi EMS_ADMIN_EMAIL dan EMS_ADMIN_PASSWORD di server.");
+        }
         try {
             String loginUrl = emsApiUrl + "/api/admin/v1/login";
             HttpHeaders headers = new HttpHeaders();
@@ -79,8 +83,8 @@ public class EmsService {
 
     public Object getUpcomingEvents(EmsSource source) {
         if (source == EmsSource.V2) return emsV2Client.getEvents();
+        String token = getEmsAccessToken();
         try {
-            String token = getEmsAccessToken();
             if (token == null) return Collections.emptyList();
 
             String eventsUrl = emsApiUrl + "/api/admin/v1/events_upcoming";
@@ -108,8 +112,8 @@ public class EmsService {
 
     public Object getEventParticipants(Long emsEventId, EmsSource source) {
         if (source == EmsSource.V2) return emsV2Client.getEventParticipants(emsEventId);
+        String token = getEmsAccessToken();
         try {
-            String token = getEmsAccessToken();
             if (token == null) return Collections.emptyList();
 
             String url = emsApiUrl + "/api/admin/v1/events/" + emsEventId + "/registers";
@@ -207,7 +211,8 @@ public class EmsService {
 
     private record IdentityReview(String message, boolean clientDecline) {}
     private record SyncPlan(List<Map> accepted, Map<String, Database> matches, Map<String, String> aliases,
-                            Map<String, IdentityReview> identityReviews, Map<String, Object> preview) {}
+                            Map<String, IdentityReview> identityReviews, Map<String, Map<String, String>> contactSnapshots,
+                            Set<String> sharedEmails, Map<String, Object> preview) {}
 
     public Map<String, Object> previewParticipantsForEvent(Event event) {
         return plan(event).preview();
@@ -272,8 +277,16 @@ public class EmsService {
             String key = registrationContactKey(registration);
             String problem = "";
             if (email.isBlank() && isBlank(registration.phone())) problem = "Isi minimal email valid atau HP/WhatsApp peserta.";
-            else if (!email.isBlank() && !ContactEmailCategory.isValidEmail(email)) problem = "Email peserta tidak valid.";
+            else if (!email.isBlank() && (!ContactEmailCategory.isValidEmail(email) || email.length() > 255)) problem = "Email peserta tidak valid.";
             else if (!isBlank(registration.phone()) && !ContactPhone.isUsable(registration.phone())) problem = "Mobile Phone peserta tidak valid.";
+            if (problem.isEmpty()) {
+                Map<String, String> snapshot = contactSnapshot(event, registration);
+                for (Map.Entry<String, String> field : snapshot.entrySet()) {
+                    int limit = Set.of("positionLevel", "specialityDivision").contains(field.getKey()) ? 100
+                            : Set.of("salutation", "mobilePhone").contains(field.getKey()) ? 50 : 255;
+                    if (field.getValue().codePointCount(0, field.getValue().length()) > limit) { problem = field.getKey() + " melebihi panjang yang diizinkan (" + limit + ")."; break; }
+                }
+            }
             if (problem.isEmpty() && destination == DatabaseDestination.PARTICIPANT) problem = participantFieldProblem(registration);
             if (problem.isEmpty() && incomingNames.getOrDefault(email, Set.of()).size() > 1
                     && (destination == DatabaseDestination.PARTICIPANT || name.isBlank())) {
@@ -282,6 +295,7 @@ public class EmsService {
             if (problem.isEmpty() && ContactPhone.normalizedNumbers(registration.phone()).stream()
                     .anyMatch(number -> incomingPhoneNames.getOrDefault(number, Set.of()).size() > 1)) problem = "HP cocok dengan beberapa nama dalam data EMS; tinjau sebelum sync.";
             List<Database> owners = new ArrayList<>();
+            List<Map<String, Object>> crmMatches = new ArrayList<>();
             IdentityReview identityReview = new IdentityReview("", false);
             Set<String> mailboxNames = new HashSet<>(incomingNames.getOrDefault(email, Set.of()));
             boolean publicCompanyEmail = destination == DatabaseDestination.COMPANY && ContactEmailCategory.isPublicPersonalEmail(email);
@@ -297,6 +311,17 @@ public class EmsService {
                     boolean samePhone = numbers.stream().anyMatch(storedNumbers::contains);
                     if (!sameEmail && !samePhone) continue;
                     contactOwners.add(contact);
+                    List<String> matchedBy = new ArrayList<>();
+                    if (sameEmail) matchedBy.add("email");
+                    if (samePhone) matchedBy.add("phone");
+                    Map<String, Object> candidate = new LinkedHashMap<>();
+                    candidate.put("databaseId", contact.getId());
+                    candidate.put("name", (safe(contact.getFirstName()) + " " + safe(contact.getLastName())).trim());
+                    candidate.put("mobilePhone", safe(contact.getMobilePhone()));
+                    candidate.put("companyName", destination == DatabaseDestination.PARTICIPANT ? safe(contact.getInstitutionName())
+                            : contact.getCompany() == null ? "" : safe(contact.getCompany().getName()));
+                    candidate.put("matchedBy", matchedBy);
+                    crmMatches.add(candidate);
                     String retainedName = identityName(safe(contact.getFirstName()) + " " + safe(contact.getLastName()));
                     if (sameEmail) mailboxNames.add(retainedName);
                     if (name.isBlank() || retainedName.isBlank() || retainedName.equals(identityName(name))) owners.add(contact);
@@ -340,6 +365,28 @@ public class EmsService {
                         }
                     }
                 }
+                // EMS can correct a stale display name only when its identity has one owner.
+                if (contactOwners.size() == 1) {
+                    Database candidate = contactOwners.get(0);
+                    boolean uniquePersonalEmail = incomingNames.getOrDefault(email, Set.of()).size() <= 1
+                            && hasPersonalRegistrationEmail(candidate, email);
+                    if (sameRegistrationPhone(candidate, numbers) || uniquePersonalEmail) {
+                        owners = new ArrayList<>(List.of(candidate));
+                        problem = "";
+                        if (incomingNames.getOrDefault(email, Set.of()).size() <= 1) {
+                            mailboxNames.clear();
+                            mailboxNames.add(identityName(name));
+                        }
+                    } else if (numbers.isEmpty() && owners.isEmpty()) {
+                        problem = "Email kantor bersama belum cukup untuk menentukan pemilik nama berbeda. Isi HP yang benar lalu tinjau profil.";
+                    }
+                }
+                boolean emailOwned = contactOwners.stream().anyMatch(contact -> sameRegistrationEmail(contact, email));
+                boolean phoneOwned = contactOwners.stream().anyMatch(contact -> sameRegistrationPhone(contact, numbers));
+                if (emailOwned && phoneOwned && contactOwners.stream().noneMatch(contact -> sameRegistrationEmail(contact, email) && sameRegistrationPhone(contact, numbers))) {
+                    problem = "Email dan HP mengarah ke pemilik profil yang berbeda. Periksa identitas sebelum menimpa data kontak.";
+                    owners.clear();
+                }
             }
             Database match = owners.size() == 1 ? owners.get(0) : null;
             boolean sharedCompanyEmail = publicCompanyEmail && mailboxNames.size() > 1;
@@ -347,18 +394,34 @@ public class EmsService {
                 problem = "Email bersama memerlukan nama dan HP yang jelas untuk masing-masing orang. Tinjau sebelum sync.";
             }
             if (problem.isEmpty() && match != null && Boolean.FALSE.equals(match.getIsActive())) problem = "Kontak nonaktif; tinjau sebelum sync.";
+            Database selectedOwner = match;
+            if (problem.isEmpty() && !email.isBlank() && (match == null || !sameRegistrationEmail(match, email))
+                    && contacts.stream().anyMatch(contact -> (selectedOwner == null || !Objects.equals(contact.getId(), selectedOwner.getId()))
+                        && hasPersonalRegistrationEmail(contact, email))) {
+                problem = "Email pribadi sudah dimiliki profil lain. Periksa identitas pemilik email sebelum sync.";
+            }
             if (problem.isEmpty() && !isBlank(registration.phone())) {
-                try { ContactPhone.merge(destination == DatabaseDestination.PARTICIPANT && match != null ? match.getMobilePhone() : "", registration.phone()); }
+                try { ContactPhone.merge("", registration.phone()); }
                 catch (IllegalArgumentException invalid) { problem = invalid.getMessage(); }
             }
             Map<String, Object> previewRow = new LinkedHashMap<>();
             previewRow.put("rowNum", row); previewRow.put("name", name); previewRow.put("email", email);
+            previewRow.put("phone", safe(registration.phone()));
+            previewRow.put("emsStatus", Objects.toString(((Map) item).get("status"), ""));
+            previewRow.put("emsApprovalStatus", emsApprovalStatus(event, (Map) item));
+            previewRow.put("crmMatches", crmMatches);
+            if (match != null && (crmMatches.size() == 1 || problem.isEmpty())) addCrmApprovalPreview(previewRow, match, participants);
             previewRow.put("companyReviewRequired", false);
             previewRow.put("identityReviewMessage", "");
             previewRow.put("clientDeclineReviewRequired", false);
             previewRow.put("crmCompanyName", match != null && match.getCompany() != null ? safe(match.getCompany().getName()) : "");
             previewRow.put("emsCompanyName", safe(registration.companyName()));
             if (!problem.isEmpty()) {
+                if (!crmMatches.isEmpty()) problem += " Profil CRM terkait: " + crmMatches.stream()
+                        .map(candidate -> (isBlank((String) candidate.get("name")) ? "Nama belum diisi" : candidate.get("name"))
+                                + " (#" + candidate.get("databaseId") + ")")
+                        .collect(java.util.stream.Collectors.joining(", "))
+                        + ". Periksa identitas pemilik email/HP di CRM dan data EMS, lalu muat ulang preview.";
                 previewRow.put("status", "REJECTED"); previewRow.put("message", problem); rejected++;
             } else {
                 List<String> phoneKeys = ContactPhone.normalizedNumbers(registration.phone()).stream()
@@ -373,6 +436,7 @@ public class EmsService {
                 String canonicalKey = knownEmailKey != null ? knownEmailKey : knownPhoneKey != null ? knownPhoneKey : key;
                 Database knownMatch = matches.get(canonicalKey);
                 Database retained = match != null ? match : knownMatch;
+                if (retained != null) addCrmApprovalPreview(previewRow, retained, participants);
                 if (retained != null && (sharedCompanyEmail || plannedSharedPhones.containsKey(canonicalKey))) {
                     Set<String> storedNumbers = ContactPhone.normalizedNumbers(retained.getMobilePhone());
                     storedNumbers.addAll(ContactPhone.normalizedNumbers(retained.getNormalizedPhone()));
@@ -445,9 +509,11 @@ public class EmsService {
             return owner == null ? "new:" + key : "stored:" + owner.getId();
         };
         Map<String, Set<String>> profileApprovals = new HashMap<>();
+        Map<String, List<Integer>> profileRows = new HashMap<>();
         for (int i = 0; i < accepted.size(); i++) {
             profileApprovals.computeIfAbsent(profileKey.apply(acceptedRows.get(i)), ignored -> new HashSet<>())
                     .add(emsApprovalStatus(event, accepted.get(i)));
+            profileRows.computeIfAbsent(profileKey.apply(acceptedRows.get(i)), ignored -> new ArrayList<>()).add(acceptedRows.get(i));
         }
         Set<String> approvalConflicts = profileApprovals.entrySet().stream().filter(entry -> entry.getValue().size() > 1)
                 .map(Map.Entry::getKey).collect(java.util.stream.Collectors.toSet());
@@ -460,11 +526,57 @@ public class EmsService {
             previewRow.put("companyReviewRequired", false);
             previewRow.put("identityReviewMessage", "");
             previewRow.put("clientDeclineReviewRequired", false);
-            previewRow.put("message", "Beberapa registrasi untuk kontak yang sama memiliki approval EMS berbeda. Tinjau data EMS sebelum sync.");
+            List<Integer> relatedRows = profileRows.get(profileKey.apply(number));
+            List<String> statuses = profileApprovals.get(profileKey.apply(number)).stream().sorted().toList();
+            previewRow.put("approvalConflictRows", relatedRows);
+            previewRow.put("approvalConflictStatuses", statuses);
+            previewRow.put("message", "Beberapa registrasi untuk kontak yang sama memiliki approval EMS berbeda. Baris "
+                    + relatedRows.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", "))
+                    + " mengarah ke profil yang sama dengan status " + String.join(", ", statuses)
+                    + ". Periksa registrasi mana yang benar atau perbaiki identitas yang bertabrakan di EMS, lalu muat ulang preview. Baris ini belum disinkronkan ke CRM.");
         }
-        for (int i = accepted.size() - 1; i >= 0; i--) {
-            if (approvalConflicts.contains(profileKey.apply(acceptedRows.get(i)))) accepted.remove(i);
+        Map<Integer, Map> sourceRows = new HashMap<>();
+        for (int index = 0; index < accepted.size(); index++) sourceRows.put(acceptedRows.get(index), accepted.get(index));
+        Map<String, Map<String, String>> contactSnapshots = new HashMap<>();
+        Set<String> contactConflicts = new HashSet<>();
+        for (Map.Entry<String, List<Integer>> group : profileRows.entrySet()) {
+            if (approvalConflicts.contains(group.getKey())) continue;
+            List<Integer> numbers = group.getValue();
+            Map<Integer, Map<String, String>> snapshots = new HashMap<>();
+            numbers.forEach(number -> snapshots.put(number, contactSnapshot(event, registration(sourceRows.get(number)))));
+            boolean sameData = snapshots.values().stream().map(this::comparableContactSnapshot).distinct().count() == 1;
+            List<Integer> latest = new ArrayList<>(numbers);
+            if (!sameData) {
+                Map<Integer, java.time.LocalDateTime> dates = new HashMap<>();
+                numbers.forEach(number -> dates.put(number, contactTimestamp(event, sourceRows.get(number))));
+                if (dates.values().stream().anyMatch(Objects::isNull)) { contactConflicts.add(group.getKey()); continue; }
+                java.time.LocalDateTime newest = dates.values().stream().max(Comparator.naturalOrder()).orElseThrow();
+                latest.removeIf(number -> !newest.equals(dates.get(number)));
+                if (latest.stream().map(snapshots::get).map(this::comparableContactSnapshot).distinct().count() > 1) {
+                    contactConflicts.add(group.getKey()); continue;
+                }
+            }
+            // Equivalent source snapshots use a stable choice, never API row order.
+            Map<String, String> snapshot = latest.stream().map(snapshots::get)
+                    .min(Comparator.comparing(this::fingerprint)).orElseThrow();
+            contactSnapshots.put(group.getKey(), snapshot);
         }
+        for (Map<String, Object> previewRow : rows) {
+            int number = (Integer) previewRow.get("rowNum");
+            if ("REJECTED".equals(previewRow.get("status")) || !plannedKeys.containsKey(number)) continue;
+            if (contactConflicts.contains(profileKey.apply(number))) {
+                if ("NEW".equals(previewRow.get("status"))) created--; else existing--;
+                rejected++; previewRow.put("status", "REJECTED");
+                previewRow.put("companyReviewRequired", false); previewRow.put("identityReviewMessage", "");
+                previewRow.put("clientDeclineReviewRequired", false);
+                previewRow.put("message", "Beberapa registrasi mengarah ke profil yang sama tetapi data kontak berbeda tanpa urutan pembaruan yang pasti. Periksa waktu pembaruan dan data EMS, lalu muat ulang preview.");
+            }
+        }
+        for (int index = accepted.size() - 1; index >= 0; index--) {
+            String profile = profileKey.apply(acceptedRows.get(index));
+            if (approvalConflicts.contains(profile) || contactConflicts.contains(profile)) accepted.remove(index);
+        }
+        Set<String> changedContacts = new HashSet<>();
         for (Map<String, Object> previewRow : rows) {
             if ("REJECTED".equals(previewRow.get("status"))) continue;
             String plannedKey = plannedKeys.get((Integer) previewRow.get("rowNum"));
@@ -473,10 +585,32 @@ public class EmsService {
             String clientApproval = owner == null ? "pending" : participants.stream()
                     .filter(participant -> Objects.equals(participant.getDatabase().getId(), owner.getId()))
                     .map(EventParticipant::getConfirmationStatus).filter(Objects::nonNull).findFirst().orElse("pending");
+            if (owner != null && !EventApprovalPolicy.isClientApproved(clientApproval)) {
+                EventParticipant historicalHold = participants.stream()
+                        .filter(participant -> Objects.equals(participant.getDatabase().getId(), owner.getId())
+                                && Boolean.TRUE.equals(participant.getRawEmsClientDeclineReviewRequired())).findFirst().orElse(null);
+                if (historicalHold != null) {
+                    String message = historicalHold.getRawEmsIdentityReviewMessage();
+                    review = mergeIdentityReview(review, new IdentityReview(isBlank(message)
+                            ? "Keputusan Client Decline terkait sebelum pembaruan kontak tetap perlu ditinjau." : message, true));
+                    identityReviews.put(plannedKey, review);
+                }
+            }
             String reviewMessage = EventApprovalPolicy.identityReviewMessage(review.message(), review.clientDecline(), clientApproval);
             previewRow.put("identityReviewMessage", reviewMessage);
             previewRow.put("clientDeclineReviewRequired", review.clientDecline() && !EventApprovalPolicy.isClientApproved(clientApproval));
             if (!reviewMessage.isBlank()) previewRow.put("message", previewRow.get("message") + " " + reviewMessage);
+            if (owner != null) {
+                String profile = profileKey.apply((Integer) previewRow.get("rowNum"));
+                Set<String> emails = profileRows.get(profile).stream().map(sourceRows::get).map(this::registration)
+                        .map(Registration::email).filter(address -> !address.isBlank()).collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+                List<Map<String, String>> updates = contactUpdates(owner, contactSnapshots.get(profile), emails);
+                previewRow.put("contactUpdates", updates);
+                if (!updates.isEmpty()) {
+                    changedContacts.add(profile);
+                    previewRow.put("message", previewRow.get("message") + " Data kontak yang terisi mengikuti snapshot EMS terbaru; kolom kosong dan riwayat tetap dipertahankan.");
+                }
+            }
         }
         List<Object> contactState = contacts.stream().sorted(Comparator.comparing(Database::getId, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(contact -> (Object) Arrays.asList(contact.getId(), contact.getUpdatedAt(), contact.getDatabaseDestination(), contact.getIsActive(),
@@ -486,7 +620,9 @@ public class EmsService {
                         contact.getOrganizationGroupName(), contact.getOrganizationBrandName(), contact.getOrganizationAddress(), contact.getOrganizationOfficePhone(),
                         contact.getOrganizationIndustry(), contact.getOrganizationSizeRevenue(), contact.getOrganizationSizeEmployee(), contact.getOrganizationBranchName(),
                         contact.getOrganizationPostalCode(), contact.getOrganizationWebsite(),
-                        contact.getEmails() == null ? List.of() : contact.getEmails().stream().filter(Objects::nonNull).map(email -> safe(email.getEmail())).sorted().toList())).toList();
+                        contact.getEmails() == null ? List.of() : contact.getEmails().stream().filter(Objects::nonNull)
+                                .map(email -> Arrays.asList(email.getId(), safe(email.getEmail()), email.getEmailType(), email.getIsCorporate(), email.getIsPrimary()))
+                                .sorted(Comparator.comparing(Objects::toString)).toList())).toList();
         List<Object> participantState = participants.stream().sorted(Comparator.comparing(EventParticipant::getId, Comparator.nullsFirst(Comparator.naturalOrder()))).map(participant -> (Object) Arrays.asList(participant.getId(),
                 participant.getDatabase() == null ? null : participant.getDatabase().getId(), participant.getUpdatedAt(),
                 participant.getEmsApprovalStatus(), participant.getPreEventApprovalStatus(), participant.getConfirmationStatus(),
@@ -498,11 +634,121 @@ public class EmsService {
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("destination", destination); preview.put("totalRows", rows.size()); preview.put("newCount", created);
         preview.put("existingCount", existing); preview.put("rejectedCount", rejected);
+        preview.put("contactUpdateCount", changedContacts.size());
+        preview.put("uniqueContactCount", (int) rows.stream().filter(item -> !"REJECTED".equals(item.get("status")))
+                .map(item -> profileKey.apply((Integer) item.get("rowNum"))).distinct().count());
         preview.put("companyReviewCount", (int) rows.stream().filter(item -> Boolean.TRUE.equals(item.get("companyReviewRequired"))).count());
         preview.put("identityReviewCount", (int) rows.stream().filter(item -> !safe((String) item.get("identityReviewMessage")).isBlank()).count());
         preview.put("clientDeclineReviewCount", (int) rows.stream().filter(item -> Boolean.TRUE.equals(item.get("clientDeclineReviewRequired"))).count());
         preview.put("rows", rows); preview.put("previewToken", token);
-        return new SyncPlan(accepted, matches, aliases, identityReviews, preview);
+        Set<String> sharedEmails = new HashSet<>();
+        Map<String, Set<String>> emailProfiles = new HashMap<>();
+        for (Map item : accepted) {
+            Registration source = registration(item);
+            String key = aliases.getOrDefault(registrationContactKey(source), registrationContactKey(source));
+            Database owner = matches.get(key);
+            emailProfiles.computeIfAbsent(source.email(), ignored -> new HashSet<>()).add(owner == null ? "new:" + key : "stored:" + owner.getId());
+        }
+        emailProfiles.forEach((address, profiles) -> {
+            if (profiles.size() > 1 || contacts.stream().anyMatch(contact -> contact.getEmails() != null && contact.getEmails().stream()
+                    .anyMatch(stored -> address.equalsIgnoreCase(safe(stored.getEmail())) && "company".equalsIgnoreCase(stored.getEmailType())))) sharedEmails.add(address);
+        });
+        return new SyncPlan(accepted, matches, aliases, identityReviews, contactSnapshots, sharedEmails, preview);
+    }
+
+    private Map<String, String> contactSnapshot(Event event, Registration source) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        if (!isBlank(source.firstName())) {
+            fields.put("firstName", source.firstName().trim());
+            if (event.getEmsSource() == EmsSource.V2 && source.profile() != null
+                    && !source.profile().containsKey("registered_last_name")) fields.put("lastName", "");
+        }
+        if (!isBlank(source.lastName())) fields.put("lastName", source.lastName().trim());
+        if (!isBlank(source.salutation())) fields.put("salutation", source.salutation().trim());
+        if (!isBlank(source.jobTitle())) fields.put("jobTitle", source.jobTitle().trim());
+        if (!isBlank(source.phone())) fields.put("mobilePhone", ContactPhone.clean(source.phone()));
+        if (source.profile() != null) {
+            String level = firstProfileText(source.profile(), "job_level", "position_level");
+            String division = firstProfileText(source.profile(), "division", "speciality_division", "department");
+            if (!isBlank(level)) fields.put("positionLevel", PositionLevel.fromValue(level).getValue());
+            if (!isBlank(division)) fields.put("specialityDivision", division);
+        }
+        return fields;
+    }
+
+    private String firstProfileText(Map profile, String... names) {
+        for (String name : names) if (profile.get(name) != null && !isBlank(profile.get(name).toString())) return profile.get(name).toString().trim();
+        return "";
+    }
+
+    private Map<String, String> comparableContactSnapshot(Map<String, String> source) {
+        Map<String, String> values = new TreeMap<>(source);
+        if (values.containsKey("firstName") || values.containsKey("lastName")) {
+            values.put("name", identityName(values.getOrDefault("firstName", "") + " " + values.getOrDefault("lastName", "")));
+            values.remove("firstName"); values.remove("lastName");
+        }
+        if (values.containsKey("mobilePhone")) values.put("mobilePhone", String.join(",", new TreeSet<>(ContactPhone.normalizedNumbers(values.get("mobilePhone")))));
+        return values;
+    }
+
+    private java.time.LocalDateTime contactTimestamp(Event event, Map item) {
+        java.time.LocalDateTime updated = parseEmsDateTime(item.get("updated_at"), event.getEmsSource());
+        if (updated != null) return updated;
+        return parseEmsDateTime(item.get("created_at"), event.getEmsSource());
+    }
+
+    private Map<String, String> storedContactSnapshot(Database contact) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("firstName", safe(contact.getFirstName())); fields.put("lastName", safe(contact.getLastName()));
+        fields.put("salutation", safe(contact.getSalutation())); fields.put("jobTitle", safe(contact.getJobTitle()));
+        fields.put("mobilePhone", safe(contact.getMobilePhone()));
+        fields.put("positionLevel", contact.getPositionLevel() == null ? "" : contact.getPositionLevel().getValue());
+        fields.put("specialityDivision", safe(contact.getSpecialityDivision()));
+        return fields;
+    }
+
+    private Map<String, String> contactAfter(Database contact, Map<String, String> source) {
+        Map<String, String> before = storedContactSnapshot(contact), after = new LinkedHashMap<>(before);
+        if (source != null) after.putAll(source);
+        if (identityName(before.get("firstName") + " " + before.get("lastName"))
+                .equals(identityName(after.get("firstName") + " " + after.get("lastName")))) {
+            after.put("firstName", before.get("firstName")); after.put("lastName", before.get("lastName"));
+        }
+        return after;
+    }
+
+    private List<Map<String, String>> contactUpdates(Database contact, Map<String, String> source, Set<String> incomingEmails) {
+        Map<String, String> before = storedContactSnapshot(contact), after = contactAfter(contact, source);
+        List<Map<String, String>> changes = new ArrayList<>();
+        String oldName = (before.get("firstName") + " " + before.get("lastName")).trim();
+        String newName = (after.get("firstName") + " " + after.get("lastName")).trim();
+        if (!oldName.equals(newName)) changes.add(Map.of("field", "name", "before", oldName, "after", newName));
+        for (String field : List.of("salutation", "jobTitle", "mobilePhone", "positionLevel", "specialityDivision")) {
+            if (!before.get(field).equals(after.get(field))) changes.add(Map.of("field", field, "before", before.get(field), "after", after.get(field)));
+        }
+        Set<String> addresses = contact.getEmails() == null ? new TreeSet<>() : contact.getEmails().stream().filter(Objects::nonNull)
+                .map(address -> safe(address.getEmail()).trim().toLowerCase(Locale.ROOT)).filter(address -> !address.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+        String oldEmails = String.join(", ", addresses);
+        addresses.addAll(incomingEmails);
+        String newEmails = String.join(", ", addresses);
+        if (!oldEmails.equals(newEmails)) changes.add(Map.of("field", "email", "before", oldEmails, "after", newEmails));
+        return changes;
+    }
+
+    private boolean hasPersonalRegistrationEmail(Database contact, String email) {
+        return !email.isBlank() && contact.getEmails() != null && contact.getEmails().stream().filter(Objects::nonNull)
+                .anyMatch(address -> email.equalsIgnoreCase(safe(address.getEmail()).trim())
+                        && ("personal".equalsIgnoreCase(address.getEmailType()) || !"company".equalsIgnoreCase(address.getEmailType())
+                            && !Boolean.TRUE.equals(address.getIsCorporate()) && ContactEmailCategory.isPublicPersonalEmail(email)));
+    }
+
+    private void addCrmApprovalPreview(Map<String, Object> row, Database contact, List<EventParticipant> participants) {
+        participants.stream().filter(participant -> Objects.equals(participant.getDatabase().getId(), contact.getId()))
+                .findFirst().ifPresent(participant -> {
+                    row.put("crmPreEventApprovalStatus", participant.getPreEventApprovalStatus());
+                    row.put("crmClientApprovalStatus", participant.getConfirmationStatus());
+                });
     }
 
     private Object canonical(Object value) {
@@ -530,6 +776,7 @@ public class EmsService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Data atau tujuan sync berubah. Preview ulang sebelum melanjutkan.");
         }
         int count = applyParticipants(event, current);
+        databaseRepository.flush();
         Map<String, Object> response = new LinkedHashMap<>(current.preview());
         response.put("count", count); response.put("message", "Sync selesai ke tujuan yang dipilih.");
         return response;
@@ -542,6 +789,8 @@ public class EmsService {
                 .filter(participant -> participant.getDatabase() != null
                         && DatabaseDestination.effective(participant.getDatabase().getDatabaseDestination()) == event.getSyncDestination()).toList());
         int syncedCount = 0;
+        Set<String> updatedProfiles = new HashSet<>();
+        Set<Long> changedPhoneProfiles = new HashSet<>();
 
         for (Object itemObj : list) {
             if (!(itemObj instanceof Map)) continue;
@@ -558,36 +807,46 @@ public class EmsService {
             contactKey = plan.aliases().getOrDefault(contactKey, contactKey);
             IdentityReview identityReview = plan.identityReviews().getOrDefault(contactKey, new IdentityReview("", false));
             Database database = matchedContacts.get(contactKey);
-            boolean retainedCompanyProfile = database != null && !participantDestination;
+            String profileKey = database == null ? "new:" + contactKey : "stored:" + database.getId();
             if (database == null) {
                 Company company = null;
                 if (!participantDestination && !isBlank(companyName)) {
                     company = companyRepository.findByNameIgnoreCase(companyName).orElse(null);
                     if (company == null) company = companyRepository.save(Company.builder().name(companyName).industry(industry).build());
                 }
-                database = Database.builder().salutation(salutation).firstName(firstName).lastName(lastName)
-                        .company(company).jobTitle(participantDestination ? null : jobTitle).mobilePhone(isBlank(phone) ? null : ContactPhone.clean(phone))
-                        .normalizedPhone(normalizePhone(phone)).databaseType(DatabaseType.end_user)
+                database = Database.builder().firstName("").lastName("")
+                        .company(company).databaseType(DatabaseType.end_user)
                         .source(DatabaseSource.event_registration).isActive(true)
                         .databaseDestination(event.getSyncDestination()).institutionName(participantDestination ? companyName : null).build();
                 if (participantDestination) hydrateParticipantOrganization(database, registration);
                 database = databaseRepository.save(database);
                 matchedContacts.put(contactKey, database);
-            } else if (participantDestination) {
-                if (isBlank(database.getFirstName()) && !isBlank(firstName)) database.setFirstName(firstName);
-                if (isBlank(database.getLastName()) && !isBlank(lastName)) database.setLastName(lastName);
-                if (isBlank(database.getInstitutionName()) && !isBlank(companyName)) database.setInstitutionName(companyName);
-                if (!isBlank(phone)) {
-                    String merged = ContactPhone.merge(database.getMobilePhone(), phone);
-                    database.setMobilePhone(merged); database.setNormalizedPhone(ContactPhone.primary(merged));
-                }
-                hydrateParticipantOrganization(database, registration);
-                databaseRepository.save(database);
             }
-            // A matched Company contact and every master/email field remain CRM-owned.
-            if (!retainedCompanyProfile && !email.isBlank() && !databaseEmailRepository.existsByDatabaseIdAndEmailIgnoreCase(database.getId(), email)) {
+            if (updatedProfiles.add(profileKey)) {
+                Map<String, String> source = plan.contactSnapshots().get(profileKey);
+                Map<String, String> after = contactAfter(database, source);
+                boolean derivedPhoneChanged = source != null && source.containsKey("mobilePhone")
+                        && !safe(database.getNormalizedPhone()).equals(ContactPhone.primary(after.get("mobilePhone")));
+                if (source != null && (!storedContactSnapshot(database).equals(after) || derivedPhoneChanged)) {
+                    if (!safe(database.getFirstName()).equals(after.get("firstName"))) database.setFirstName(after.get("firstName"));
+                    if (!safe(database.getLastName()).equals(after.get("lastName"))) database.setLastName(after.get("lastName"));
+                    if (source.containsKey("salutation")) database.setSalutation(after.get("salutation"));
+                    if (source.containsKey("jobTitle")) database.setJobTitle(after.get("jobTitle"));
+                    if (source.containsKey("mobilePhone")) {
+                        if (!safe(database.getMobilePhone()).equals(after.get("mobilePhone"))
+                                || !safe(database.getNormalizedPhone()).equals(ContactPhone.primary(after.get("mobilePhone")))) changedPhoneProfiles.add(database.getId());
+                        database.setMobilePhone(after.get("mobilePhone")); database.setNormalizedPhone(ContactPhone.primary(after.get("mobilePhone")));
+                    }
+                    if (source.containsKey("positionLevel")) database.setPositionLevel(PositionLevel.fromValue(source.get("positionLevel")));
+                    if (source.containsKey("specialityDivision")) database.setSpecialityDivision(after.get("specialityDivision"));
+                    databaseRepository.save(database);
+                }
+            }
+            // Retain old email aliases; only a new, validated source address is added.
+            if (!email.isBlank() && !databaseEmailRepository.existsByDatabaseIdAndEmailIgnoreCase(database.getId(), email)) {
+                boolean personal = participantDestination || ContactEmailCategory.isPublicPersonalEmail(email) && !plan.sharedEmails().contains(email);
                 DatabaseEmail address = DatabaseEmail.builder().database(database).email(email)
-                        .emailType(participantDestination ? "personal" : "company").isCorporate(!participantDestination)
+                        .emailType(personal ? "personal" : "company").isCorporate(!personal && !ContactEmailCategory.isPublicPersonalEmail(email))
                         .isPrimary(database.getEmails() == null || database.getEmails().isEmpty()).build();
                 databaseEmailRepository.save(address);
                 if (database.getEmails() == null) database.setEmails(new ArrayList<>());
@@ -680,6 +939,23 @@ public class EmsService {
             }
             syncedCount++;
         }
+        Map<EventParticipant, String> retainedHolds = new LinkedHashMap<>();
+        Set<Long> reviewEvents = new HashSet<>();
+        for (Long databaseId : changedPhoneProfiles) for (EventParticipant participant : eventParticipantRepository.findByDatabaseId(databaseId)) {
+            if (participant.getEvent() != null) reviewEvents.add(participant.getEvent().getId());
+        }
+        for (Long eventId : reviewEvents) for (EventParticipant participant : eventParticipantRepository.findByEventId(eventId)) {
+            if (Boolean.TRUE.equals(participant.getRawEmsClientDeclineReviewRequired())
+                    && !EventApprovalPolicy.isClientApproved(participant.getConfirmationStatus())) retainedHolds.put(participant, participant.getRawEmsIdentityReviewMessage());
+        }
+        reviewEvents.forEach(eventId -> EmsIdentityReview.refresh(eventParticipantRepository, eventId));
+        retainedHolds.forEach((participant, message) -> {
+            if (!EventApprovalPolicy.isClientApproved(participant.getConfirmationStatus())) {
+                participant.setEmsClientDeclineReviewRequired(true);
+                participant.setEmsIdentityReviewMessage(isBlank(message) ? "Keputusan Client Decline terkait sebelum pembaruan kontak tetap perlu ditinjau." : message);
+                eventParticipantRepository.save(participant);
+            }
+        });
         return syncedCount;
     }
 
@@ -780,12 +1056,6 @@ public class EmsService {
     private void hydrateParticipantOrganization(Database database, Registration registration) {
         Map<String, String> fields = participantOrganization(registration);
         database.setCompany(null); database.setBranch(null);
-        if (isBlank(database.getSalutation()) && !isBlank(registration.salutation())) database.setSalutation(registration.salutation());
-        if (isBlank(database.getJobTitle()) && !isBlank(registration.jobTitle())) database.setJobTitle(registration.jobTitle());
-        String level = registrationValue(registration, "job_level", "position_level");
-        if ((database.getPositionLevel() == null || database.getPositionLevel() == PositionLevel.UNKNOWN) && !isBlank(level)) database.setPositionLevel(PositionLevel.fromValue(level));
-        String division = registrationValue(registration, "division", "speciality_division", "department");
-        if (isBlank(database.getSpecialityDivision()) && !division.isBlank()) database.setSpecialityDivision(division);
         if (isBlank(database.getOrganizationGroupName()) && !fields.get("group").isBlank()) database.setOrganizationGroupName(fields.get("group"));
         if (isBlank(database.getOrganizationBrandName()) && !fields.get("brand").isBlank()) database.setOrganizationBrandName(fields.get("brand"));
         if (isBlank(database.getOrganizationAddress()) && !fields.get("address").isBlank()) database.setOrganizationAddress(fields.get("address"));

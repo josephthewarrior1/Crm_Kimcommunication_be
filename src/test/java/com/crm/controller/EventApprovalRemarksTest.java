@@ -243,6 +243,82 @@ class EventApprovalRemarksTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test void reminderStageFiltersCombineBeforePaginationAcrossEveryReadAndExportEndpoint() throws Exception {
+        for (long id = 80; id >= 1; id--) {
+            EventParticipant row = reminderParticipant(id);
+            row.setReminderH7(id % 2 == 0 ? "confirm" : "tentative");
+            row.setReminderH3(id % 4 == 0 ? "not_respond_2x" : "confirm");
+            row.setReminderH1(id % 4 == 0 ? "" : "confirm");
+            rows.add(row);
+        }
+        String[] filters = {"reminderH7", "confirm", "reminderH3", "not_respond_2x", "reminderH1", "__empty__"};
+        JsonNode secondPage = response("participants", "reminder", "reminderH7", "confirm", "reminderH3", "not_respond_2x",
+                "reminderH1", "__empty__", "page", "2", "size", "7");
+        assertEquals(20, secondPage.path("total").asInt());
+        assertEquals(3, secondPage.path("totalPages").asInt());
+        assertEquals(List.of(32L, 36L, 40L, 44L, 48L, 52L, 56L), ids(secondPage));
+        assertEquals(20, response("participants/summary", "reminder", filters).path("totalParticipants").asInt());
+        assertEquals(20, response("participants/summary-by-pic", "reminder", filters).path("totalParticipants").asInt());
+        assertEquals(20, response("statistics", "reminder", filters).at("/scopes/all/approvedRegisterTotal").asInt());
+        assertEquals(20, response("statistics", "reminder", filters).at("/scopes/mine/approvedRegisterTotal").asInt());
+        JsonNode exported = response("participants/export", "reminder", filters);
+        assertEquals(20, exported.path("total").asInt());
+        assertEquals("Contact4", exported.path("rows").get(0).path("First Name").asText());
+        assertEquals("Contact80", exported.path("rows").get(19).path("First Name").asText());
+        assertEquals(List.of("Company 0"), json.convertValue(response("participants/filter-options", "reminder", filters).path("companies"), List.class));
+        verify(participants, never()).save(any());
+    }
+
+    @Test void reminderStageEmptyAndStatusAliasesAreDistinctAndDoNotLeakToOtherTabs() throws Exception {
+        String[] values = {null, "", "  ", "null", "undefined", "-", "not_respon_yet", "not_respond_yet", "not_respond_2x", "confirmed"};
+        for (int index = 0; index < values.length; index++) {
+            EventParticipant row = reminderParticipant(index + 1);
+            row.setReminderH7(values[index]);
+            row.setReminderH3(index == 6 ? "tentative" : "confirm");
+            row.setReminderH1(index == 6 ? "unable_to_attend" : null);
+            rows.add(row);
+        }
+        assertEquals(List.of(1L, 2L, 3L, 4L, 5L, 6L), ids(response("participants", "reminder", "reminderH7", "__empty__")));
+        assertEquals(List.of(7L, 8L), ids(response("participants", "reminder", "reminderH7", "not_respon_yet")));
+        assertEquals(List.of(7L, 8L), ids(response("participants", "reminder", "reminderH7", "not_respond_yet")));
+        assertEquals(List.of(9L), ids(response("participants", "reminder", "reminderH7", "not_respond_2x")));
+        assertEquals(List.of(10L), ids(response("participants", "reminder", "reminderH7", "confirm")));
+        assertEquals(List.of(7L), ids(response("participants", "reminder", "reminderH3", "tentative", "reminderH1", "unable_to_attend")));
+        assertEquals(0, response("participants", "reminder", "reminderH1", "unknown-value").path("total").asInt());
+        assertEquals(10, response("participants", "request", "reminderH7", "unknown-value").path("total").asInt());
+        assertEquals(10, response("participants", "pre_event", "reminderH3", "unknown-value").path("total").asInt());
+        assertEquals(10, response("participants", "reminder_dday", "reminderH1", "unknown-value").path("total").asInt());
+        assertEquals(10, response("participants", "reminder", "reminderH7", "").path("total").asInt());
+    }
+
+    @Test void reminderStageFiltersRetainPicAndEventAccessAndNeverChangeRows() throws Exception {
+        EventParticipant mine = reminderParticipant(2);
+        mine.setReminderH7("confirm"); mine.setReminderH3("tentative");
+        EventParticipant other = reminderParticipant(4);
+        other.setReminderH7("confirm"); other.setReminderH3("tentative");
+        other.setNotes("[Origin: Request] [PIC: Other operator]");
+        rows.addAll(List.of(mine, other));
+        JsonNode before = json.valueToTree(rows);
+        authenticate(Role.MANAGER, Set.of(1L));
+        assertEquals(List.of(2L), ids(response("participants", "reminder", "reminderH7", "confirm", "reminderH3", "tentative",
+                "reminderH1", "__empty__", "pic", "Other operator", "company", "Company 0", "search", "Contact2")));
+        assertEquals(1, response("participants/export", "reminder", "reminderH7", "confirm").path("total").asInt());
+        authenticate(Role.MANAGER, Set.of(99L));
+        mvc.perform(get("/api/events/1/participants").param("tab", "reminder").param("reminderH7", "confirm")
+                .header("Authorization", "Bearer test")).andExpect(status().isForbidden());
+        mvc.perform(get("/api/events/1/participants").param("tab", "reminder").param("reminderH7", "confirm"))
+                .andExpect(status().isUnauthorized());
+        assertEquals(before, json.valueToTree(rows));
+        verify(participants, never()).save(any());
+    }
+
+    private EventParticipant reminderParticipant(long id) {
+        EventParticipant row = participant(id, ParticipantStatus.registered);
+        row.setPreEventApprovalStatus("approve");
+        row.setAttendanceStatus(AttendanceStatus.registered);
+        return row;
+    }
+
     private EventParticipant participant(long id, ParticipantStatus remarks) {
         Company company = Company.builder().id(id % 2).name("Company " + id % 2).build();
         Database contact = Database.builder().id(id).firstName("Contact" + id).lastName("Example")

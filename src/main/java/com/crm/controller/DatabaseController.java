@@ -20,6 +20,7 @@ import com.crm.repository.RemovalRequestRepository;
 import com.crm.repository.FlaggedIdentityRepository;
 import com.crm.service.SuspiciousIdentityService;
 import com.crm.service.SecurityHelper;
+import com.crm.service.EmsIdentityReview;
 import com.crm.util.ContactEmailCategory;
 import com.crm.util.ContactPhone;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -574,6 +575,86 @@ public class DatabaseController {
             suspiciousIdentityService.checkAndFlagDatabase(saved);
             return ResponseEntity.ok(saved);
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    public record ContactUpdateRequest(String salutation, String firstName, String lastName,
+            String positionLevel, String specialityDivision, String jobTitle, String mobilePhone,
+            List<EmailBatchEntry> emails) {}
+
+    @PutMapping("/{id}/contact")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<?> updateDatabaseContact(@PathVariable Long id,
+            @RequestBody ContactUpdateRequest request,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        AppUser currentUser = securityHelper.getAuthenticatedUser(authHeader);
+        if (currentUser == null) return ResponseEntity.status(401).body("Unauthorized");
+        if (!securityHelper.hasAnyRole(currentUser, Role.ADMIN, Role.MANAGER)) {
+            return ResponseEntity.status(403).body("Forbidden: Only ADMIN or MANAGER can update contact data");
+        }
+        Database existing = databaseRepository.findById(id).orElse(null);
+        if (existing == null) return ResponseEntity.notFound().build();
+        if (DatabaseDestination.effective(existing.getDatabaseDestination()) == DatabaseDestination.BOTH) {
+            return ResponseEntity.status(409).body("Profil legacy harus dipisahkan sebelum diedit.");
+        }
+        if (request == null) return ResponseEntity.badRequest().body("Data kontak wajib diisi.");
+        String[] texts = {request.salutation(), request.firstName(), request.lastName(),
+                request.positionLevel(), request.specialityDivision(), request.jobTitle()};
+        int[] limits = {50, 255, 255, 100, 100, 255};
+        String[] labels = {"Salutation", "First Name", "Last Name", "Position Level", "Division", "Job Title"};
+        for (int index = 0; index < texts.length; index++) {
+            if (texts[index] != null && texts[index].trim().codePointCount(0, texts[index].trim().length()) > limits[index]) {
+                return ResponseEntity.badRequest().body(labels[index] + " maksimal " + limits[index] + " karakter.");
+            }
+        }
+        String phone = request.mobilePhone() == null ? null : ContactPhone.clean(request.mobilePhone().trim());
+        if (request.mobilePhone() != null && !request.mobilePhone().isBlank()
+                && (!ContactPhone.isUsable(request.mobilePhone()) || phone.length() > 50)) {
+            return ResponseEntity.badRequest().body("Mobile Phone tidak valid; pisahkan setiap nomor dengan koma. Maksimal 50 karakter.");
+        }
+        List<EmailWrite> writes;
+        try {
+            writes = request.emails() == null || request.emails().isEmpty()
+                    ? List.of() : planEmailBatch(existing, request.emails());
+        } catch (IllegalArgumentException invalid) {
+            return ResponseEntity.badRequest().body(invalid.getMessage());
+        }
+
+        // Validate every contact/email change before touching the managed profile.
+        try {
+            if (request.salutation() != null) existing.setSalutation(request.salutation().trim());
+            if (request.firstName() != null) existing.setFirstName(request.firstName().trim());
+            if (request.lastName() != null) existing.setLastName(request.lastName().trim());
+            if (request.positionLevel() != null) existing.setPositionLevel(request.positionLevel().isBlank()
+                    ? null : com.crm.domain.PositionLevel.fromValue(request.positionLevel()));
+            if (request.specialityDivision() != null) existing.setSpecialityDivision(request.specialityDivision().trim());
+            if (request.jobTitle() != null) existing.setJobTitle(request.jobTitle().trim());
+            boolean phoneChanged = phone != null && (!java.util.Objects.equals(phone, existing.getMobilePhone())
+                    || !java.util.Objects.equals(ContactPhone.primary(phone), existing.getNormalizedPhone()));
+            if (phone != null) {
+                existing.setMobilePhone(phone);
+                existing.setNormalizedPhone(ContactPhone.primary(phone));
+            }
+            List<DatabaseEmail> allEmails = new java.util.ArrayList<>(existing.getEmails() == null ? List.of() : existing.getEmails());
+            for (EmailWrite write : writes) {
+                if (write.skip()) continue;
+                DatabaseEmail savedEmail = databaseEmailRepository.save(applyEmailWrite(existing, write));
+                if (write.existing() == null) allEmails.add(savedEmail);
+            }
+            existing.setEmails(allEmails);
+            Database saved = databaseRepository.saveAndFlush(existing);
+            if (phoneChanged) {
+                eventParticipantRepository.findByDatabaseId(id).stream().map(EventParticipant::getEvent)
+                        .filter(java.util.Objects::nonNull).map(com.crm.domain.Event::getId).distinct()
+                        .forEach(eventId -> EmsIdentityReview.refresh(eventParticipantRepository, eventId));
+            }
+            suspiciousIdentityService.checkAndFlagDatabase(saved);
+            databaseRepository.flush();
+            return ResponseEntity.ok(saved);
+        } catch (org.springframework.dao.DataIntegrityViolationException conflict) {
+            // Runtime exception rolls the complete contact edit back, including any email writes.
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                    "Data kontak berubah atau email sudah digunakan. Perubahan dibatalkan; muat ulang lalu periksa kembali.");
+        }
     }
 
     @DeleteMapping("/{id}")

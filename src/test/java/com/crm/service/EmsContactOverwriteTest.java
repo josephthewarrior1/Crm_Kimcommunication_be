@@ -227,6 +227,104 @@ class EmsContactOverwriteTest {
         assertEquals(heldBefore, json.valueToTree(held)); assertEquals(2, history.size()); verifyNoInteractions(companies);
     }
 
+    @Test void acceptedDuplicateWinsOverPendingInEitherOrderWithoutChangingSourceClientDecisionOrHistory() {
+        for (boolean reverse : List.of(false, true)) {
+            contacts.clear(); links.clear(); history.clear();
+            Database owner = contact(5, "Duplicate", "Participant", "0895332251043", DatabaseDestination.COMPANY);
+            Database separate = contact(6, "Protected", "Student", "0895332251043", DatabaseDestination.PARTICIPANT);
+            contacts.addAll(List.of(owner, separate));
+            EventParticipant link = linked(owner, event, "decline");
+            EventParticipantActivity call = EventParticipantActivity.builder().id(40L).eventParticipant(link).activityType("CALL").notes("Keep duplicate participant history").build();
+            history.add(call);
+            JsonNode companyBefore = json.valueToTree(company), separateBefore = json.valueToTree(separate);
+            Map<String,Object> accepted = duplicate("accepted@example.invalid", "ACCEPTED", "2026-11-11T01:00:00Z", "Mr");
+            Map<String,Object> pending = duplicate("pending@example.invalid", "PENDING", "2026-11-13T01:00:00Z", "Dr");
+            JsonNode sourceBefore = json.valueToTree(List.of(accepted, pending));
+            source(reverse ? new Map[]{pending, accepted} : new Map[]{accepted, pending});
+            for (int repeat = 0; repeat < 3; repeat++) {
+                Map<String,Object> preview = service.previewParticipantsForEvent(event);
+                assertEquals(0, preview.get("rejectedCount")); assertEquals(2, preview.get("existingCount")); assertEquals(1, preview.get("uniqueContactCount"));
+                for (int index = 0; index < 2; index++) assertEquals("approve", row(preview, index).get("preEventApprovalAfterSync"));
+                assertEquals(Set.of("ACCEPTED", "PENDING"), ((List<Map<String,Object>>) preview.get("rows")).stream().map(row -> (String) row.get("emsStatus")).collect(java.util.stream.Collectors.toSet()));
+                assertEquals(Set.of("approve", "pending"), ((List<Map<String,Object>>) preview.get("rows")).stream().map(row -> (String) row.get("emsApprovalStatus")).collect(java.util.stream.Collectors.toSet()));
+                assertEquals(2, apply(preview).get("count"));
+                assertEquals("approve", link.getPreEventApprovalStatus()); assertEquals("approve", link.getEmsApprovalStatus());
+                assertEquals("decline", link.getConfirmationStatus()); assertEquals("Mr", owner.getSalutation(), "Newer Pending duplicate must not replace Accepted contact values");
+                assertEquals("Content Creator", owner.getJobTitle()); assertEquals(1, links.size()); assertEquals(2, contacts.size());
+                assertEquals(2, owner.getEmails().size()); assertSame(company, owner.getCompany());
+                assertEquals(companyBefore, json.valueToTree(company)); assertEquals(separateBefore, json.valueToTree(separate));
+                assertSame(call, history.get(0)); assertEquals("Keep duplicate participant history", call.getNotes());
+                assertEquals("CALL", call.getActivityType()); assertEquals(1, history.size());
+                assertEquals(sourceBefore, json.valueToTree(List.of(accepted, pending)), "Sync must not mutate EMS source registrations");
+            }
+        }
+        verifyNoInteractions(companies);
+    }
+
+    @Test void acceptedPreferenceDoesNotResolveDeclinesOrIncompleteOrDifferentIdentityEvidence() {
+        for (String difference : List.of("declined", "company", "job", "name", "phone", "missingPhone", "missingCompany", "missingJob")) {
+            contacts.clear(); links.clear(); history.clear();
+            Database owner = contact(5, "Duplicate", "Participant", "0895332251043", DatabaseDestination.COMPANY);
+            owner.getEmails().add(address(owner, "pending@example.invalid", "personal")); contacts.add(owner);
+            Map<String,Object> accepted = duplicate("accepted@example.invalid", "ACCEPTED", null, "Mr");
+            Map<String,Object> other = duplicate("pending@example.invalid", "PENDING", null, "Mr");
+            Map<String,Object> profile = (Map<String,Object>) other.get("user_profile");
+            switch (difference) {
+                case "declined" -> other.put("status", "DECLINED");
+                case "company" -> profile.put("company", "Different Organization");
+                case "job" -> profile.put("job_title", "Different Role");
+                case "name" -> profile.put("registered_name", "Different Person");
+                case "phone" -> profile.put("phone", "08139999999");
+                case "missingPhone" -> profile.put("phone", "");
+                case "missingCompany" -> profile.put("company", "");
+                case "missingJob" -> profile.put("job_title", "");
+            }
+            source(accepted, other);
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(2, preview.get("rejectedCount"), difference); assertEquals(0, apply(preview).get("count"), difference);
+            assertEquals("Original job", owner.getJobTitle(), difference); assertEquals(0, links.size(), difference);
+        }
+        verifyNoInteractions(companies);
+    }
+
+    @Test void conflictingAcceptedSnapshotsStayHeldEvenWithAMatchingPendingDuplicate() {
+        Database owner = contact(5, "Duplicate", "Participant", "0895332251043", DatabaseDestination.COMPANY); contacts.add(owner);
+        for (String secondSalutation : List.of("Dr", "Mr")) {
+            source(duplicate("accepted-one@example.invalid", "ACCEPTED", null, "Mr"),
+                    duplicate("accepted-two@example.invalid", "ACCEPTED", null, secondSalutation),
+                    duplicate("pending@example.invalid", "PENDING", null, "Mr"));
+            Map<String,Object> preview = service.previewParticipantsForEvent(event);
+            assertEquals(3, preview.get("rejectedCount")); assertEquals(0, apply(preview).get("count"));
+        }
+        assertEquals("Original job", owner.getJobTitle()); assertEquals(1, contacts.size()); assertTrue(links.isEmpty());
+    }
+
+    @Test void sharedPublicCompanyMailboxKeepsAnotherPersonSeparateFromTheAcceptedDuplicate() {
+        Database owner = contact(5, "Duplicate", "Participant", "0895332251043", DatabaseDestination.COMPANY);
+        Database another = contact(6, "Another", "Creator", "08139999999", DatabaseDestination.COMPANY);
+        DatabaseEmail ownerShared = address(owner, "shared@gmail.com", "company"); ownerShared.setIsCorporate(false); owner.getEmails().add(ownerShared);
+        DatabaseEmail shared = address(another, "shared@gmail.com", "company"); shared.setIsCorporate(false); another.getEmails().add(shared);
+        contacts.addAll(List.of(owner, another));
+        Map<String,Object> first = duplicate("accepted@example.invalid", "ACCEPTED", null, "Mr");
+        Map<String,Object> pending = duplicate("shared@gmail.com", "PENDING", null, "Mr");
+        Map<String,Object> other = full("Another Creator", "shared@gmail.com", "08139999999", null, Map.of("company", "Source Organization", "job_title", "Content Creator"));
+        source(first, pending, other);
+        Map<String,Object> preview = service.previewParticipantsForEvent(event);
+        assertEquals(0, preview.get("rejectedCount"), preview.get("rows").toString()); assertEquals(2, preview.get("uniqueContactCount")); assertEquals(3, apply(preview).get("count"));
+        assertEquals(2, contacts.size()); assertEquals(2, links.size());
+        assertEquals(Set.of(owner.getId(), another.getId()), links.stream().map(link -> link.getDatabase().getId()).collect(java.util.stream.Collectors.toSet()));
+        assertEquals("Another", another.getFirstName()); assertEquals("Creator", another.getLastName());
+        assertEquals("08139999999", another.getMobilePhone()); assertEquals(1, another.getEmails().size()); assertSame(shared, another.getEmails().get(0));
+        assertEquals(Set.of("accepted@example.invalid", "shared@gmail.com"), owner.getEmails().stream().map(DatabaseEmail::getEmail).collect(java.util.stream.Collectors.toSet()));
+        assertEquals("company", owner.getEmails().stream().filter(email -> email.getEmail().equals("shared@gmail.com")).findFirst().orElseThrow().getEmailType());
+    }
+
+    private Map<String,Object> duplicate(String email, String status, String updated, String salutation) {
+        Map<String,Object> value = full("Duplicate Participant", email, "0895332251043", updated,
+                Map.of("company", "Source Organization", "job_title", "Content Creator", "registered_salutation", salutation));
+        value.put("status", status); return value;
+    }
+
     private Database contact(long id, String first, String last, String phone, DatabaseDestination destination) {
         return Database.builder().id(id).firstName(first).lastName(last).mobilePhone(phone).jobTitle("Original job")
                 .company(destination == DatabaseDestination.COMPANY ? company : null).institutionName(destination == DatabaseDestination.PARTICIPANT ? "Protected campus" : null)

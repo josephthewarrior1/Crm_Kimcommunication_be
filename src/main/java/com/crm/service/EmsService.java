@@ -212,7 +212,7 @@ public class EmsService {
     private record IdentityReview(String message, boolean clientDecline) {}
     private record SyncPlan(List<Map> accepted, Map<String, Database> matches, Map<String, String> aliases,
                             Map<String, IdentityReview> identityReviews, Map<String, Map<String, String>> contactSnapshots,
-                            Set<String> sharedEmails, Map<String, Object> preview) {}
+                            Map<String, String> effectiveApprovals, Set<String> sharedEmails, Map<String, Object> preview) {}
 
     public Map<String, Object> previewParticipantsForEvent(Event event) {
         return plan(event).preview();
@@ -510,12 +510,21 @@ public class EmsService {
         };
         Map<String, Set<String>> profileApprovals = new HashMap<>();
         Map<String, List<Integer>> profileRows = new HashMap<>();
+        Map<Integer, Map> sourceRows = new HashMap<>();
         for (int i = 0; i < accepted.size(); i++) {
             profileApprovals.computeIfAbsent(profileKey.apply(acceptedRows.get(i)), ignored -> new HashSet<>())
                     .add(emsApprovalStatus(event, accepted.get(i)));
             profileRows.computeIfAbsent(profileKey.apply(acceptedRows.get(i)), ignored -> new ArrayList<>()).add(acceptedRows.get(i));
+            sourceRows.put(acceptedRows.get(i), accepted.get(i));
+        }
+        Map<String, String> effectiveApprovals = new HashMap<>();
+        for (Map.Entry<String, List<Integer>> group : profileRows.entrySet()) {
+            if (Set.of("approve", "pending").equals(profileApprovals.get(group.getKey()))
+                    && group.getValue().stream().filter(number -> "approve".equals(emsApprovalStatus(event, sourceRows.get(number)))).count() == 1
+                    && sameDuplicateRegistrationIdentity(group.getValue(), sourceRows)) effectiveApprovals.put(group.getKey(), "approve");
         }
         Set<String> approvalConflicts = profileApprovals.entrySet().stream().filter(entry -> entry.getValue().size() > 1)
+                .filter(entry -> !effectiveApprovals.containsKey(entry.getKey()))
                 .map(Map.Entry::getKey).collect(java.util.stream.Collectors.toSet());
         for (Map<String, Object> previewRow : rows) {
             int number = (Integer) previewRow.get("rowNum");
@@ -535,13 +544,12 @@ public class EmsService {
                     + " mengarah ke profil yang sama dengan status " + String.join(", ", statuses)
                     + ". Periksa registrasi mana yang benar atau perbaiki identitas yang bertabrakan di EMS, lalu muat ulang preview. Baris ini belum disinkronkan ke CRM.");
         }
-        Map<Integer, Map> sourceRows = new HashMap<>();
-        for (int index = 0; index < accepted.size(); index++) sourceRows.put(acceptedRows.get(index), accepted.get(index));
         Map<String, Map<String, String>> contactSnapshots = new HashMap<>();
         Set<String> contactConflicts = new HashSet<>();
         for (Map.Entry<String, List<Integer>> group : profileRows.entrySet()) {
             if (approvalConflicts.contains(group.getKey())) continue;
-            List<Integer> numbers = group.getValue();
+            List<Integer> numbers = group.getValue().stream().filter(number -> !effectiveApprovals.containsKey(group.getKey())
+                    || "approve".equals(emsApprovalStatus(event, sourceRows.get(number)))).toList();
             Map<Integer, Map<String, String>> snapshots = new HashMap<>();
             numbers.forEach(number -> snapshots.put(number, contactSnapshot(event, registration(sourceRows.get(number)))));
             boolean sameData = snapshots.values().stream().map(this::comparableContactSnapshot).distinct().count() == 1;
@@ -580,6 +588,17 @@ public class EmsService {
         for (Map<String, Object> previewRow : rows) {
             if ("REJECTED".equals(previewRow.get("status"))) continue;
             String plannedKey = plannedKeys.get((Integer) previewRow.get("rowNum"));
+            String resolvedApproval = effectiveApprovals.get(profileKey.apply((Integer) previewRow.get("rowNum")));
+            if (resolvedApproval != null) {
+                previewRow.put("preEventApprovalAfterSync", resolvedApproval);
+                String acceptedRowsLabel = profileRows.get(profileKey.apply((Integer) previewRow.get("rowNum"))).stream()
+                        .filter(number -> "approve".equals(emsApprovalStatus(event, sourceRows.get(number))))
+                        .map(number -> "#" + number).collect(java.util.stream.Collectors.joining(", "));
+                previewRow.put("message", Objects.toString(previewRow.get("message"), "")
+                        .replace("Approval setelah sync: pending.", "Approval setelah sync: approve.")
+                        + " Pendaftaran ganda dengan nama, HP, perusahaan, dan jabatan yang sama; registrasi Accepted baris "
+                        + acceptedRowsLabel + " menjadi acuan CRM. Registrasi Pending tetap Pending di EMS; satu profil peserta CRM dipertahankan.");
+            }
             IdentityReview review = identityReviews.get(plannedKey);
             Database owner = matches.get(plannedKey);
             String clientApproval = owner == null ? "pending" : participants.stream()
@@ -630,7 +649,7 @@ public class EmsService {
                 participant.getRawEmsIdentityReviewMessage(), participant.getRawEmsClientDeclineReviewRequired())).toList();
         Map<String, Long> matchedIds = new TreeMap<>();
         matches.forEach((key, contact) -> matchedIds.put(key, contact.getId()));
-        String token = fingerprint(Arrays.asList(event.getId(), event.getEmsEventId(), event.getEmsSource(), destination, raw, contactState, participantState, matchedIds, aliases));
+        String token = fingerprint(Arrays.asList(event.getId(), event.getEmsEventId(), event.getEmsSource(), destination, raw, contactState, participantState, matchedIds, aliases, effectiveApprovals));
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("destination", destination); preview.put("totalRows", rows.size()); preview.put("newCount", created);
         preview.put("existingCount", existing); preview.put("rejectedCount", rejected);
@@ -653,7 +672,28 @@ public class EmsService {
             if (profiles.size() > 1 || contacts.stream().anyMatch(contact -> contact.getEmails() != null && contact.getEmails().stream()
                     .anyMatch(stored -> address.equalsIgnoreCase(safe(stored.getEmail())) && "company".equalsIgnoreCase(stored.getEmailType())))) sharedEmails.add(address);
         });
-        return new SyncPlan(accepted, matches, aliases, identityReviews, contactSnapshots, sharedEmails, preview);
+        // Create a new profile from its Accepted registration before adding Pending duplicate email aliases.
+        accepted.sort(Comparator.comparingInt(item -> {
+            Registration source = registration(item);
+            String key = aliases.getOrDefault(registrationContactKey(source), registrationContactKey(source));
+            Database owner = matches.get(key);
+            String profile = owner == null ? "new:" + key : "stored:" + owner.getId();
+            return effectiveApprovals.containsKey(profile) && !"approve".equals(emsApprovalStatus(event, item)) ? 1 : 0;
+        }));
+        return new SyncPlan(accepted, matches, aliases, identityReviews, contactSnapshots, effectiveApprovals, sharedEmails, preview);
+    }
+
+    private boolean sameDuplicateRegistrationIdentity(List<Integer> rows, Map<Integer, Map> sourceRows) {
+        Registration first = registration(sourceRows.get(rows.get(0)));
+        String name = identityName(first.firstName() + " " + first.lastName());
+        Set<String> phones = ContactPhone.normalizedNumbers(first.phone());
+        String company = identityName(safe(first.companyName())), title = identityName(safe(first.jobTitle()));
+        if (name.isBlank() || phones.isEmpty() || company.isBlank() || title.isBlank()) return false;
+        return rows.stream().map(sourceRows::get).map(this::registration).allMatch(source ->
+                name.equals(identityName(source.firstName() + " " + source.lastName()))
+                        && phones.equals(ContactPhone.normalizedNumbers(source.phone()))
+                        && company.equals(identityName(safe(source.companyName())))
+                        && title.equals(identityName(safe(source.jobTitle()))));
     }
 
     private Map<String, String> contactSnapshot(Event event, Registration source) {
@@ -807,7 +847,8 @@ public class EmsService {
             contactKey = plan.aliases().getOrDefault(contactKey, contactKey);
             IdentityReview identityReview = plan.identityReviews().getOrDefault(contactKey, new IdentityReview("", false));
             Database database = matchedContacts.get(contactKey);
-            String profileKey = database == null ? "new:" + contactKey : "stored:" + database.getId();
+            Database plannedOwner = plan.matches().get(contactKey);
+            String profileKey = plannedOwner == null ? "new:" + contactKey : "stored:" + plannedOwner.getId();
             if (database == null) {
                 Company company = null;
                 if (!participantDestination && !isBlank(companyName)) {
@@ -853,6 +894,12 @@ public class EmsService {
                 database.getEmails().add(address);
             }
 
+            if (plan.effectiveApprovals().containsKey(profileKey) && "pending".equals(emsApprovalStatus(event, item))) {
+                // The duplicate contributes its validated email, while Accepted owns event approval and attendance.
+                syncedCount++;
+                continue;
+            }
+
             // EMS owns registration approval and attendance; client approval stays with CRM.
             Object checkedInAt = item.get("checked_in_at");
             Object verifiedAt = item.get("verified_at");
@@ -863,7 +910,7 @@ public class EmsService {
             java.time.LocalDateTime emsCreatedAt = parseEmsDateTime(createdAtObj, event.getEmsSource());
 
             boolean isCheckedIn = hasEmsTimestamp(checkedInAt);
-            String preEventApproval = emsApprovalStatus(event, item);
+            String preEventApproval = plan.effectiveApprovals().getOrDefault(profileKey, emsApprovalStatus(event, item));
             boolean isDeclined = "decline".equals(preEventApproval);
             AttendanceStatus attendanceStatus = isDeclined ? AttendanceStatus.cancelled
                     : isCheckedIn ? AttendanceStatus.attended : AttendanceStatus.registered;

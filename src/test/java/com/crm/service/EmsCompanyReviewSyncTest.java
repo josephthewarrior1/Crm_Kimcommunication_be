@@ -183,10 +183,10 @@ class EmsCompanyReviewSyncTest {
         verifyNoInteractions(companies);verify(emails,never()).save(any());
     }
 
-    @Test void conflictingSourceApprovalsStayRejectedAndAreExcludedFromReviewCounts() {
+    @Test void acceptedAndDeclinedSourceApprovalsStayRejectedAndAreExcludedFromReviewCounts() {
         EventParticipant link=existingLink();JsonNode before=json.valueToTree(link);
         doReturn(List.of(row("member@company.example","08123456789","Different Company","ACCEPTED",false),
-                row("member@company.example","08123456789","Different Company","PENDING",false)))
+                row("member@company.example","08123456789","Different Company","DECLINED",false)))
                 .when(service).getEventParticipants(event.getEmsEventId(),event.getEmsSource());
         Map<String,Object> preview=service.previewParticipantsForEvent(event);
         assertEquals(2,preview.get("rejectedCount"));assertEquals(0,preview.get("companyReviewCount"));
